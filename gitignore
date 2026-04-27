@@ -1,0 +1,106 @@
+# ==========================================
+# myComix .gitignore
+# ==========================================
+
+# ----- 사용자 데이터 / 설정 (절대 커밋 금지) -----
+# JSON 설정 파일에는 비밀번호 해시, 2FA 시크릿, SMTP 패스워드 등이 포함될 수 있음
+src/*.json
+src/users.json
+src/app_settings.json
+src/branding.json
+src/permissions.json
+src/login_history.json
+src/activity_log.json
+src/ip_block.json
+src/2fa.json
+src/sessions/
+
+# src/.htaccess는 보안 차단용이므로 유지
+!src/.htaccess
+
+# ----- 캐시 / 임시 파일 -----
+cache/
+cache/*
+!cache/.gitkeep
+
+# ----- 콘텐츠 폴더 (실제 만화/미디어 파일) -----
+# base_dirs 경로는 config.php에서 설정하므로 별도 제외
+contents/
+media/
+data/
+uploads/
+
+# ----- 썸네일 / 자동 생성 파일 -----
+*.thumb.jpg
+*.thumb.webp
+[cover].jpg
+.DS_Store
+Thumbs.db
+
+# ----- 로그 -----
+*.log
+error_log
+access_log
+debug.log
+
+# ----- 임시 / 백업 -----
+*.bak
+*.tmp
+*.swp
+*.swo
+*~
+*.orig
+
+# ----- 환경 / 시크릿 -----
+.env
+.env.local
+.env.production
+config.local.php
+secrets.php
+
+# ----- IDE / 에디터 -----
+.idea/
+.vscode/
+*.code-workspace
+.project
+.buildpath
+.settings/
+nbproject/
+
+# ----- OS 자동 생성 -----
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# ----- PHP 관련 -----
+vendor/
+composer.phar
+composer.lock
+
+# ----- 개발 도구 -----
+node_modules/
+npm-debug.log
+yarn-error.log
+.npm/
+
+# ----- 패키징 / 압축 -----
+*.zip
+*.tar.gz
+*.7z
+mycomix_*.zip
+mycomix_Final_*.zip
+
+# ----- HLS / 미디어 임시 -----
+*.m3u8
+*.ts
+hls_temp/
+
+# ----- 인증서 / 키 -----
+*.pem
+*.key
+*.crt
+*.cert

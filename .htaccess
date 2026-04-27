@@ -1,0 +1,37 @@
+RewriteEngine On
+ 
+RewriteCond %{HTTPS} off
+RewriteRule (.*) https://%{HTTP_HOST}%{REQUEST_URI} [R=301,L]
+
+RewriteCond %{REQUEST_URI} ^/oldpage$ [NC]
+RewriteRule ^(.*)$ /newpage [R=301,L]
+
+<IfModule mod_headers.c>
+  <Files "auto-logout.js">
+    Header set Cache-Control "no-store, no-cache, must-revalidate, max-age=0"
+    Header set Pragma "no-cache"
+    Header set Expires "0"
+  </Files>
+</IfModule>
+
+
+# ¹Î°¨ÇÑ ÆÄÀÏ Á÷Á¢ Á¢±Ù Â÷´Ü
+# lang ë²ˆì—­ íŒŒì¼ í—ˆìš©
+<Files "en.json">
+    Require all granted
+</Files>
+
+# ë¯¼ê°í•œ íŒŒì¼ ì§ì ‘ ì ‘ê·¼ ì°¨ë‹¨
+<FilesMatch "\.(json|ini|log|sql|db|bak|txt|backup)$">
+    Require all denied
+</FilesMatch>
+
+# Git °ü·Ã ÆÄÀÏ Â÷´Ü
+<FilesMatch "^\.git">
+    Require all denied
+</FilesMatch>
+
+# composer ÆÄÀÏ Â÷´Ü
+<FilesMatch "^composer\.(json|lock)$">
+    Require all denied
+</FilesMatch>

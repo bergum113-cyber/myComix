@@ -6177,6 +6177,7 @@ if ($_new_badge_hours > 0 && $newest_mtime > 0) {
 <div class="row row-cols-2 row-cols-md-4">
 	<?php
 	if(count($file_list) > 0 && $endview > $startview){
+		$_cover_ok = false; // ✅ [I/O 최적화] cover 중복 stat 방지 플래그 (폴더당 1회만 확인)
 		for($i=$startview;$i<$endview;$i++) {
 			if($i>$endview) {
 				break;
@@ -6862,9 +6863,19 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 						
 						// ✅ .image_files.json 경로
 						$image_files_cache = $zip_file . '.image_files.json';
-						
-						// ✅ 캐시된 배지 정보가 있고 .image_files.json도 있으면 바로 사용
-						if ($cached_totalpage !== null && $cached_viewer !== null && $cached_pageorder !== null && is_file($image_files_cache)) {
+
+						// ✅ [수정] 동영상 ZIP은 .image_files.json이 아니라 .video_files.json을 가짐
+						//  - 기존: 동영상 ZIP은 is_file(.image_files.json)=false라 캐시 통과 실패
+						//    → 매번 ZipArchive를 열고 .json/.video_files.json을 재기록
+						//    → 폴더 mtime 갱신 → 다음 진입 시 cache_old → 매번 재스캔(느림)
+						//  - 수정: 캐시 viewer가 video이거나 is_video_archive면 .video_files.json 존재로 판정
+						$_is_cached_video = ($cached_viewer === 'video' || ($fileinfo_data['is_video_archive'] ?? false));
+						$_cache_meta_exists = $_is_cached_video
+							? is_file($zip_file . '.video_files.json')
+							: is_file($image_files_cache);
+
+						// ✅ 캐시된 배지 정보가 있고 메타 캐시(.image_files.json 또는 .video_files.json)도 있으면 바로 사용
+						if ($cached_totalpage !== null && $cached_viewer !== null && $cached_pageorder !== null && $_cache_meta_exists) {
 							$totalpage = $cached_totalpage;
 							$viewer = $cached_viewer;
 							$pageorder = $cached_pageorder;
@@ -7097,24 +7108,36 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 
 			display_zip_item:
 			// [cover].jpg 생성 - 유효한 썸네일이 있고 cover가 없거나 너무 작을 때
+			// ✅ [I/O 최적화] cover는 폴더당 하나($dir/[cover].jpg)인데, 기존엔 표시되는
+			//    파일마다(수백~수천 회) is_file+filesize로 같은 파일을 반복 stat 했음.
+			//    한 번 "존재함"이 확인되면 그 요청 동안 사라지지 않으므로, 플래그로
+			//    이후 반복의 중복 stat을 건너뛴다. (결과 동일, 디스크 I/O만 감소)
+			//    $_cover_ok는 이 표시 블록 진입 전(루프 바깥)에서 false로 초기화됨.
 			$cover_file = $dir."/[cover].jpg";
-			$cover_exists = is_file($cover_file) && filesize($cover_file) > 1000;
-			if(!$cover_exists) {
-				$cover_created = false;
-				
-				// 1순위: $img_output에서 생성
-				if(!empty($img_output) && strlen($img_output) > 100) {
-					$result = @file_put_contents($cover_file, base64_decode($img_output), LOCK_EX);
-					if($result !== false) $cover_created = true;
-				}
-				
-				// 2순위: 파일명.json에서 thumbnail 읽어서 생성
-				if(!$cover_created && !empty($configfile) && is_file($configfile)) {
-					$json_for_cover = @json_decode(@file_get_contents($configfile), true);
-					if(!empty($json_for_cover['thumbnail']) && strlen($json_for_cover['thumbnail']) > 100) {
-						$result = @file_put_contents($cover_file, base64_decode($json_for_cover['thumbnail']), LOCK_EX);
+			if (empty($_cover_ok)) {
+				$cover_exists = is_file($cover_file) && filesize($cover_file) > 1000;
+				if(!$cover_exists) {
+					$cover_created = false;
+					
+					// 1순위: $img_output에서 생성
+					if(!empty($img_output) && strlen($img_output) > 100) {
+						$result = @file_put_contents($cover_file, base64_decode($img_output), LOCK_EX);
 						if($result !== false) $cover_created = true;
 					}
+					
+					// 2순위: 파일명.json에서 thumbnail 읽어서 생성
+					if(!$cover_created && !empty($configfile) && is_file($configfile)) {
+						$json_for_cover = @json_decode(@file_get_contents($configfile), true);
+						if(!empty($json_for_cover['thumbnail']) && strlen($json_for_cover['thumbnail']) > 100) {
+							$result = @file_put_contents($cover_file, base64_decode($json_for_cover['thumbnail']), LOCK_EX);
+							if($result !== false) $cover_created = true;
+						}
+					}
+					// 생성에 성공했으면 이후 반복에서 재확인 불필요
+					if ($cover_created) $_cover_ok = true;
+				} else {
+					// 이미 유효한 cover가 존재 → 이후 반복에서 stat 생략
+					$_cover_ok = true;
 				}
 			}
 			

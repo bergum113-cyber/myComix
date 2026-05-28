@@ -3172,7 +3172,7 @@ function toggleViewerFavorite(btn) {
          ?>		 
 		 </div>
 </td><td align="right" style="padding-right:15px;">
-<div style="display:inline-flex; align-items:center; gap:5px;">
+<div style="display:inline-flex; align-items:center; /* gap:5px; */">
 <?php
 if($type != "pdf" && $type != "video"){
 $page_order = $pageorder['page_order'] ?? '0';

@@ -2,7 +2,7 @@
 
 > PHP 기반 개인 만화/미디어 서재 웹 애플리케이션 (대규모 확장 포크)
 
-[![Version](https://img.shields.io/badge/version-v2.2-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-v2.3-blue.svg)](#)
 [![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)](https://www.php.net/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Forked from](https://img.shields.io/badge/forked%20from-imueRoid%2FmyComix-orange.svg)](https://github.com/imueRoid/myComix)
@@ -21,7 +21,7 @@
 
 ### 📐 규모 비교
 
-| 항목 | 원본 (v0.488) | 포크 (v2.2) | 증가 |
+| 항목 | 원본 (v0.488) | 포크 (v2.3) | 증가 |
 |------|--------------|-------------|------|
 | **PHP 파일 수** | 9개 | 25개 | **+178%** |
 | **총 코드 라인 수** | ~5,000 라인 (추정) | **47,640 라인** | **약 9배** |
@@ -271,7 +271,13 @@ mycomix/
 
 ---
 
-## 📝 변경 이력 (v2.2 주요 변경)
+## 📝 변경 이력
+
+### v2.3 (2026-05)
+
+**성능 최적화 (폴더 진입 속도 개선)**
+- **동영상 ZIP 캐시 통과 수정** — 동영상 ZIP(`.video_files.json` 보유)이 기존엔 `.image_files.json` 부재로 캐시 통과에 실패해, 표시할 때마다 ZipArchive를 다시 열고 메타파일을 재기록했음. 이 재기록이 폴더 mtime을 갱신시켜 다음 진입 시 파일 목록 캐시가 무효화(`cache_old`)되고, 결과적으로 폴더 전체를 매번 재스캔하는 악순환이 발생. 동영상 ZIP은 `.video_files.json` 존재로 캐시를 판정하도록 보강하여 악순환 제거. (간헐적으로 상위 폴더 진입이 수 초까지 느려지던 현상 해결)
+- **커버 썸네일 중복 stat 제거** — 폴더 대표 커버(`[cover].jpg`)는 폴더당 하나인데, 기존엔 표시되는 파일마다(수백~수천 회) 동일 파일을 `is_file`+`filesize`로 반복 확인했음. 폴더당 한 번만 확인하도록 변경하여 디스크 I/O 대폭 감소. (파일이 많은 폴더일수록 효과 큼)
 
 ### v2.2 (2026-01)
 

@@ -5844,8 +5844,17 @@ $cache_file = $folder_path . '/.folder_cache.json';
 $cache_valid = false;
 
 // ✅ 실제 파일 개수 (Windows mtime 버그 대응)
-$actual_items = @scandir($folder_path);
-$actual_count = $actual_items ? count($actual_items) - 2 : 0;
+// [I/O 최적화] scandir(배열 생성+정렬) 대신 FilesystemIterator로 개수만 카운트
+//  - 폴더 리스트를 그릴 때 폴더마다 호출되므로, 폴더가 많을수록 효과 큼
+//  - 결과값은 scandir 방식과 동일 (SKIP_DOTS가 . / .. 자동 제외)
+$actual_count = 0;
+try {
+    $_fi = new FilesystemIterator($folder_path, FilesystemIterator::SKIP_DOTS);
+    foreach ($_fi as $_unused) { $actual_count++; }
+    unset($_fi);
+} catch (Exception $e) {
+    $actual_count = 0;
+}
 
 if (is_file($cache_file)) {
     $cache = json_decode(file_get_contents($cache_file), true);
@@ -6030,8 +6039,17 @@ $cache_file = $folder_path . '/.folder_cache.json';
 $cache_valid = false;
 
 // ✅ 실제 파일 개수 (Windows mtime 버그 대응)
-$actual_items = @scandir($folder_path);
-$actual_count = $actual_items ? count($actual_items) - 2 : 0;
+// [I/O 최적화] scandir(배열 생성+정렬) 대신 FilesystemIterator로 개수만 카운트
+//  - 폴더 리스트를 그릴 때 폴더마다 호출되므로, 폴더가 많을수록 효과 큼
+//  - 결과값은 scandir 방식과 동일 (SKIP_DOTS가 . / .. 자동 제외)
+$actual_count = 0;
+try {
+    $_fi = new FilesystemIterator($folder_path, FilesystemIterator::SKIP_DOTS);
+    foreach ($_fi as $_unused) { $actual_count++; }
+    unset($_fi);
+} catch (Exception $e) {
+    $actual_count = 0;
+}
 
 if (is_file($cache_file)) {
     $cache = json_decode(file_get_contents($cache_file), true);
@@ -7162,8 +7180,17 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 // ✅ NEW 딱지 표시 (동영상 ZIP)
 $_new_badge_hours = (int)get_app_settings('new_badge_hours', 24);
 if ($_new_badge_hours > 0) {
-    $_file_full_path = $dir . "/" . $fileinfo;
-    $_file_ctime = get_file_created_time($_file_full_path);
+    // ✅ [I/O 최적화] 캐시(file_list)의 time(filemtime) 사용 → 디스크 stat 회피
+    //  - 기존: 파일마다 filectime() 호출 → 480회 디스크 접근 → cold일 때 큰 부담
+    //  - 개선: .filelist_cache.json에 저장된 time 값을 우선 사용 (디스크 접근 0)
+    //  - 폴백: 캐시에 time이 없는 예외 케이스만 기존 filectime() 호출
+    //  - 의미 차이: filectime(메타변경시각) → filemtime(내용수정시각)
+    //    만화 ZIP은 생성 후 거의 수정되지 않으므로 실용적 차이 미미
+    $_file_ctime = $fileinfo_data['time'] ?? null;
+    if (!$_file_ctime) {
+        $_file_full_path = $dir . "/" . $fileinfo;
+        $_file_ctime = get_file_created_time($_file_full_path);
+    }
     if ($_file_ctime && (time() - $_file_ctime) < ($_new_badge_hours * 3600)) {
         echo '<span class="badge badge-pill badge-danger">N</span>';
     }
@@ -7223,8 +7250,17 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 // ✅ NEW 딱지 표시
 $_new_badge_hours = (int)get_app_settings('new_badge_hours', 24);
 if ($_new_badge_hours > 0) {
-    $_file_full_path = $dir . "/" . $fileinfo;
-    $_file_ctime = get_file_created_time($_file_full_path);
+    // ✅ [I/O 최적화] 캐시(file_list)의 time(filemtime) 사용 → 디스크 stat 회피
+    //  - 기존: 파일마다 filectime() 호출 → 수백 회 디스크 접근 → cold일 때 큰 부담
+    //  - 개선: .filelist_cache.json에 저장된 time 값을 우선 사용 (디스크 접근 0)
+    //  - 폴백: 캐시에 time이 없는 예외 케이스만 기존 filectime() 호출
+    //  - 의미 차이: filectime(메타변경시각) → filemtime(내용수정시각)
+    //    만화 ZIP은 생성 후 거의 수정되지 않으므로 실용적 차이 미미
+    $_file_ctime = $fileinfo_data['time'] ?? null;
+    if (!$_file_ctime) {
+        $_file_full_path = $dir . "/" . $fileinfo;
+        $_file_ctime = get_file_created_time($_file_full_path);
+    }
     if ($_file_ctime && (time() - $_file_ctime) < ($_new_badge_hours * 3600)) {
         echo '<span class="badge badge-pill badge-danger">N</span>';
     }

@@ -1119,6 +1119,8 @@ return [
     'adm_ph_smtp_pw_enter' => 'Enter password',
     'adm_ph_smtp_user' => 'e.g. your@gmail.com',
     'adm_ph_unrar' => 'e.g. C:\unrar\UnRAR.exe',
+    'adm_unrar_filehint' => '⚠️ Use the command-line tool "UnRAR.exe". Linking the GUI program "WinRAR.exe" will cause pages to load forever. UnRAR.exe is included in the WinRAR install folder (usually C:\Program Files\WinRAR\).',
+    'adm_7zip_filehint' => 'ℹ️ Use the command-line tool "7z.exe" (in the 7-Zip install folder, usually C:\Program Files\7-Zip\7z.exe). Not "7zG.exe" (GUI) or "7zFM.exe" (file manager).',
     'adm_ph_vips' => 'e.g. C:\vips\bin\vips.exe',
     'adm_popup_content_label' => 'Popup Content',
     'adm_popup_image_url' => 'Image URL',

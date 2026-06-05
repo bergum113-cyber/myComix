@@ -150,6 +150,8 @@ if ($base_file === false) {
     exit(__("warmup_invalid_path"));
 }
 
+// ── [디버그 로그] warmup 호출 확인 ──
+
 // ============================================================
 // 케이스 1: 이미지 폴더 처리
 // ============================================================
@@ -172,6 +174,8 @@ if (is_dir($base_file)) {
 
 $cache_file = $base_file . '.image_files.json';
 
+// ── [디버그 로그] warmup 추적 ──
+
 // 파일 존재 확인
 if (!file_exists($base_file)) {
     if (!headers_sent()) http_response_code(404);
@@ -192,9 +196,10 @@ if (!is_array($image_files)) {
     exit(__("warmup_image_list_fail"));
 }
 
+
 // ✅ warmupZipImageCache는 cache_util.php에서 제공
 try {
-    warmupZipImageCache($base_file, $image_files, 10, $user_id);
+    $_warm_result = warmupZipImageCache($base_file, $image_files, 10, $user_id);
     
     if (!headers_sent()) http_response_code(200);
     exit(__("warmup_zip_cache_done"));

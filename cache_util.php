@@ -307,6 +307,7 @@ if (!function_exists('warmupZipImageCache')) {
         $zip_hash = cacheKeyFromPath($base_file);
         $cache_dir = __DIR__ . "/cache/{$user_id}/{$zip_hash}";
 
+
         // 캐시 디렉토리 준비
         clearstatcache();
         if (file_exists($cache_dir) && !is_dir($cache_dir)) {
@@ -319,10 +320,27 @@ if (!function_exists('warmupZipImageCache')) {
             }
         }
 
-        // ZIP 파일 열기
-        $zip = new ZipArchive;
-        if ($zip->open($base_file) !== TRUE) {
-            return null;
+        // ✅ [RAR/7Z 지원] ZIP=내장 ZipArchive, RAR/7Z=ArchiveHandler
+        $_arc_ext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
+        $_is_rar7z = in_array($_arc_ext, ['rar', 'cbr', '7z', 'cb7']);
+        $_arc = null;
+        $zip = null;
+
+        if ($_is_rar7z) {
+            if (!class_exists('ArchiveHandler')) {
+                return null;
+            }
+            try {
+                $_arc = new ArchiveHandler($base_file);
+            } catch (Exception $e) {
+                return null;
+            }
+        } else {
+            // ZIP 파일 열기
+            $zip = new ZipArchive;
+            if ($zip->open($base_file) !== TRUE) {
+                return null;
+            }
         }
         
         $processed = 0;
@@ -335,7 +353,13 @@ if (!function_exists('warmupZipImageCache')) {
 
             // 이미 캐시 있으면 스킵
             if (!file_exists($cache_img)) {
-                $img_data = $zip->getFromName($image_files[$i]);
+                // ✅ ZIP은 getFromName, RAR/7Z는 ArchiveHandler->extractFile
+                if ($_is_rar7z) {
+                    $img_data = $_arc->extractFile($image_files[$i]);
+                    if ($img_data === null) $img_data = false;
+                } else {
+                    $img_data = $zip->getFromName($image_files[$i]);
+                }
                 if ($img_data !== false) {
                     $compressed = compressImage($img_data, null, false);
                     
@@ -388,8 +412,10 @@ if (!function_exists('warmupZipImageCache')) {
             }
         }
         
-        $zip->close();
-        unset($zip);
+        if (!$_is_rar7z && $zip) {
+            $zip->close();
+            unset($zip);
+        }
         gc_collect_cycles();
         
         return $cache_dir;

@@ -3146,10 +3146,12 @@ $ffprobe_ok_check = !empty($ffprobe_path) && file_exists($ffprobe_path);
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_unrar_path"); ?></td><td class="">
 <input type="text" name="unrar_path" class="form-control" value="<?php echo h($unrar_path); ?>" placeholder="<?php echo __('adm_ph_unrar'); ?>">
 <small class="text-muted"><?php if($unrar_ok): ?><span class="text-success"><?php echo __("adm_unrar_enabled"); ?></span><?php elseif(!empty($unrar_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php else: ?>RAR/CBR unsupported if not set<?php endif; ?></small>
+<div class="alert alert-warning py-1 px-2 mt-1 mb-0" style="font-size:0.85em;"><?php echo __("adm_unrar_filehint"); ?></div>
 </td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_7zip_path"); ?></td><td class="">
 <input type="text" name="sevenzip_path" class="form-control" value="<?php echo h($sevenzip_path); ?>" placeholder="<?php echo __('adm_ph_7zip'); ?>">
 <small class="text-muted"><?php if($sevenzip_ok): ?><span class="text-success"><?php echo __("adm_7zip_enabled"); ?></span><?php elseif(!empty($sevenzip_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php else: ?>7Z/CB7 unsupported if not set<?php endif; ?></small>
+<div class="alert alert-info py-1 px-2 mt-1 mb-0" style="font-size:0.85em;"><?php echo __("adm_7zip_filehint"); ?></div>
 </td></tr>
 
 <tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_folder_display"); ?></strong></td></tr>

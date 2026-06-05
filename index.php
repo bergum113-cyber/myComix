@@ -2480,10 +2480,27 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
             }
         }
         
+        // ✅ [RAR/7Z 지원] 압축 종류 판별 (ZIP=내장, RAR/7Z=archive_handler)
+        $_arc_ext = strtolower(pathinfo($zipfile, PATHINFO_EXTENSION));
+        $_is_rar7z = in_array($_arc_ext, ['rar', 'cbr', '7z', 'cb7']);
+        $_arc = null;
+
         $zip = new ZipArchive;
-        if ($zip->open($zipfile) === TRUE) {
-            // 캐시가 없으면 ZIP 스캔
+        $_opened = $_is_rar7z ? (($_arc = archive_open_handler($zipfile)) !== false) : ($zip->open($zipfile) === TRUE);
+        if ($_opened) {
+            // 캐시가 없으면 스캔
             if (!$use_cached_list) {
+                if ($_is_rar7z) {
+                    // RAR/7Z: 헬퍼로 전체 목록 가져와 분류
+                    foreach (archive_list_all($_arc) as $zname) {
+                        if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $zname)) {
+                            $image_files[] = $zname;
+                        }
+                        if (preg_match('/\.(mp4|webm|mkv|avi|mov|m4v|m2t|ts|mts|m2ts|wmv|flv)$/i', $zname)) {
+                            $video_files[] = $zname;
+                        }
+                    }
+                } else {
                 for ($i = 0; $i < $zip->numFiles; $i++) {
                     $zname = $zip->getNameIndex($i);
                     if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $zname)) {
@@ -2492,6 +2509,7 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
                     if (preg_match('/\.(mp4|webm|mkv|avi|mov|m4v|m2t|ts|mts|m2ts|wmv|flv)$/i', $zname)) {
                         $video_files[] = $zname;
                     }
+                }
                 }
             }
             
@@ -2505,7 +2523,7 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
                     'is_video_archive' => true
                 ];
                 @file_put_contents($json_file, json_encode($cache_data, JSON_UNESCAPED_UNICODE), LOCK_EX);
-                $zip->close();
+                if (!$_is_rar7z) { $zip->close(); }
                 $created++;
                 continue;
             }
@@ -2516,7 +2534,7 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
                 $image_files = array_values($image_files);
                 $thumbnail_filename = $image_files[0];
                 
-                $img_data = $zip->getFromName($thumbnail_filename);
+                $img_data = $_is_rar7z ? archive_extract_one($_arc, $thumbnail_filename) : $zip->getFromName($thumbnail_filename);
                 if ($img_data !== false) {
                     $thumbnail_data = null;
                     global $vips_path;
@@ -2574,8 +2592,7 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
                 }
             }
             
-            $zip->close();
-            unset($zip);
+            if (!$_is_rar7z) { $zip->close(); unset($zip); }
             gc_collect_cycles();
         }
     }
@@ -2673,21 +2690,34 @@ function generate_cover_cache_streaming($base_dir, $force = false, $recursive = 
                 }
             }
             
-            // json이 없으면 ZIP에서 직접 추출
+            // json이 없으면 압축에서 직접 추출
+            // ✅ [RAR/7Z 지원] ZIP=내장, RAR/7Z=archive_handler
+            $_arc_ext = strtolower(pathinfo($zipfile, PATHINFO_EXTENSION));
+            $_is_rar7z = in_array($_arc_ext, ['rar', 'cbr', '7z', 'cb7']);
+            $_arc = null;
             $zip = new ZipArchive;
-            if ($zip->open($zipfile) === TRUE) {
+            $_opened = $_is_rar7z ? (($_arc = archive_open_handler($zipfile)) !== false) : ($zip->open($zipfile) === TRUE);
+            if ($_opened) {
                 $image_files = [];
+                if ($_is_rar7z) {
+                    foreach (archive_list_all($_arc) as $zname) {
+                        if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $zname)) {
+                            $image_files[] = $zname;
+                        }
+                    }
+                } else {
                 for ($i = 0; $i < $zip->numFiles; $i++) {
                     $zname = $zip->getNameIndex($i);
                     if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $zname)) {
                         $image_files[] = $zname;
                     }
                 }
+                }
                 
                 if (count($image_files) > 0) {
                     natsort($image_files);
                     $image_files = array_values($image_files);
-                    $img_data = $zip->getFromName($image_files[0]);
+                    $img_data = $_is_rar7z ? archive_extract_one($_arc, $image_files[0]) : $zip->getFromName($image_files[0]);
                     
                     if ($img_data !== false) {
                         $img = @imagecreatefromstring($img_data);
@@ -2708,13 +2738,13 @@ function generate_cover_cache_streaming($base_dir, $force = false, $recursive = 
                             imagedestroy($cropimage);
                             
                             @file_put_contents($cover_file, $thumbnail_data, LOCK_EX);
-                            $zip->close();
+                            if (!$_is_rar7z) { $zip->close(); }
                             $created++;
                             break;
                         }
                     }
                 }
-                $zip->close();
+                if (!$_is_rar7z) { $zip->close(); }
             }
         }
         
@@ -3460,11 +3490,26 @@ function generate_image_files_cache_streaming($base_dir, $force = false, $recurs
             @unlink($cache_file);
         }
         
+        // ✅ [RAR/7Z 지원] ZIP=내장, RAR/7Z=archive_handler
+        $_arc_ext = strtolower(pathinfo($zipfile, PATHINFO_EXTENSION));
+        $_is_rar7z = in_array($_arc_ext, ['rar', 'cbr', '7z', 'cb7']);
+        $_arc = null;
         $zip = new ZipArchive;
-        if ($zip->open($zipfile) === TRUE) {
+        $_opened = $_is_rar7z ? (($_arc = archive_open_handler($zipfile)) !== false) : ($zip->open($zipfile) === TRUE);
+        if ($_opened) {
             $image_files = [];
             $has_video = false;
             
+            if ($_is_rar7z) {
+                foreach (archive_list_all($_arc) as $zname) {
+                    if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $zname)) {
+                        $image_files[] = $zname;
+                    }
+                    if (preg_match('/\.(mp4|webm|mkv|avi|mov|m4v|m2t|ts|mts|m2ts|wmv|flv)$/i', $zname)) {
+                        $has_video = true;
+                    }
+                }
+            } else {
             for ($i = 0; $i < $zip->numFiles; $i++) {
                 $zname = $zip->getNameIndex($i);
                 if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $zname)) {
@@ -3474,8 +3519,9 @@ function generate_image_files_cache_streaming($base_dir, $force = false, $recurs
                     $has_video = true;
                 }
             }
+            }
             
-            $zip->close();
+            if (!$_is_rar7z) { $zip->close(); }
             
             // 이미지가 있고 동영상이 없을 때만 생성
             if (count($image_files) > 0 && !$has_video) {
@@ -3550,18 +3596,31 @@ function generate_video_files_cache_streaming($base_dir, $force = false, $recurs
             @unlink($cache_file);
         }
         
+        // ✅ [RAR/7Z 지원] ZIP=내장, RAR/7Z=archive_handler
+        $_arc_ext = strtolower(pathinfo($zipfile, PATHINFO_EXTENSION));
+        $_is_rar7z = in_array($_arc_ext, ['rar', 'cbr', '7z', 'cb7']);
+        $_arc = null;
         $zip = new ZipArchive;
-        if ($zip->open($zipfile) === TRUE) {
+        $_opened = $_is_rar7z ? (($_arc = archive_open_handler($zipfile)) !== false) : ($zip->open($zipfile) === TRUE);
+        if ($_opened) {
             $video_files = [];
             
+            if ($_is_rar7z) {
+                foreach (archive_list_all($_arc) as $zname) {
+                    if (preg_match('/\.(mp4|webm|mkv|avi|mov|m4v|m2t|ts|mts|m2ts|wmv|flv)$/i', $zname)) {
+                        $video_files[] = $zname;
+                    }
+                }
+            } else {
             for ($i = 0; $i < $zip->numFiles; $i++) {
                 $zname = $zip->getNameIndex($i);
                 if (preg_match('/\.(mp4|webm|mkv|avi|mov|m4v|m2t|ts|mts|m2ts|wmv|flv)$/i', $zname)) {
                     $video_files[] = $zname;
                 }
             }
+            }
             
-            $zip->close();
+            if (!$_is_rar7z) { $zip->close(); }
             
             // 동영상이 있을 때만 생성
             if (count($video_files) > 0) {
@@ -3858,6 +3917,46 @@ function generate_all_zip_image_caches($base_dir, $force = false) {
         }
     }
     return ['created' => $created, 'skipped' => $skipped, 'total' => $total];
+}
+
+// ============================================================
+// ✅ RAR/7Z 어댑터 헬퍼 (검증된 ZIP 흐름을 그대로 재사용하기 위함)
+// ------------------------------------------------------------
+// ZIP은 PHP 내장 ZipArchive를 쓰고, RAR/7Z는 아래 3개 헬퍼로
+// "목록 가져오기 / 개별 추출"만 대체한다. 썸네일 생성·캐시 저장·
+// 표시 등 그 이후 로직은 ZIP과 100% 동일하게 흐른다.
+// ============================================================
+
+// 압축 핸들러 열기 (RAR/7Z 전용). 성공 시 ArchiveHandler, 실패 시 false
+function archive_open_handler($archive_path) {
+    if (!class_exists('ArchiveHandler')) return false;
+    try {
+        return new ArchiveHandler($archive_path);
+    } catch (Exception $e) {
+        error_log("[archive_open_handler] " . $e->getMessage());
+        return false;
+    }
+}
+
+// 압축 내 전체 파일 목록 (배열). ZipArchive의 getNameIndex 루프에 대응
+function archive_list_all($handler) {
+    if (!$handler) return array();
+    try {
+        return $handler->listFiles(); // 필터 없이 전체
+    } catch (Exception $e) {
+        return array();
+    }
+}
+
+// 압축 내 특정 파일 1개의 바이트 추출. ZipArchive의 getFromName에 대응
+function archive_extract_one($handler, $entry_name) {
+    if (!$handler) return false;
+    try {
+        $data = $handler->extractFile($entry_name);
+        return ($data !== false && $data !== null && strlen($data) > 0) ? $data : false;
+    } catch (Exception $e) {
+        return false;
+    }
 }
 
 // ✅ 파일명.json + [cover].jpg 일괄 생성 함수
@@ -6469,7 +6568,7 @@ echo highlight_search($img_folder_name, $all_terms);
       </div>
     </a>
     <?php
-} elseif(strpos(strtolower($zip_file), ".pdf") == true){
+} elseif(preg_match('/\.pdf$/i', $zip_file)){
 		// PDF 썸네일 확인 (파일명.jpg)
 		$pdf_thumb_file = '';
 		$pdf_base_name = preg_replace('/\.pdf$/i', '', $zip_file);
@@ -6920,16 +7019,42 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 			// - 개선: .json과 .image_files.json 둘 다 있으면 스킵
 			$image_files_cache_check = $zip_file . '.image_files.json';
 			if(empty($configfile) || is_File($configfile) === false || !is_file($image_files_cache_check)) {
+					// ✅ [RAR/7Z 지원] 압축 종류 판별 (ZIP=내장, RAR/7Z=archive_handler)
+					$_arc_ext = strtolower(pathinfo($zip_file, PATHINFO_EXTENSION));
+					$_is_rar7z = in_array($_arc_ext, ['rar', 'cbr', '7z', 'cb7']);
+					$_arc = null; // RAR/7Z용 핸들러
+
+					// ── [디버그 로그] 메인 루프 RAR/7z 추적 ──
+					if ($_is_rar7z) {
+					}
+
 					$zip = new ZipArchive;
-					if ($zip->open($zip_file) == TRUE) {
+					$_arc_opened = $_is_rar7z ? (($_arc = archive_open_handler($zip_file)) !== false) : ($zip->open($zip_file) == TRUE);
+
+					if ($_is_rar7z) {
+					}
+
+					if ($_arc_opened) {
 						$thumbnail_index = 0;
 						$find_img = array();
-						$zip_numfile = $zip->numFiles;
+						$zip_numfile = $_is_rar7z ? 0 : $zip->numFiles;
 
 // ★★★ .image_files.json 생성 추가 ★★★
         $image_files = array();
         $video_files = array();
         
+        if ($_is_rar7z) {
+            // ✅ RAR/7Z: 핸들러로 전체 파일 목록을 한 번에 가져옴
+            $find_img = archive_list_all($_arc);
+            foreach ($find_img as $_nm) {
+                if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $_nm)) {
+                    $image_files[] = $_nm;
+                }
+                if (is_video_file($_nm)) {
+                    $video_files[] = $_nm;
+                }
+            }
+        } else {
         for ($findthumb = 0; $findthumb < $zip_numfile; $findthumb++) {
             $find_img[$findthumb] = $zip->getNameIndex($findthumb);
             
@@ -6942,9 +7067,12 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
                 $video_files[] = $find_img[$findthumb];
             }
         }
+        }
         
         // ★★★ 동영상만 있는 ZIP인 경우 조기 종료 ★★★
         if (count($image_files) == 0 && count($video_files) > 0) {
+            if ($_is_rar7z) {
+            }
             // 동영상 ZIP으로 표시
             $cache_data = array();
             $cache_data['totalpage'] = count($video_files);
@@ -6959,8 +7087,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
             $video_files = array_values($video_files);
             @file_put_contents($zip_file . '.video_files.json', json_encode($video_files, JSON_UNESCAPED_UNICODE), LOCK_EX);
             
-            $zip->close();
-            unset($zip);
+            if (!$_is_rar7z) { $zip->close(); unset($zip); }
             gc_collect_cycles();
             $_SESSION['zip_cache_generated'] = true;
             
@@ -6990,13 +7117,18 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
         }
 // ★★★ 여기까지 추가 ★★★
 
-						for ($findthumb = 0; $findthumb < $zip_numfile; $findthumb++) {
-							$find_img[$findthumb] = $zip->getNameIndex($findthumb);
+						if (!$_is_rar7z) {
+							for ($findthumb = 0; $findthumb < $zip_numfile; $findthumb++) {
+								$find_img[$findthumb] = $zip->getNameIndex($findthumb);
+							}
 						}
 						$find_img = n_sort($find_img);
 						$thumbnail_index = null; // 명시적 초기화
 						$thumbnail_filename = null; // 실제 파일명 저장
-						for ($findthumb = 0; $findthumb < $zip_numfile; $findthumb++) {
+						// ✅ [RAR/7Z 지원] $zip_numfile은 RAR/7Z에서 0이므로 $find_img 개수로 순회
+						//    (ZIP/RAR/7Z 공통: $find_img는 위에서 이미 채워짐)
+						$_scan_count = count($find_img);
+						for ($findthumb = 0; $findthumb < $_scan_count; $findthumb++) {
 							$current_file = $find_img[$findthumb];
 							$lower_file = strtolower($current_file);
 							// 이미지 파일 확장자 체크
@@ -7015,13 +7147,12 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 							$cache_data['thumbnail'] = "";
 							$cache_data['is_video_archive'] = true;
 							safe_json_write($configfile, $cache_data);
-							$zip->close();
-							unset($zip);
+							if (!$_is_rar7z) { $zip->close(); unset($zip); }
 							gc_collect_cycles();
 						} else {
 						
 						// 이미지 데이터 가져오기
-						$img_data = $zip->getFromName($thumbnail_filename);
+						$img_data = $_is_rar7z ? archive_extract_one($_arc, $thumbnail_filename) : $zip->getFromName($thumbnail_filename);
 						if ($img_data === false) {
 							// 실패시 빈 썸네일로 저장
 							$cache_data = array();
@@ -7030,8 +7161,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 							$cache_data['viewer'] = "toon";
 							$cache_data['thumbnail'] = "";
 							safe_json_write($configfile, $cache_data);
-							$zip->close();
-							unset($zip);
+							if (!$_is_rar7z) { $zip->close(); unset($zip); }
 							gc_collect_cycles();
 						} else {
 
@@ -7077,8 +7207,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 					$cache_data['thumbnail'] = isset($cropimage) && $cropimage ? base64_encode($cropimage) : "";
 //$cache_data['mtime'] = filemtime($zip_file);
 //$cache_data['size'] = filesize($zip_file);
-					$zip->close();
-                    unset($zip); // ✨ ZipArchive 해제
+					if (!$_is_rar7z) { $zip->close(); unset($zip); }
                     gc_collect_cycles(); // ✨ PHP GC 유도
 					safe_json_write($configfile, $cache_data);
 

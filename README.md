@@ -2,7 +2,7 @@
 
 > PHP 기반 개인 만화/미디어 서재 웹 애플리케이션 (대규모 확장 포크)
 
-[![Version](https://img.shields.io/badge/version-v2.3-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-v2.4-blue.svg)](#)
 [![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)](https://www.php.net/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Forked from](https://img.shields.io/badge/forked%20from-imueRoid%2FmyComix-orange.svg)](https://github.com/imueRoid/myComix)
@@ -21,7 +21,7 @@
 
 ### 📐 규모 비교
 
-| 항목 | 원본 (v0.488) | 포크 (v2.3) | 증가 |
+| 항목 | 원본 (v0.488) | 포크 (v2.4) | 증가 |
 |------|--------------|-------------|------|
 | **PHP 파일 수** | 9개 | 25개 | **+178%** |
 | **총 코드 라인 수** | ~5,000 라인 (추정) | **47,640 라인** | **약 9배** |
@@ -272,6 +272,16 @@ mycomix/
 ---
 
 ## 📝 변경 이력
+
+### v2.4 (2026-06)
+
+**RAR / 7Z 압축 만화 지원 (신규)**
+- **RAR(.rar, .cbr) / 7Z(.7z, .cb7) 압축 파일 지원 추가** — 기존엔 ZIP(.zip, .cbz)만 만화로 인식했으나, RAR·7Z 압축도 ZIP과 동일하게 목록 표시·썸네일·페이지 뷰어·북마크까지 모두 지원. 외부 명령줄 도구(UnRAR, 7-Zip)를 통해 처리하며, 관리자 설정에서 도구 경로를 지정.
+- **검증된 ZIP 처리 흐름 재사용** — 별도 코드를 새로 만들지 않고, 안정적으로 동작하던 ZIP 경로에 "압축 목록 읽기"와 "개별 이미지 추출" 두 동작만 압축 종류별로 분기. 썸네일 생성·캐시 저장·표시 등 이후 로직은 ZIP과 100% 동일하게 동작하여 안정성 확보.
+- **압축 형식이 거치는 모든 경로 일괄 대응** — 메인 목록 표시, 관리자 캐시 재생성(썸네일·커버·이미지목록·동영상목록), 뷰어 페이지 추출, 캐시 사전 생성(warmup), 동영상 압축 판별, 북마크 커버 생성 등 ZIP을 처리하던 모든 지점에 RAR/7Z 대응 추가.
+- **관리자 설정 안내 강화** — 압축 도구 설정 항목에 "GUI 프로그램(WinRAR.exe)이 아닌 명령줄 도구(UnRAR.exe)를 연결해야 한다"는 안내 추가. GUI 프로그램 연결 시 페이지 무한 로딩이 발생하는 문제를 사전 방지.
+
+> ZIP 처리 코드는 원본 그대로 유지하고 RAR/7Z 분기만 추가했으므로, 기존 ZIP 만화의 동작에는 영향이 없습니다.
 
 ### v2.3 (2026-05)
 

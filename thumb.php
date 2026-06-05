@@ -102,7 +102,7 @@ function detect_video_archive($filepath, $json_file) {
         return $result;
     }
     
-    // 3. ZIP 내용 직접 확인 (.json이 없을 때만 실행)
+    // 3. 압축 내용 직접 확인 (.json이 없을 때만 실행)
     if (preg_match('/\.(zip|cbz)$/i', $filepath) && class_exists('ZipArchive')) {
         $zip = new ZipArchive();
         if ($zip->open($filepath) === true) {
@@ -125,6 +125,19 @@ function detect_video_archive($filepath, $json_file) {
             if ($has_video && !$has_image) {
                 $result['is_video'] = true;
             }
+        }
+    } elseif (preg_match('/\.(rar|cbr|7z|cb7)$/i', $filepath) && class_exists('ArchiveHandler')) {
+        // ✅ [RAR/7Z 지원] ZIP 분기와 동일 동작 (ArchiveHandler로 내용 확인)
+        try {
+            $_h = new ArchiveHandler($filepath);
+            $_imgs = $_h->getImageFiles();
+            $_vids = $_h->getVideoFiles();
+            // 동영상만 있고 이미지 없으면 동영상 압축
+            if (empty($_imgs) && !empty($_vids)) {
+                $result['is_video'] = true;
+            }
+        } catch (Exception $e) {
+            // 판별 실패 시 기본값(이미지) 유지
         }
     }
     

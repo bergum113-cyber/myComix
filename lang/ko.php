@@ -1118,6 +1118,8 @@ return [
     'adm_ph_smtp_pw_enter' => '비밀번호 입력',
     'adm_ph_smtp_user' => '예: your@gmail.com',
     'adm_ph_unrar' => '예: C:\unrar\UnRAR.exe',
+    'adm_unrar_filehint' => '⚠️ 반드시 명령줄 도구인 「UnRAR.exe」를 연결하세요. GUI 프로그램인 「WinRAR.exe」를 연결하면 페이지가 무한 로딩됩니다. WinRAR 설치 폴더(보통 C:\Program Files\WinRAR\)에 UnRAR.exe가 함께 들어 있습니다.',
+    'adm_7zip_filehint' => 'ℹ️ 명령줄 도구인 「7z.exe」를 연결하세요. (7-Zip 설치 폴더, 보통 C:\Program Files\7-Zip\7z.exe) 「7zG.exe」(GUI)나 「7zFM.exe」(파일관리자)가 아닙니다.',
     'adm_ph_vips' => '예: C:\vips\bin\vips.exe',
     'adm_popup_content_label' => '팝업 내용',
     'adm_popup_image_url' => '이미지 URL',

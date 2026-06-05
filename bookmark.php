@@ -139,7 +139,7 @@ if ($mode === "delete_bookmark") {
     $base_folder = rtrim(dirname($base_file), '/\\') . '/';
     $cover_file = $base_folder . "[cover].jpg";
     
-    if (strpos(strtolower($base_file), ".zip") !== false || strpos(strtolower($base_file), ".cbz") !== false) {
+    if (preg_match('/\.(zip|cbz)$/i', $base_file)) {
         $list = [];
         $zip = new ZipArchive;
         if ($zip->open($base_file) === TRUE) {
@@ -162,6 +162,23 @@ if ($mode === "delete_bookmark") {
                 }
             }
             $zip->close();
+        }
+    } elseif (preg_match('/\.(rar|cbr|7z|cb7)$/i', $base_file)) {
+        // ✅ [RAR/7Z 지원] ArchiveHandler로 cover 생성 (ZIP 분기와 동일 동작)
+        if (class_exists('ArchiveHandler')) {
+            try {
+                $_h = new ArchiveHandler($base_file);
+                $image_data = $_h->extractFirstImage();
+                if ($image_data !== false && $image_data !== null) {
+                    $cover_output = @imagecreatefromstring($image_data);
+                    if ($cover_output !== false) {
+                        imagejpeg($cover_output, $cover_file);
+                        imagedestroy($cover_output);
+                    }
+                }
+            } catch (Exception $e) {
+                // cover 생성 실패는 치명적이지 않음 (북마크는 계속 진행)
+            }
         }
     } else {
         $list = [];

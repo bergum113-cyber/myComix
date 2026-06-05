@@ -203,12 +203,19 @@ class ArchiveHandler {
         if (empty(self::$unrar_path)) return $files;
         
         // unrar lb: 파일 목록만 출력 (베어 포맷)
-        // ✅ escapeArg()로 경로 이스케이프 (보안 강화)
-        $cmd = sprintf('%s lb %s 2>&1', 
+        $is_windows = (DIRECTORY_SEPARATOR === '\\') || (stripos(PHP_OS, 'WIN') === 0);
+        $stdin_block = $is_windows ? '< NUL' : '< /dev/null';
+        $cmd = sprintf('%s lb -p- -y %s 2>&1 %s', 
             self::escapeArg(self::$unrar_path), 
-            self::escapeArg($this->file_path));
-        
+            self::escapeArg($this->file_path),
+            $stdin_block);
+
+        // ── [디버그 로그] unrar 실행 추적 ──
+
+        $output = [];
+        $return_code = -1;
         exec($cmd, $output, $return_code);
+
         
         if ($return_code === 0) {
             foreach ($output as $line) {
@@ -238,17 +245,32 @@ class ArchiveHandler {
         
         // 7z l: 파일 목록 출력
         // ✅ escapeArg()로 경로 이스케이프 (보안 강화)
-        $cmd = sprintf('%s l -slt %s 2>&1', 
+        // ✅ [hang 방지] stdin 차단 — 암호 걸린 7z에서 입력 대기로 멈추는 것 방지
+        $is_windows = (DIRECTORY_SEPARATOR === '\\') || (stripos(PHP_OS, 'WIN') === 0);
+        $stdin_block = $is_windows ? '< NUL' : '< /dev/null';
+        $cmd = sprintf('%s l -slt %s 2>&1 %s', 
             self::escapeArg(self::$sevenzip_path), 
-            self::escapeArg($this->file_path));
-        
+            self::escapeArg($this->file_path),
+            $stdin_block);
+
+        $output = [];
+        $return_code = -1;
         exec($cmd, $output, $return_code);
+
         
         if ($return_code === 0) {
             $current_file = null;
             $is_dir = false;
-            
+            $in_file_section = false; // ✅ 파일 목록 섹션 진입 여부
+
             foreach ($output as $line) {
+                // ✅ '----------' 구분선 이후가 실제 파일 목록 (그 전 'Path ='는 아카이브 자신)
+                if (strpos($line, '----------') === 0) {
+                    $in_file_section = true;
+                    continue;
+                }
+                if (!$in_file_section) continue;
+
                 if (strpos($line, 'Path = ') === 0) {
                     // 이전 파일 저장
                     if ($current_file !== null && !$is_dir) {
@@ -273,6 +295,7 @@ class ArchiveHandler {
                 }
             }
         }
+
         
         return $files;
     }
@@ -315,10 +338,14 @@ class ArchiveHandler {
      * RAR에서 파일 추출 (임시 디렉토리 사용)
      */
     private function extractRarFile($entry_name) {
-        if (empty(self::$unrar_path)) return false;
+        if (empty(self::$unrar_path)) {
+            return false;
+        }
         
         // 임시 디렉토리 생성
-        $temp_dir = sys_get_temp_dir() . '/mycomix_' . md5($this->file_path . $entry_name . time());
+        // ✅ [동시 추출 충돌 방지] time()(초)는 동시 요청 시 겹칠 수 있어
+        //    uniqid(more_entropy=true) + 랜덤으로 프로세스마다 고유한 폴더명 보장
+        $temp_dir = sys_get_temp_dir() . '/mycomix_' . md5($this->file_path . $entry_name . uniqid('', true) . getmypid() . random_int(0, PHP_INT_MAX));
         
         if (!mkdir($temp_dir, 0755, true)) {
             return false;
@@ -333,16 +360,19 @@ class ArchiveHandler {
             $stderr_redirect = $is_windows ? '2>NUL' : '2>/dev/null';
             
             // unrar x: 특정 파일 추출
-            // ✅ escapeArg()로 경로 이스케이프 (보안 강화)
+            $stdin_block = $is_windows ? '< NUL' : '< /dev/null';
             $cmd = sprintf(
-                '%s x -y -o+ %s %s %s %s',
+                '%s x -y -o+ -p- %s %s %s %s %s',
                 self::escapeArg(self::$unrar_path),
                 self::escapeArg($this->file_path),
                 self::escapeArg($rar_entry_name),
                 self::escapeArg($temp_dir),
-                $stderr_redirect
+                $stderr_redirect,
+                $stdin_block
             );
             
+            $output = [];
+            $return_code = -1;
             exec($cmd, $output, $return_code);
             
             if ($return_code === 0) {
@@ -365,28 +395,64 @@ class ArchiveHandler {
     }
     
     /**
-     * 7Z에서 파일 추출 (stdout으로 직접 출력)
+     * 7Z에서 파일 추출 (임시폴더 추출 방식)
+     * ✅ Windows 7z.exe의 -so(stdout) 출력이 shell_exec에서 47바이트로 잘리는
+     *    문제 때문에, RAR과 동일하게 임시폴더 추출 후 읽는 방식으로 변경.
      */
     private function extract7zFile($entry_name) {
-        if (empty(self::$sevenzip_path)) return false;
+        if (empty(self::$sevenzip_path)) {
+            return false;
+        }
         
-        // ✅ OS에 따른 stderr 리다이렉션
         $is_windows = (DIRECTORY_SEPARATOR === '\\') || (stripos(PHP_OS, 'WIN') === 0);
         $stderr_redirect = $is_windows ? '2>NUL' : '2>/dev/null';
+        $stdin_block = $is_windows ? '< NUL' : '< /dev/null';
         
-        // 7z e -so: stdout으로 출력
-        // ✅ escapeArg()로 경로 이스케이프 (보안 강화)
-        $cmd = sprintf(
-            '%s e -so %s %s %s',
-            self::escapeArg(self::$sevenzip_path),
-            self::escapeArg($this->file_path),
-            self::escapeArg($entry_name),
-            $stderr_redirect
-        );
+        // 임시 디렉토리 생성 (RAR과 동일 방식)
+        // ✅ [동시 추출 충돌 방지] time()(초)는 동시 요청 시 겹칠 수 있어
+        //    uniqid(more_entropy=true) + 랜덤으로 프로세스마다 고유한 폴더명 보장
+        $temp_dir = sys_get_temp_dir() . '/mycomix7z_' . md5($this->file_path . $entry_name . uniqid('', true) . getmypid() . random_int(0, PHP_INT_MAX));
         
-        $data = @shell_exec($cmd);
+        if (!mkdir($temp_dir, 0755, true)) {
+            return false;
+        }
         
-        return $data !== null ? $data : false;
+        try {
+            // 7z e -o{출력폴더}: 지정 파일을 임시폴더로 추출 (-so 대신)
+            //  e = 경로 없이 추출 → 파일명만으로 떨어짐
+            //  -o{dir}는 붙여써야 함 (7z 문법). escapeArg로 폴더 경로 감쌈
+            $cmd = sprintf(
+                '%s e -y -bso0 -bsp0 %s %s -o%s %s %s',
+                self::escapeArg(self::$sevenzip_path),
+                self::escapeArg($this->file_path),
+                self::escapeArg($entry_name),
+                self::escapeArg($temp_dir),
+                $stderr_redirect,
+                $stdin_block
+            );
+            
+            $output = [];
+            $return_code = -1;
+            exec($cmd, $output, $return_code);
+            
+            if ($return_code === 0) {
+                // e 옵션은 경로를 제거하므로 파일명(basename)만으로 떨어짐
+                $extracted_file = $temp_dir . '/' . basename($entry_name);
+                
+                if (file_exists($extracted_file)) {
+                    $data = file_get_contents($extracted_file);
+                    $this->deleteDirectory($temp_dir);
+                    return $data;
+                }
+            }
+            
+            $this->deleteDirectory($temp_dir);
+            return false;
+            
+        } catch (Exception $e) {
+            $this->deleteDirectory($temp_dir);
+            return false;
+        }
     }
     
     /**
@@ -416,6 +482,66 @@ class ArchiveHandler {
             ? get_video_extensions_pattern() 
             : '/\.(mp4|webm|mkv|avi|mov|m4v|m2t|ts|mts|m2ts|wmv|flv)$/i';
         return $this->listFiles($pattern);
+    }
+
+    /**
+     * 압축 내 파일들의 크기 맵 반환 ['파일명' => 바이트수, ...]
+     * ZIP의 statIndex()['size']와 동등한 정보를 RAR/7Z에서 제공.
+     * 크기를 못 구한 파일은 맵에 없거나 0.
+     */
+    public function getFileSizes() {
+        $sizes = [];
+        if ($this->type === '7z') {
+            if (empty(self::$sevenzip_path)) return $sizes;
+            $is_windows = (DIRECTORY_SEPARATOR === '\\') || (stripos(PHP_OS, 'WIN') === 0);
+            $stdin_block = $is_windows ? '< NUL' : '< /dev/null';
+            $cmd = sprintf('%s l -slt %s 2>&1 %s',
+                self::escapeArg(self::$sevenzip_path),
+                self::escapeArg($this->file_path),
+                $stdin_block);
+            $output = [];
+            $return_code = -1;
+            exec($cmd, $output, $return_code);
+            if ($return_code === 0) {
+                $in_file_section = false;
+                $current = null;
+                foreach ($output as $line) {
+                    if (strpos($line, '----------') === 0) { $in_file_section = true; continue; }
+                    if (!$in_file_section) continue;
+                    if (strpos($line, 'Path = ') === 0) {
+                        $current = str_replace('\\', '/', substr($line, 7));
+                    } elseif ($current !== null && strpos($line, 'Size = ') === 0) {
+                        $sizes[$current] = (int)trim(substr($line, 7));
+                        $current = null;
+                    }
+                }
+            }
+        } elseif ($this->type === 'rar') {
+            if (empty(self::$unrar_path)) return $sizes;
+            $is_windows = (DIRECTORY_SEPARATOR === '\\') || (stripos(PHP_OS, 'WIN') === 0);
+            $stdin_block = $is_windows ? '< NUL' : '< /dev/null';
+            // unrar lt: 상세 목록(크기 포함). 베어(lb)와 달리 Size/Name 라벨 출력
+            $cmd = sprintf('%s lt -p- -y %s 2>&1 %s',
+                self::escapeArg(self::$unrar_path),
+                self::escapeArg($this->file_path),
+                $stdin_block);
+            $output = [];
+            $return_code = -1;
+            exec($cmd, $output, $return_code);
+            if ($return_code === 0) {
+                $current = null;
+                foreach ($output as $line) {
+                    $t = trim($line);
+                    if (strpos($t, 'Name: ') === 0) {
+                        $current = str_replace('\\', '/', substr($t, 6));
+                    } elseif ($current !== null && strpos($t, 'Size: ') === 0) {
+                        $sizes[$current] = (int)trim(substr($t, 6));
+                        $current = null;
+                    }
+                }
+            }
+        }
+        return $sizes;
     }
     
     /**

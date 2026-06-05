@@ -67,6 +67,44 @@ if (is_file($_favorites_file)) {
  * 
  * @return bool 스트리밍 요청 여부
  */
+/**
+ * 압축 파일에서 특정 이미지 데이터를 추출 (ZIP/RAR/7Z 자동 분기)
+ *
+ * - ZIP/CBZ: PHP 내장 ZipArchive (빠름, 기존 동작 유지)
+ * - RAR/CBR/7Z/CB7: archive_handler(외부 도구 unrar/7z) 사용
+ *
+ * @param string $base_file  압축 파일 경로
+ * @param string $entry_name 압축 내 이미지 파일명
+ * @return string|false      이미지 바이너리 또는 실패 시 false
+ */
+function archive_get_image_data($base_file, $entry_name) {
+    $ext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
+
+    // RAR/7Z 계열: archive_handler 사용
+    if (in_array($ext, ['rar', 'cbr', '7z', 'cb7'])) {
+        if (!class_exists('ArchiveHandler')) {
+            return false;
+        }
+        try {
+            $handler = new ArchiveHandler($base_file);
+            $data = $handler->extractFile($entry_name);
+            return ($data !== false && $data !== null && strlen($data) > 0) ? $data : false;
+        } catch (Exception $e) {
+            return false;
+        }
+    }
+
+    // ZIP/CBZ 계열: 기존 ZipArchive 방식 (동작 동일)
+    if (!class_exists('ZipArchive')) return false;
+    $zip = new ZipArchive;
+    if ($zip->open($base_file) === TRUE) {
+        $data = $zip->getFromName($entry_name);
+        $zip->close();
+        return $data;
+    }
+    return false;
+}
+
 function is_streaming_request() {
     global $_param_imgfile, $_param_thumb, $_param_filetype;
     
@@ -1147,18 +1185,16 @@ echo $content;
     $lock_fp = @fopen($lock_file, 'c');
     
     if ($lock_fp && @flock($lock_fp, LOCK_EX | LOCK_NB)) {
-        $zip = new ZipArchive;
-        if ($zip->open($base_file) === TRUE) {
-            $img_data = $zip->getFromName($image_files[$img_index]);
-            $zip->close();
-            unset($zip);
-
+        // ✅ [RAR/7Z 지원] ZIP은 ZipArchive, RAR/7Z는 archive_handler로 분기 추출
+        $img_data = archive_get_image_data($base_file, $image_files[$img_index]);
+        if (true) {
             if ($img_data !== false) {
                 $compressed = compressImage($img_data, null, true); // ← ✅ force=true
                 
                 // ✅ 원본 캐시에 저장
                 $tmp_file = "{$cache_save_path}.tmp." . getmypid();
-                if (@file_put_contents($tmp_file, $compressed, LOCK_EX) !== false) {
+                $_wr = @file_put_contents($tmp_file, $compressed, LOCK_EX);
+                if ($_wr !== false) {
                     if (@rename($tmp_file, $cache_save_path)) {
                         @chmod($cache_save_path, 0644);
                     } else {
@@ -1257,12 +1293,9 @@ echo $content;
         
         // error_log("⚠️ 캐시 대기 시간 초과, 직접 생성 시도");
         
-        $zip = new ZipArchive;
-        if ($zip->open($base_file) === TRUE) {
-            $img_data = $zip->getFromName($image_files[$img_index]);
-            $zip->close();
-            unset($zip);
-
+        // ✅ [RAR/7Z 지원] ZIP은 ZipArchive, RAR/7Z는 archive_handler로 분기 추출
+        $img_data = archive_get_image_data($base_file, $image_files[$img_index]);
+        if (true) {
             if ($img_data !== false) {
                 $compressed = compressImage($img_data, null, true); // ← ✅ force=true
                 
@@ -1335,9 +1368,9 @@ if ($_param_filetype === "video_archive") {
     $type = "video_archive";
 } elseif ($_param_filetype === "video" || is_video_file($base_file)) {
     $type = "video";
-} elseif (str_contains(strtolower($base_file), "zip") || str_contains(strtolower($base_file), "cbz")) {
+} elseif (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $base_file)) {
     $type = "zip";
-} elseif ($_param_filetype === "pdf" || str_contains(strtolower($getfile), ".pdf")) {
+} elseif ($_param_filetype === "pdf" || preg_match('/\.pdf$/i', $getfile)) {
     $type = "pdf";
 } elseif (is_file($base_file.".image_files.json")) {
     $type = "images";
@@ -1362,10 +1395,9 @@ if($type != "pdf"){
     }
 
     // PHP 7.x 호환: match → if-elseif
-    if (str_contains(strtolower($base_file), ".zip")) {
-        $json_file = substr($base_file, 0, strpos(strtolower($base_file), ".zip")) . ".json";
-    } elseif (str_contains(strtolower($base_file), ".cbz")) {
-        $json_file = substr($base_file, 0, strpos(strtolower($base_file), ".cbz")) . ".json";
+    // ✅ [RAR/7Z 지원] 확장자 정규식으로 .json 경로 결정 (ZIP/RAR/7z 공통)
+    if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $base_file)) {
+        $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $base_file);
     } elseif ($_param_filetype === "images") {
         $json_file = $base_file . ".image_files.json";
     } else {
@@ -1404,7 +1436,7 @@ if($type != "pdf"){
         }
         
     } elseif ($json_file && !is_file($json_file)) {    
-        if(str_contains(strtolower($base_file), ".zip") || str_contains(strtolower($base_file), ".cbz")){
+        if(preg_match('/\.(zip|cbz)$/i', $base_file)){
             $zip = new ZipArchive;
             if ($zip->open($base_file) == TRUE) {
                 $thumbnail_index = 0;
@@ -1471,6 +1503,53 @@ if($type != "pdf"){
                 @file_put_contents($json_file, json_encode($pageorder, JSON_UNESCAPED_UNICODE), LOCK_EX);
                 $mode = $pageorder['viewer'];
                 $zip->close();
+            }
+        } elseif (preg_match('/\.(rar|cbr|7z|cb7)$/i', $base_file) && class_exists('ArchiveHandler')) {
+            // ✅ [RAR/7Z 지원] ZIP 분기와 동일 동작 (ArchiveHandler로 썸네일+메타 생성)
+            try {
+                $_h = new ArchiveHandler($base_file);
+                $_imgs = $_h->getImageFiles();
+                $cropimage = null;
+                if (!empty($_imgs)) {
+                    $img_data = $_h->extractFile($_imgs[0]);
+                    if ($img_data !== false && $img_data !== null) {
+                        $size = @getimagesizefromstring($img_data);
+                        if ($size !== false) {
+                            $originimage = @imagecreatefromstring($img_data);
+                            if ($originimage !== false) {
+                                [$width, $height] = $size;
+                                if ($width > $height) {
+                                    $x_point = max(0, ($width / 2) - $height);
+                                    $cropimage = imagecrop($originimage, ['x' => (int)$x_point, 'y' => 0, 'width' => $height, 'height' => $height]);
+                                } else {
+                                    $y_point = ($height - $width) / 2;
+                                    $cropimage = imagecrop($originimage, ['x' => 0, 'y' => (int)$y_point, 'width' => $width, 'height' => $width]);
+                                }
+                                if ($cropimage) {
+                                    $resized = imagecreatetruecolor(400, 400);
+                                    $crop_size = $width > $height ? $height : $width;
+                                    imagecopyresampled($resized, $cropimage, 0, 0, 0, 0, 400, 400, $crop_size, $crop_size);
+                                    imagedestroy($cropimage);
+                                    ob_start();
+                                    imagejpeg($resized, null, 75);
+                                    imagedestroy($resized);
+                                    $cropimage = ob_get_clean();
+                                }
+                                imagedestroy($originimage);
+                            }
+                        }
+                    }
+                }
+                $pageorder = [
+                    'totalpage' => count($_imgs),
+                    'page_order' => "0",
+                    'viewer' => "toon",
+                    'thumbnail' => base64_encode($cropimage ?? '')
+                ];
+                @file_put_contents($json_file, json_encode($pageorder, JSON_UNESCAPED_UNICODE), LOCK_EX);
+                $mode = $pageorder['viewer'];
+            } catch (Exception $e) {
+                // 폴백 실패 시 기본값 유지 (크래시 방지)
             }
         }
     }
@@ -3172,7 +3251,7 @@ function toggleViewerFavorite(btn) {
          ?>		 
 		 </div>
 </td><td align="right" style="padding-right:15px;">
-<div style="display:inline-flex; align-items:center; /* gap:5px; */">
+<div style="display:inline-flex; align-items:center; gap:5px;">
 <?php
 if($type != "pdf" && $type != "video"){
 $page_order = $pageorder['page_order'] ?? '0';
@@ -3880,6 +3959,15 @@ if($type == "video"){
             }
         }
         $zip->close();
+    } elseif (preg_match('/\.(rar|cbr|7z|cb7)$/i', $base_file) && class_exists('ArchiveHandler')) {
+        // ✅ [RAR/7Z 지원] 동영상 압축 목록 (ZIP 분기와 동일 동작, 크기는 미제공)
+        try {
+            $_h = new ArchiveHandler($base_file);
+            $_vsizes = $_h->getFileSizes();
+            foreach ($_h->getVideoFiles() as $vf) {
+                $video_list[] = ['name' => basename($vf), 'size' => $_vsizes[$vf] ?? 0];
+            }
+        } catch (Exception $e) {}
     }
     
     // 파일 크기 포맷 함수
@@ -4616,12 +4704,35 @@ if($type != "pdf" && $type != "video"){
 			  $file_type = "";
 			  
 					if ($type == "zip") {
-						$zip = new ZipArchive;
-						if ($zip->open($base_file) == TRUE) {
-							for ($i = 0; $i < $zip->numFiles; $i++) {
-								$name = $zip->getNameIndex($i);
-								if(preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $name)){
-									$list[$i] = $name;
+						$_arc_ext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
+						if (in_array($_arc_ext, ['rar','cbr','7z','cb7'])) {
+							// ✅ [RAR/7Z] .image_files.json 캐시 우선 (없으면 ArchiveHandler)
+							$img_cache_file = $base_file . '.image_files.json';
+							if (is_file($img_cache_file)) {
+								$cached_files = @json_decode(file_get_contents($img_cache_file), true);
+								if (is_array($cached_files) && !empty($cached_files)) {
+									$counter = 0;
+									foreach ($cached_files as $fname) {
+										if (is_string($fname)) { $list[$counter] = $fname; $counter++; }
+									}
+								}
+							}
+							if (empty($list) && class_exists('ArchiveHandler')) {
+								try {
+									$_h = new ArchiveHandler($base_file);
+									$_i = 0;
+									foreach ($_h->getImageFiles() as $name) { $list[$_i++] = $name; }
+								} catch (Exception $e) {}
+							}
+						} else {
+							// ZIP/CBZ: 원본 동작 그대로 (ZipArchive 직접)
+							$zip = new ZipArchive;
+							if ($zip->open($base_file) == TRUE) {
+								for ($i = 0; $i < $zip->numFiles; $i++) {
+									$name = $zip->getNameIndex($i);
+									if(preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $name)){
+										$list[$i] = $name;
+									}
 								}
 							}
 						}

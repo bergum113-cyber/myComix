@@ -490,7 +490,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                     // 동영상 썸네일
                     $validated_path . '.video_thumb.jpg',
                     // ZIP/압축파일 관련 JSON
-                    preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $validated_path),
+                    get_cache_json_path($validated_path),
                     $validated_path . '.image_files.json',
                     $validated_path . '.video_files.json',
                     // 썸네일 이미지
@@ -608,7 +608,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                     // 관련 캐시/메타 파일도 삭제
                     $related_files = [
                         $validated_path . '.video_thumb.jpg',
-                        preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $validated_path),
+                        get_cache_json_path($validated_path),
                         $validated_path . '.image_files.json',
                         $validated_path . '.video_files.json',
                         $validated_path . '.thumb.jpg',
@@ -2434,7 +2434,7 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
     
     foreach ($zip_files as $zipfile) {
         $current++;
-        $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $zipfile);
+        $json_file = get_cache_json_path($zipfile);
         $relative_path = str_replace($base_dir, '', $zipfile);
         
         // 진행 상황 전송
@@ -2523,6 +2523,10 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
                     'is_video_archive' => true
                 ];
                 @file_put_contents($json_file, json_encode($cache_data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+                // ✅ [버그수정] video_files.json도 함께 저장 (메인 루프 캐시 판정과 일관성)
+                natsort($video_files);
+                $video_files = array_values($video_files);
+                @file_put_contents($zipfile . '.video_files.json', json_encode($video_files, JSON_UNESCAPED_UNICODE), LOCK_EX);
                 if (!$_is_rar7z) { $zip->close(); }
                 $created++;
                 continue;
@@ -2533,6 +2537,11 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
                 natsort($image_files);
                 $image_files = array_values($image_files);
                 $thumbnail_filename = $image_files[0];
+                
+                // ✅ [버그수정] 이 함수는 그동안 .json(썸네일/페이지수)만 만들고
+                //    .image_files.json은 저장하지 않아, RAR/7z에서 image_files.json 누락 발생.
+                //    image_files를 이미 갖고 있으므로 여기서 함께 저장한다. (ZIP/RAR/7Z 공통)
+                @file_put_contents($zipfile . '.image_files.json', json_encode($image_files, JSON_UNESCAPED_UNICODE), LOCK_EX);
                 
                 $img_data = $_is_rar7z ? archive_extract_one($_arc, $thumbnail_filename) : $zip->getFromName($thumbnail_filename);
                 if ($img_data !== false) {
@@ -2678,7 +2687,7 @@ function generate_cover_cache_streaming($base_dir, $force = false, $recursive = 
         
         // 첫 번째 유효한 ZIP에서 커버 추출
         foreach ($zip_files as $zipfile) {
-            $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $zipfile);
+            $json_file = get_cache_json_path($zipfile);
             
             // json에서 썸네일 가져오기
             if (file_exists($json_file)) {
@@ -3264,7 +3273,7 @@ $newest_mtime = 0;  // ✅ 폴더 내 가장 최신 파일의 mtime
                 if (preg_match('/\.image_files\.json$/i', $filename)) continue;
                 
 if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', $filename)) {
-    $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', '.json', $filepath);
+    $json_file = get_cache_json_path($filepath);
     $badge_info = ['totalpage' => 0, 'page_order' => '0', 'viewer' => 'toon', 'is_video_archive' => false];
     
     // ✅ 1순위: 파일명.json 확인
@@ -3828,7 +3837,7 @@ function generate_all_filelist_caches($base_dir, $force = false) {
                     
                     if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', $filename)) {
                         // ✅ 배지 정보도 함께 저장
-                        $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', '.json', $filepath);
+                        $json_file = get_cache_json_path($filepath);
                         $badge_info = ['totalpage' => 0, 'page_order' => '0', 'viewer' => 'toon', 'is_video_archive' => false];
                         if (is_file($json_file)) {
                             $json_data = @json_decode(file_get_contents($json_file), true);
@@ -3998,7 +4007,7 @@ function generate_all_zip_metadata($base_dir, $force = false) {
         
         foreach ($zip_files as $zipfile) {
             $total++;
-            $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $zipfile);
+            $json_file = get_cache_json_path($zipfile);
             
             // force가 아니고 이미 json이 있으면 스킵
             if (!$force && file_exists($json_file)) {
@@ -4899,7 +4908,7 @@ else {
 
 if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', $filename)) {
     // ✅ 배지 정보도 함께 저장
-    $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', '.json', $filepath);
+    $json_file = get_cache_json_path($filepath);
     $badge_info = ['totalpage' => 0, 'page_order' => '0', 'viewer' => 'toon', 'is_video_archive' => false];
     if (is_file($json_file)) {
         $json_data = @json_decode(file_get_contents($json_file), true);
@@ -5128,10 +5137,10 @@ foreach ($file_list as $file) {
         }
     }
     
-    // 중복 제거
-    if (isset($basename_map[$basename])) continue;
+    // 중복 제거 (전체 파일명 기준 - 같은 이름 다른 확장자 zip/rar/7z는 각각 유지)
+    if (isset($basename_map[$name])) continue;
     $filtered_file_list[] = is_array($file) ? $file : ['name' => $file];
-    $basename_map[$basename] = true;
+    $basename_map[$name] = true;
 }
 
 $file_list = $filtered_file_list;
@@ -6322,7 +6331,7 @@ $zip_file = $dir . '/' . $fileinfo;
 // - 캐시에 없을 때만 fallback으로 .json 확인
 if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $zip_file) && ($cached_totalpage === null || $cached_totalpage == 0)) {
     // 1순위: 파일명.json 확인
-    $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $zip_file);
+    $json_file = get_cache_json_path($zip_file);
     if (file_exists($json_file)) {
         $json_data = @json_decode(file_get_contents($json_file), true);
         if ($json_data && isset($json_data['totalpage']) && $json_data['totalpage'] > 0) {
@@ -6976,7 +6985,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 							continue; // ✅ Office 파일 처리 후 다음 파일로 (중복 렌더링 방지)
 						} else {
 						// configfile 경로 설정 (압축 파일만)
-						$configfile = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7|pdf)$/i', '.json', $zip_file);
+						$configfile = get_cache_json_path($zip_file);
 						
 						// ✅ .image_files.json 경로
 						$image_files_cache = $zip_file . '.image_files.json';
@@ -7024,7 +7033,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 					$_is_rar7z = in_array($_arc_ext, ['rar', 'cbr', '7z', 'cb7']);
 					$_arc = null; // RAR/7Z용 핸들러
 
-					// ── [디버그 로그] 메인 루프 RAR/7z 추적 ──
+					// ── [RAR/7z 처리] ──
 					if ($_is_rar7z) {
 					}
 
@@ -7071,8 +7080,6 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
         
         // ★★★ 동영상만 있는 ZIP인 경우 조기 종료 ★★★
         if (count($image_files) == 0 && count($video_files) > 0) {
-            if ($_is_rar7z) {
-            }
             // 동영상 ZIP으로 표시
             $cache_data = array();
             $cache_data['totalpage'] = count($video_files);

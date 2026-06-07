@@ -457,6 +457,29 @@ function get_image_extensions_pattern() {
 }
 
 /**
+ * 압축/문서 파일의 .json 캐시 경로를 생성한다.
+ *
+ * ✅ [충돌 방지] rar/cbr/7z/cb7 은 같은 이름의 다른 압축(예: 만화.zip)과
+ *    .json 캐시가 겹치지 않도록 "확장자를 유지한 채" .json 을 덧붙인다.
+ *    예) 만화.rar  → 만화.rar.json
+ *        만화.7z   → 만화.7z.json
+ *    zip/cbz/pdf/문서 등 기존 동작은 그대로(확장자 제거 후 .json)로 유지하여
+ *    기존 ZIP 캐시 호환성을 깨지 않는다.
+ *        예) 만화.zip → 만화.json  (기존과 동일)
+ *
+ * @param string $filepath 원본 파일 경로
+ * @return string .json 캐시 경로
+ */
+function get_cache_json_path($filepath) {
+    // rar/7z 계열만 확장자 유지(중복 회피)
+    if (preg_match('/\.(rar|cbr|7z|cb7)$/i', $filepath)) {
+        return $filepath . '.json';
+    }
+    // 그 외(zip/cbz/pdf/txt/epub/office 등)는 기존 방식: 확장자 제거 후 .json
+    return preg_replace('/\.(zip|cbz|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', '.json', $filepath);
+}
+
+/**
  * 뷰어 지원 파일인지 확인 (압축 + 문서)
  * ✅ VIEWABLE_EXT_PATTERN 상수 사용 (2026-01-11 추가)
  * 

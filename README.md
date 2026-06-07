@@ -2,7 +2,7 @@
 
 > PHP 기반 개인 만화/미디어 서재 웹 애플리케이션 (대규모 확장 포크)
 
-[![Version](https://img.shields.io/badge/version-v2.4-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-v2.4.1-blue.svg)](#)
 [![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)](https://www.php.net/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Forked from](https://img.shields.io/badge/forked%20from-imueRoid%2FmyComix-orange.svg)](https://github.com/imueRoid/myComix)
@@ -272,6 +272,13 @@ mycomix/
 ---
 
 ## 📝 변경 이력
+
+### v2.4.1 (2026-06-07)
+
+**버그 수정 (같은 이름 다른 확장자 파일목록 누락)**
+- **목록 중복 제거가 확장자를 무시해 같은 이름 압축이 사라지던 문제 수정** — 같은 이름에 확장자만 다른 압축(예: `만화.zip`, `만화.rar`, `만화.7z`)이 한 폴더에 있을 때, 캐시에는 셋 다 정상 기록되지만 목록을 화면에 표시하기 직전의 중복 제거 단계가 파일명에서 확장자를 떼어낸 이름(`만화`)을 기준으로 비교하여 먼저 처리된 하나만 남기고 나머지를 목록에서 제외했음. 캐시 자체는 정상이므로 강제 재생성을 해도 증상이 사라지지 않던 원인. 중복 제거 기준을 확장자를 포함한 전체 파일명으로 변경하여 같은 이름의 서로 다른 압축이 각각 표시되도록 수정. 검색은 기존대로 확장자를 뗀 이름으로 매칭하므로 "만화"로 검색하면 셋 다 잡힘.
+
+> v2.4의 압축별 캐시 키 분리(rar/7z는 확장자를 포함한 캐시 경로 사용)와는 별개로, 목록 표시 단계의 중복 제거에 남아 있던 동일 원인을 해결한 변경입니다. `index.php`의 해당 한 곳(3줄)만 수정했으며 다른 코드·파일에는 영향이 없습니다.
 
 ### v2.4 (2026-06)
 

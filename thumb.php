@@ -179,7 +179,7 @@ if ($debug) {
     echo "bidx: " . htmlspecialchars($bidx, ENT_QUOTES, 'UTF-8') . "\n";
     echo "is_dir: " . (is_dir($filepath) ? 'yes' : 'no') . "\n";
     echo "is_file: " . (is_file($filepath) ? 'yes' : 'no') . "\n";
-    $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $filepath);
+    $json_file = get_cache_json_path($filepath);
     echo "JSON file: " . htmlspecialchars($json_file, ENT_QUOTES, 'UTF-8') . "\n";
     echo "JSON exists: " . (is_file($json_file) ? 'yes' : 'no') . "\n";
     exit;
@@ -266,7 +266,7 @@ if ($type === 'cover') {
 } else {
     // ZIP/RAR/7Z 파일: 파일명.json (확장자 제거)
     // 예: 파일명.zip → 파일명.json, 파일명.rar → 파일명.json
-    $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $filepath);
+    $json_file = get_cache_json_path($filepath);
     
     // ✅ 동영상 ZIP 감지 (함수화로 효율성 개선)
     if ($debug) {

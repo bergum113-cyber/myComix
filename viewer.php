@@ -1397,7 +1397,7 @@ if($type != "pdf"){
     // PHP 7.x 호환: match → if-elseif
     // ✅ [RAR/7Z 지원] 확장자 정규식으로 .json 경로 결정 (ZIP/RAR/7z 공통)
     if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $base_file)) {
-        $json_file = preg_replace('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', '.json', $base_file);
+        $json_file = get_cache_json_path($base_file);
     } elseif ($_param_filetype === "images") {
         $json_file = $base_file . ".image_files.json";
     } else {

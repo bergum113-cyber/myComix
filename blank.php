@@ -76,8 +76,9 @@ $_login_url = $base_path . '/login.php';
         // 세션 유효 → 원래 페이지로
         location.replace(returnUrl);
       } else {
-        // 세션 만료 → 로그인 페이지로
-        location.replace(LOGIN_URL);
+        // 세션 만료 → 로그인 페이지로 (보던 화면 URL을 함께 전달하여,
+        // 로그인 유지 자동로그인 시 홈이 아닌 보던 화면으로 복귀하도록 함)
+        location.replace(LOGIN_URL + '?return=' + encodeURIComponent(returnUrl));
       }
     })
     .catch(function() {

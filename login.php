@@ -36,6 +36,24 @@ if ($bruteforceCheck['blocked']) {
 // $bidx_query, $bidx_param 등 전역 변수도 함께 설정됨
 $bidx = init_bidx();
 
+// ✅ 사생활 보호모드 탭 복귀: 보던 화면 URL(return)이 있으면 그곳으로 복귀시키기 위한
+//    안전한 리다이렉트 대상을 미리 계산. 오픈 리다이렉트 방지 위해 같은 호스트의
+//    경로+쿼리만 허용하고, 없거나 외부면 기본값(index.php)을 사용한다.
+$_ps_redirect = "index.php" . $bidx_query;
+if (!empty($_GET['return'])) {
+    $_ps_return = preg_replace('/[\r\n]/', '', $_GET['return']);
+    $_ps_parts  = parse_url($_ps_return);
+    $_ps_host   = $_SERVER['HTTP_HOST'] ?? '';
+    if ($_ps_parts !== false
+        && (empty($_ps_parts['host']) || $_ps_parts['host'] === $_ps_host)
+        && !empty($_ps_parts['path'])
+        && $_ps_parts['path'][0] === '/'          // 절대경로(/로 시작)만 허용
+        && strpos($_ps_return, '\\') === false) {  // 백슬래시 우회 차단
+        $_ps_redirect = $_ps_parts['path']
+            . (isset($_ps_parts['query']) ? '?' . $_ps_parts['query'] : '');
+    }
+}
+
 // ✅ 폴더 이름 추출 함수
 function get_folder_name($path) {
     return basename(rtrim($path, '/\\'));
@@ -167,7 +185,8 @@ if (empty($_SESSION['user_id']) && isset($_COOKIE['remember_token'])) {
             unset($_SESSION['timeout_message']);
             unset($_SESSION['login_error']);
             
-            header("Location: index.php" . $bidx_query);
+            // ✅ 사생활 보호모드 복귀: 상단에서 계산한 안전한 대상으로 (보던 화면 또는 홈)
+            header("Location: " . $_ps_redirect);
             exit;
         }
     }
@@ -784,7 +803,7 @@ elseif (isset($_GET['mode']) && $_GET['mode'] === 'find_id' && $find_id_enabled)
 elseif (isset($_GET['mode']) && $_GET['mode'] === 'find_password' && $find_password_enabled) $page = 'find_password';
 elseif (isset($_GET['mode']) && $_GET['mode'] === 'signup' && $registration_enabled) $page = 'signup';
 elseif (isset($_SESSION['user_id']) && isset($_GET['mode']) && $_GET['mode'] === 'adduser' && ($_SESSION['user_group'] ?? '') === 'admin') $page = 'adduser';
-elseif (isset($_SESSION['user_id'])) { header("Location: index.php" . $bidx_query); exit; }
+elseif (isset($_SESSION['user_id'])) { header("Location: " . $_ps_redirect); exit; }
 ?>
 <!DOCTYPE html>
 <html lang="<?php echo get_html_lang(); ?>">

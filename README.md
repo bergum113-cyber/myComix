@@ -2,7 +2,7 @@
 
 > PHP 기반 개인 만화/미디어 서재 웹 애플리케이션 (대규모 확장 포크)
 
-[![Version](https://img.shields.io/badge/version-v2.4.1-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-v2.4.2-blue.svg)](#)
 [![PHP](https://img.shields.io/badge/PHP-8.0%2B-purple.svg)](https://www.php.net/)
 [![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 [![Forked from](https://img.shields.io/badge/forked%20from-imueRoid%2FmyComix-orange.svg)](https://github.com/imueRoid/myComix)
@@ -272,6 +272,13 @@ mycomix/
 ---
 
 ## 📝 변경 이력
+
+### v2.4.2 (2026-06-12)
+
+**버그 수정 — iOS 모바일 사생활 보호모드 탭 복귀 시 간헐적으로 홈으로 이동하던 문제**
+- **로그인 유지 상태에서 탭 복귀 시 보던 화면 대신 홈(index.php)으로 가던 문제 수정** — 사생활 보호모드는 백그라운드 전환 시 `blank.php?return=<보던 화면 URL>`로 이동했다가, 복귀 시 `session_check.php`로 세션을 확인해 유효하면 `return` 화면으로 되돌아감. 그런데 iOS에서 탭을 빠르게 복귀할 때(또는 백그라운드 탭 폐기 후 재로딩 시) 세션 확인이 그 순간 일시적으로 `false`로 떨어지는 경쟁(race) 상황이 발생할 수 있었음. 이때 `blank.php`가 `login.php`로 보냈고, **로그인 유지(remember_token)** 쿠키가 있으면 `login.php`가 자동 로그인 후 무조건 `index.php`(홈)로 보내 보던 화면을 잃었음(일반 로그인은 토큰이 없어 로그인창에 머무르므로 이 증상이 없었고, 그래서 시간과 무관하게 무작위로 갈렸음). ① `blank.php`가 로그인으로 보낼 때 보던 화면 URL(`return`)을 함께 전달하고, ② `login.php`가 자동 로그인 성공(remember_token) 및 이미 로그인된 것으로 보이는 복귀 경로에서 홈 대신 그 `return` 화면으로 복귀하도록 수정. 외부 사이트로의 오픈 리다이렉트를 막기 위해 `return`은 **같은 호스트의 절대경로(`/`로 시작)+쿼리만** 허용하고(CRLF 제거, 백슬래시 포함·프로토콜 상대 경로·`@` 우회 차단), 없거나 외부면 기존대로 `index.php`로 폴백. 사용자가 직접 로그인 폼을 제출하는 능동 로그인 경로는 기존대로 홈 이동을 유지.
+
+> 코드 변경은 `config.php`(버전)와 `blank.php`·`login.php`에 한정됩니다. v2.4.1의 변경 파일(`index.php`·`function.php`·`viewer.php`·`thumb.php`·`archive_handler.php`)은 그대로 유지되며, 그 외 파일은 v2.4 원본과 동일합니다. 실서버(iOS·실세션) 환경에서의 재현 검증은 배포 후 확인이 필요합니다.
 
 ### v2.4.1 (2026-06-07)
 

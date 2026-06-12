@@ -150,7 +150,25 @@ function dir_check($getdir, $base_dir_override = null) {
 # ✅ 리팩토링: 가독성 개선 및 로직 단순화 (2026-01-11)
 ################################################################################
 
-function cut_title($title) {
+/**
+ * 북마크 드롭다운(자동저장·북마크·즐겨찾기) 전용 제목 표시.
+ *
+ * cut_title()은 파일 그리드용으로 현재 폴더명/구분자/괄호를 잘라내는데,
+ * 드롭다운은 여러 폴더 항목이 섞여 있어 "어느 만화인지 식별"이 목적이므로
+ * 잘라내지 않고 실제 파일명(확장자만 제거)을 그대로 보여준다.
+ * 출력은 h()로 이스케이프하여 파일명 기반 XSS를 차단한다.
+ *
+ * @param string $filename 파일명(경로의 마지막 조각)
+ * @return string HTML 이스케이프된 표시용 제목
+ */
+function mark_display_title($filename) {
+    // 압축/문서 확장자만 제거 (config.php의 압축 확장자 + 문서 확장자)
+    $archive_ext = get_archive_extensions_string();
+    $name = preg_replace('/\.(' . $archive_ext . '|pdf|txt|epub|hwpx?|docx?|xlsx?|pptx?)$/i', '', (string)$filename);
+    return h($name);
+}
+
+function cut_title($title, $skip_dir_strip = false) {
     // ✅ 1단계: 현재 디렉토리명 추출 및 정규화
     $nowdir = '';
     // ✅ decode_file_param() 사용으로 이중 인코딩 대응 통일
@@ -187,8 +205,8 @@ function cut_title($title) {
     // ✅ 4단계: 대괄호 내용 제거 ([작가], [번역] 등)
     $title = preg_replace('/\[[^\]]*\]/', '', $title);
     
-    // ✅ 5단계: 현재 디렉토리명 기준 정리
-    if (!empty($nowdir)) {
+    // ✅ 5단계: 현재 디렉토리명 기준 정리 (북마크 드롭다운처럼 여러 폴더 항목이 섞인 경우엔 건너뜀)
+    if (!$skip_dir_strip && !empty($nowdir)) {
         // 디렉토리명 이후 부분만 추출
         $pos = strpos($title, $nowdir);
         if ($pos !== false) {

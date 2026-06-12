@@ -5294,7 +5294,7 @@ if(count($autosave_arr)>0){
 for($count=0;$count < count($autosave_arr); $count++){
 	$title_temp = explode("/", $autosave_title[$count]);
 ?>
-	<tr class="border-bottom border-success"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0"><?php echo $_svg_warn; ?></button><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_autosave&file=<?php echo encode_url($autosave_title[$count]) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $autosave_mark[$count]['page_order']; ?>&file=<?php echo encode_url($autosave_title[$count]); ?>&bidx=<?php echo $autosave_mark[$count]['bidx'] ?? 0; ?>#<?php echo $autosave_mark[$count]['bookmark']; ?>'"><?php echo cut_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+	<tr class="border-bottom border-success"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0"><?php echo $_svg_warn; ?></button><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_autosave&file=<?php echo encode_url($autosave_title[$count]) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $autosave_mark[$count]['page_order']; ?>&file=<?php echo encode_url($autosave_title[$count]); ?>&bidx=<?php echo $autosave_mark[$count]['bidx'] ?? 0; ?>#<?php echo $autosave_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
 	}
 	}
@@ -5309,10 +5309,10 @@ for($count=0;$count < count($bookmark_arr); $count++){
 ?>
 	<tr class="border-bottom border-light"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_bookmark&file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><?php
 	if(!is_array($bookmark_mark[$count])){
-?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>#<?php echo $bookmark_mark[$count]; ?>'"><?php echo cut_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>#<?php echo $bookmark_mark[$count]; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
 	} else {
-?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $bookmark_mark[$count]['page_order']; ?>&file=<?php echo encode_url($bookmark_title[$count]); ?>&bidx=<?php echo $bookmark_mark[$count]['bidx'] ?? 0; ?>#<?php echo $bookmark_mark[$count]['bookmark']; ?>'"><?php echo cut_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $bookmark_mark[$count]['page_order']; ?>&file=<?php echo encode_url($bookmark_title[$count]); ?>&bidx=<?php echo $bookmark_mark[$count]['bidx'] ?? 0; ?>#<?php echo $bookmark_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
 	}
 	}
@@ -5329,7 +5329,7 @@ if(false && count($epub_progress) > 0){
         $title_temp = explode("/", $file_path);
         $percent = (int)($progress_data['percent'] ?? 0);
 ?>
-	<tr class="border-bottom" style="border-color:#9b59b6 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-info" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_epub_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./epub_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📖 <?php echo cut_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+	<tr class="border-bottom" style="border-color:#9b59b6 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-info" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_epub_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./epub_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📖 <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
     }
 }
@@ -5345,7 +5345,7 @@ if(false && count($txt_progress) > 0){
         $title_temp = explode("/", $file_path);
         $percent = (int)($progress_data['percent'] ?? 0);
 ?>
-	<tr class="border-bottom" style="border-color:#27ae60 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-success" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_txt_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./txt_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📝 <?php echo cut_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+	<tr class="border-bottom" style="border-color:#27ae60 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-success" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_txt_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./txt_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📝 <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
     }
 }
@@ -5373,7 +5373,7 @@ if(count($favorites_arr) > 0){
             // 폴더인 경우
             echo "index.php?dir=" . encode_url($file_path) . "&bidx=" . $fav_bidx;
         }
-    ?>'">⭐ <?php echo cut_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+    ?>'">⭐ <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
     }
 }
@@ -8248,11 +8248,18 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.persisted) {
             document.documentElement.classList.remove('leaving');
             document.documentElement.classList.add('ready');
-            // ✅ viewer에서 북마크 추가/저장 시 목록이 stale하지 않도록 새로고침(해당 시에만)
-            try { if (sessionStorage.getItem('mycomix_marks_dirty')) { sessionStorage.removeItem('mycomix_marks_dirty'); location.reload(); return; } } catch(err){}
-            // ✅ viewer에서 변경된 즐겨찾기 상태 동기화
-            syncFavorites();
         }
+        // ✅ viewer에서 자동저장/북마크 변경 시, 새로고침 없이 목록 갱신 (bfcache·일반 로드 모두).
+        //    자동저장 저장($.get)이 비동기라 이탈 직후엔 아직 안 끝났을 수 있어, 약간의 지연 후 갱신해
+        //    옛 데이터를 받아오는 race를 완화(실패 시 refreshBookmarkTable 내부에서 reload 폴백).
+        try {
+            if (sessionStorage.getItem('mycomix_marks_dirty')) {
+                sessionStorage.removeItem('mycomix_marks_dirty');
+                setTimeout(refreshBookmarkTable, 700);
+            }
+        } catch(err){}
+        // ✅ viewer에서 변경된 즐겨찾기 상태 동기화 (bfcache 복원 시)
+        if (e.persisted) syncFavorites();
     });
 })();
 </script>
@@ -8282,6 +8289,31 @@ document.addEventListener('DOMContentLoaded', function() {
 </style>
 <script>
 // ✅ 뒤로가기 시 즐겨찾기 상태 동기화 (viewer에서 변경된 경우)
+// ✅ 새로고침 없이 북마크/자동저장 목록 갱신: 현재 index를 다시 받아 #bookmarkTable 내용만 교체
+//    (서버 렌더링을 그대로 재사용 → 토큰/인코딩/링크 동일. 실패 시 location.reload()로 안전 폴백)
+function refreshBookmarkTable() {
+    try {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', location.href, true);
+        xhr.onreadystatechange = function() {
+            if (xhr.readyState !== 4) return;
+            if (xhr.status !== 200) { location.reload(); return; }
+            try {
+                var doc = new DOMParser().parseFromString(xhr.responseText, 'text/html');
+                var fresh = doc.getElementById('bookmarkTable');
+                var cur = document.getElementById('bookmarkTable');
+                if (fresh && cur) {
+                    cur.innerHTML = fresh.innerHTML;   // 카운트행+모든 행을 최신으로 교체(인라인 onclick 유지)
+                } else {
+                    location.reload();                 // 구조 변동 시 안전하게 전체 새로고침
+                }
+            } catch (e) { location.reload(); }
+        };
+        xhr.onerror = function(){ location.reload(); };
+        xhr.send();
+    } catch (e) { location.reload(); }
+}
+
 function syncFavorites() {
     var btns = document.querySelectorAll('.fav-btn');
     if (!btns.length) return;

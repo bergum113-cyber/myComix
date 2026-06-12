@@ -5057,7 +5057,17 @@ const options = {
     threshold: 0.01
 };
 
+function sendAutosave(u){
+	// ✅ 페이지 이탈/숨김 시점 호출: sendBeacon으로 확실히 전송(비동기 $.get가 이탈로 취소되는 race 방지).
+	//    sendBeacon은 같은 출처라 세션 쿠키를 함께 보내고, bookmark.php의 autosave는 토큰 없이 세션만으로 허용됨.
+	//    미지원 브라우저 또는 큐잉 실패(false) 시에만 기존 $.get로 폴백 → 무회귀(최악의 경우 현재 동작과 동일).
+	try{
+		if (navigator && navigator.sendBeacon && navigator.sendBeacon(u)) { return; }
+	}catch(e){}
+	$.get(u, function(data){ try{ document.getElementById("info").value = data; }catch(e){} });
+}
 function autosave(){	
+	try{ sessionStorage.setItem('mycomix_marks_dirty','1'); }catch(e){}
 <?php if ($mode == "toon"){ ?>
 	// ✅ 점진 로딩(지연/무한스크롤) 대응: 고정 범위 루프 대신 현재 DOM에 존재하는 이미지만
 	//    스캔해 뷰포트 상단에 걸친 마지막 이미지를 현재 위치로 기록(없는 요소 .position() 크래시 방지)
@@ -5076,9 +5086,7 @@ function autosave(){
 		return cur;
 	})();
 	var autosaveUrl = <?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
-	$.get(autosaveUrl + bookmark, function(data) {
-		document.getElementById("info").value = data;
-	});
+	sendAutosave(autosaveUrl + bookmark);
 <?php } elseif($mode == "book") { ?>
 	for (var i = 0; i <= <?php echo $image_counter; ?>; i++) {
 		var j = <?php echo $image_counter; ?> - i;
@@ -5096,9 +5104,7 @@ function autosave(){
 		location.replace('#' + bookmark);
 	}
 	var autosaveUrl = <?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
-	$.get(autosaveUrl + bookmark, function(data) {
-		document.getElementById("info").value = data;
-	});
+	sendAutosave(autosaveUrl + bookmark);
 <?php } ?>
 
 <?php if($type == "pdf") { ?>
@@ -5117,9 +5123,7 @@ function autosave(){
 	const bookmark = "pdf_" + visiblePage;
 
 	var pdfAutosaveUrl = <?php echo js("bookmark.php?mode=autosave&viewer=pdf&page_order=pdf&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
-	$.get(pdfAutosaveUrl + bookmark, function(data) {
-		document.getElementById("info").value = data;
-	});
+	sendAutosave(pdfAutosaveUrl + bookmark);
 <?php } ?>
 }
 

@@ -2976,7 +2976,13 @@ $(document).on('onCloseAfter.lg', function () {
   location.replace("./viewer.php?mode=toon&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>");
 });
 
-window.addEventListener('beforeunload', function () {
+// 보던 위치(toon URL#bookmark)를 히스토리에 반영.
+// ⚠️ beforeunload에서 실행하면 '뒤로가기' 등 모든 이탈에서도 돌아가, 탭 폐기(bfcache 소멸)
+//    후 뒤로가기 시 히스토리 이동을 방해해 목록으로 가려면 두 번 눌러야 하는 증상이 생김.
+//    백그라운드 전환(visibilitychange→hidden) 시에만 실행하면 사생활 보호 복귀용 위치반영은
+//    유지하면서, 실제 back/forward 이동은 방해하지 않음.
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState !== 'hidden') return;
   var safeFile = <?php echo js(encode_url($getfile)); ?>;
   var safeBookmark = <?php echo js($bookmark ?? '0'); ?>;
   const toonUrl = "./viewer.php?<?php if ($_param_filetype === 'images'){echo 'filetype=images&';} ?>mode=toon&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>#" + safeBookmark;
@@ -4970,17 +4976,26 @@ $('#lightgallery').on('onAfterSlide.lg',function(event){
 
 function save_bookmark() {
   	document.getElementById("info").value = _vi18n.saving;
+  	try{ sessionStorage.setItem('mycomix_marks_dirty','1'); }catch(e){}
 <?php
 if ($mode == "toon"){
 ?>
-for (var i = 0; i <= <?php echo $image_counter; ?>; i++) {
-	var j = <?php echo $image_counter; ?> - i;
-	var scroll_image = $("#image"+j).position().top;
-	if (scroll_top > scroll_image) {
-		bookmark= "image" + String(j);
-		break;
+// ✅ 점진 로딩(지연/무한스크롤) 대응: 고정 범위 루프 대신 현재 DOM에 존재하는 이미지만
+//    스캔해 뷰포트 상단에 걸친 마지막 이미지를 현재 위치로 기록(없는 요소 .position() 크래시 방지)
+bookmark = (function(){
+	var imgs = document.querySelectorAll("#lightgallery img[id^='image']");
+	var cur = "image0";
+	for (var k = 0; k < imgs.length; k++){
+		var r = imgs[k].getBoundingClientRect();
+		if (r.top <= 5) {
+			var mm = imgs[k].id.match(/image(\d+)/i);
+			if (mm) cur = "image" + mm[1];
+		} else {
+			break;
+		}
 	}
-}
+	return cur;
+})();
 var bookmarkBaseUrl = <?php echo js("bookmark.php?viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
 $.get(bookmarkBaseUrl + bookmark, function( data ) {
   	document.getElementById("info").value = data;
@@ -5044,14 +5059,22 @@ const options = {
 
 function autosave(){	
 <?php if ($mode == "toon"){ ?>
-	for (var i = 0; i <= <?php echo $image_counter; ?>; i++) {
-		var j = <?php echo $image_counter; ?> - i;
-		var scroll_image = $("#image"+j).position().top;
-		if (scroll_top > scroll_image) {
-			bookmark= "image" + String(j);
-			break;
+	// ✅ 점진 로딩(지연/무한스크롤) 대응: 고정 범위 루프 대신 현재 DOM에 존재하는 이미지만
+	//    스캔해 뷰포트 상단에 걸친 마지막 이미지를 현재 위치로 기록(없는 요소 .position() 크래시 방지)
+	bookmark = (function(){
+		var imgs = document.querySelectorAll("#lightgallery img[id^='image']");
+		var cur = "image0";
+		for (var k = 0; k < imgs.length; k++){
+			var r = imgs[k].getBoundingClientRect();
+			if (r.top <= 5) {
+				var mm = imgs[k].id.match(/image(\d+)/i);
+				if (mm) cur = "image" + mm[1];
+			} else {
+				break;
+			}
 		}
-	}
+		return cur;
+	})();
 	var autosaveUrl = <?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
 	$.get(autosaveUrl + bookmark, function(data) {
 		document.getElementById("info").value = data;
@@ -5576,6 +5599,64 @@ if (file) {
         setTimeout(prefetchNext, 2000);
     })();
 }
+
+  // ✅ [위치 복원] 인라인 툰: 진입 시 URL의 #imageN 위치로 스크롤.
+  //    점진 로딩(요소가 스크롤 시 추가됨)이라 대상 요소가 생길 때까지 appendImages()로 확장 후 스크롤.
+  //    레이아웃 변동(상단 이미지 로드로 높이 증가)에 대비해 잠시 재정렬하고, 대상 로드 완료/사용자 조작/
+  //    타임아웃 시 종료. 실패해도 최상단에 머무를 뿐이라 무해(fail-safe).
+  (function restoreToonPosition(){
+    try {
+      var m = (window.location.hash || '').match(/image(\d+)/i);
+      if (!m) return;
+      var targetIndex = parseInt(m[1], 10);
+      if (!targetIndex || targetIndex <= 0) return;                 // image0/없음이면 최상단 = 복원 불필요
+      if (typeof total === 'number' && targetIndex >= total) targetIndex = total - 1;
+
+      function findTarget(){
+        return document.getElementById('image' + targetIndex)
+            || document.getElementById('image' + targetIndex + '_left')
+            || document.getElementById('image' + targetIndex + '_right');
+      }
+
+      var aborted = false;
+      function onUserScroll(){ aborted = true; }
+      window.addEventListener('wheel',     onUserScroll, { passive: true, capture: true });
+      window.addEventListener('touchmove', onUserScroll, { passive: true, capture: true });
+      window.addEventListener('keydown',   onUserScroll, true);
+      function cleanup(){
+        window.removeEventListener('wheel',     onUserScroll, true);
+        window.removeEventListener('touchmove', onUserScroll, true);
+        window.removeEventListener('keydown',   onUserScroll, true);
+      }
+
+      var tries = 0;
+      var MAX_TRIES = 120;                                          // 120 × 250ms ≈ 최대 30초 가드
+      var timer = setInterval(function(){
+        // 사용자가 직접 스크롤했거나 전체화면 갤러리가 열렸으면 중단(충돌 방지)
+        if (aborted || document.querySelector('.lg-outer.lg-visible')) { clearInterval(timer); cleanup(); return; }
+        if (++tries > MAX_TRIES) { clearInterval(timer); cleanup(); return; }
+
+        var el = findTarget();
+        if (!el) {
+          // 대상 요소가 아직 없으면 점진 로딩으로 DOM 확장
+          if (typeof appendImages === 'function' && typeof currentIndex === 'number'
+              && typeof total === 'number' && currentIndex < total) {
+            appendImages();
+          } else {
+            clearInterval(timer); cleanup();                        // 더 확장할 게 없으면 종료
+          }
+          return;
+        }
+
+        el.scrollIntoView({ block: 'start' });                      // 대상 위치로 정렬(변동 대비 반복)
+
+        if (el.classList.contains('loaded')) {                      // 대상 로드 완료(높이 확정)면 마무리
+          el.scrollIntoView({ block: 'start' });
+          clearInterval(timer); cleanup();
+        }
+      }, 250);
+    } catch (e) { /* 복원 실패는 무해: 최상단 유지 */ }
+  })();
 });
 
 </script>

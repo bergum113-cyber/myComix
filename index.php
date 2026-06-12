@@ -5250,6 +5250,8 @@ if(is_file($_bookmark_file) === true){
 }
 if(is_file($_autosave_file) === true){
 	$autosave_arr = json_decode(file_get_contents($_autosave_file), true) ?? [];
+	// ✅ 옛 문자열 형식 호환: 문자열 값이면 배열 형식으로 정규화(행 렌더가 배열을 가정하므로)
+	foreach($autosave_arr as $_ak => $_av){ if(!is_array($_av)){ $autosave_arr[$_ak] = ['bookmark'=>$_av, 'viewer'=>'toon', 'page_order'=>'0', 'bidx'=>0]; } }
 	$autosave_title = array_keys($autosave_arr);
 	$autosave_mark = array_values($autosave_arr);
 }
@@ -5258,7 +5260,7 @@ if(is_file($_favorites_file) === true){
 	$favorites_title = array_keys($favorites_arr);
 	$favorites_mark = array_values($favorites_arr);
 }
-	if(count($bookmark_arr) > 0 || count($autosave_arr) > 0 || count($epub_progress) > 0 || count($txt_progress) > 0 || count($favorites_arr) > 0){
+	if(count($bookmark_arr) > 0 || count($autosave_arr) > 0 || count($favorites_arr) > 0){
 ?>
 		<button class="dropdown-toggle btn btn-sm m-0 p-0" onclick="bookmark_toggle();">
 		<svg width="2em" height="2em" viewBox="0 0 16 16" class="bi bi-bookmark-check-fill" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
@@ -5284,6 +5286,10 @@ if(is_file($_favorites_file) === true){
 <?php
 $_svg_warn = '<svg width="1em" height="1em" viewBox="0 0 18 18" class="bi bi-exclamation-circle-fill" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM8 4a.905.905 0 0 0-.9.995l.35 3.507a.552.552 0 0 0 1.1 0l.35-3.507A.905.905 0 0 0 8 4zm.002 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"/></svg>';
 $_svg_x = '<svg width="1em" height="1em" viewBox="0 0 18 18" class="bi bi-x-circle-fill" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path fill-rule="evenodd" d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293 5.354 4.646z"/></svg>';
+$_autosave_max = (int)get_app_settings('max_autosave', 10);
+?>
+<tr id="autosaveCountRow"><td colspan="2"><small class="text-muted"><?php echo $_svg_warn; ?> <span id="autosaveCount"><?php echo count($autosave_arr); ?></span>/<?php echo $_autosave_max; ?></small></td></tr>
+<?php
 if(count($autosave_arr)>0){
 for($count=0;$count < count($autosave_arr); $count++){
 	$title_temp = explode("/", $autosave_title[$count]);
@@ -5293,6 +5299,10 @@ for($count=0;$count < count($autosave_arr); $count++){
 	}
 	}
 
+$_bookmark_max = (int)get_app_settings('max_bookmark', 10);
+?>
+<tr id="bookmarkCountRow"><td colspan="2"><small class="text-muted">🔖 <span id="bookmarkCount"><?php echo count($bookmark_arr); ?></span>/<?php echo $_bookmark_max; ?></small></td></tr>
+<?php
 if(count($bookmark_arr)>0){
 for($count=0;$count < count($bookmark_arr); $count++){
 	$title_temp = explode("/", $bookmark_title[$count]);
@@ -5308,8 +5318,13 @@ for($count=0;$count < count($bookmark_arr); $count++){
 	}
 }
 
-// EPUB 진행 목록
-if(count($epub_progress) > 0){
+// EPUB 진행 목록  ※ 북마크 목록에서 전체 숨김(EPUB 뷰어 자체가 진행률/이어보기 제공). 필요시 'false && ' 제거
+if(false && count($epub_progress) > 0){
+?>
+<?php /* 북마크 목록에선 EPUB 개수 카운트가 불필요하여 비활성화(필요시 주석 해제)
+<tr id="epubCountRow"><td colspan="2"><small class="text-muted">📖 <span id="epubCount"><?php echo count($epub_progress); ?></span></small></td></tr>
+*/ ?>
+<?php
     foreach($epub_progress as $file_path => $progress_data){
         $title_temp = explode("/", $file_path);
         $percent = (int)($progress_data['percent'] ?? 0);
@@ -5319,8 +5334,13 @@ if(count($epub_progress) > 0){
     }
 }
 
-// TXT 진행 목록
-if(count($txt_progress) > 0){
+// TXT 진행 목록  ※ 북마크 목록에서 전체 숨김(TXT 뷰어 자체가 진행률/이어보기 제공). 필요시 'false && ' 제거
+if(false && count($txt_progress) > 0){
+?>
+<?php /* 북마크 목록에선 TXT 개수 카운트가 불필요하여 비활성화(필요시 주석 해제)
+<tr id="txtCountRow"><td colspan="2"><small class="text-muted">📝 <span id="txtCount"><?php echo count($txt_progress); ?></span></small></td></tr>
+*/ ?>
+<?php
     foreach($txt_progress as $file_path => $progress_data){
         $title_temp = explode("/", $file_path);
         $percent = (int)($progress_data['percent'] ?? 0);
@@ -8228,6 +8248,8 @@ document.addEventListener('DOMContentLoaded', function() {
         if (e.persisted) {
             document.documentElement.classList.remove('leaving');
             document.documentElement.classList.add('ready');
+            // ✅ viewer에서 북마크 추가/저장 시 목록이 stale하지 않도록 새로고침(해당 시에만)
+            try { if (sessionStorage.getItem('mycomix_marks_dirty')) { sessionStorage.removeItem('mycomix_marks_dirty'); location.reload(); return; } } catch(err){}
             // ✅ viewer에서 변경된 즐겨찾기 상태 동기화
             syncFavorites();
         }

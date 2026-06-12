@@ -99,8 +99,8 @@ if ($mode === "delete_bookmark") {
     }
     
     $autosave_arr = load_json_with_lock($autosave_file);
-    // ✅ max_autosave 개수 초과 시 가장 오래된 항목 제거 (>= 로 정확히 제한)
-    if (count($autosave_arr) >= (int)$max_autosave) {
+    // ✅ max_autosave 개수 초과 시 가장 오래된 항목 제거 (현재 파일이 '새 항목'일 때만 — 기존 재저장 시 개수 유지)
+    if (!isset($autosave_arr[$getfile]) && count($autosave_arr) >= (int)$max_autosave) {
         array_shift($autosave_arr);
     }
     $autosave_arr[$getfile]['bookmark'] = sanitize_bookmark($_GET['bookmark'] ?? 'image0');
@@ -305,8 +305,8 @@ if ($mode === "delete_bookmark") {
     }
     
     $bookmark_arr = load_json_with_lock($bookmark_file);
-    // ✅ max_bookmark 개수 초과 시 가장 오래된 항목 제거 (>= 로 정확히 제한)
-    if (count($bookmark_arr) >= (int)$max_bookmark) {
+    // ✅ max_bookmark 개수 초과 시 가장 오래된 항목 제거 (현재 파일이 '새 항목'일 때만 — 기존 재저장 시 개수 유지)
+    if (!isset($bookmark_arr[$getfile]) && count($bookmark_arr) >= (int)$max_bookmark) {
         array_shift($bookmark_arr);
     }
     $bookmark_arr[$getfile]['bookmark'] = sanitize_bookmark($_GET['bookmark'] ?? 'image0');

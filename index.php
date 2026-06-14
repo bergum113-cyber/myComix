@@ -1178,8 +1178,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && post_param('rebuild_cache', 'string
 	// ✅ 탭 열기 시 캐시 플래그 초기화 (새 탭/브라우저 재시작 시 실행)
 	if (!sessionStorage.getItem('tab_init')) {
 		sessionStorage.setItem('tab_init', '1'); // 먼저 설정하여 무한 루프 방지
+		// ✅ 뒤로/앞으로 복귀(back_forward)에서는 리로드하지 않음:
+		//    iOS가 몇 시간 뒤 탭을 폐기하면 sessionStorage가 비워져 'tab_init'이 사라지는데,
+		//    그 상태로 뒤로가기하면 새 탭으로 오인해 location.reload()가 돌아 흰 화면이 깜빡였음.
+		//    캐시 초기화 fetch는 그대로 수행하되(서버 정리), 복귀 내비게이션일 때는 리로드를 생략.
+		var _navType = '';
+		try { var _ne = performance.getEntriesByType('navigation')[0]; if (_ne) _navType = _ne.type; } catch(e){}
 		fetch('init.php?reset_cache=1').then(function(){
-			location.reload(); // 캐시 초기화 후 리로드
+			if (_navType !== 'back_forward') location.reload(); // 캐시 초기화 후 리로드(단, 뒤로/앞으로 복귀 제외)
 		}).catch(function(){
 			// 실패해도 계속 진행
 		});
@@ -10015,6 +10021,65 @@ function deleteFolder(folderPath) {
     });
 }
 <?php endif; ?>
+</script>
+
+<script>
+/* ✅ 목록 스크롤 위치 저장/복원: 사생활 보호 복귀 등으로 목록이 새로 로드될 때 읽던 위치로 되돌림.
+   - 백그라운드 전환(hidden)/이탈(pagehide) 시 현재 스크롤을 URL별 키로 sessionStorage에 저장
+   - 새 로드 시 저장값이 있으면 복원(썸네일 로드로 높이가 변하는 동안 잠시 재적용, 사용자가 스크롤하면 중단)
+   - bfcache 복원은 브라우저가 스크롤을 유지하므로 영향 없음(DOMContentLoaded에서만 동작) */
+(function(){
+  var KEY = 'mycomix_list_scroll:' + location.pathname + location.search;
+  function curY(){ return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0; }
+  function saveScroll(){ try { sessionStorage.setItem(KEY, String(curY())); } catch(e){} }
+  document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'hidden') saveScroll(); });
+  window.addEventListener('pagehide', saveScroll);
+  function restoreScroll(){
+    try {
+      if (location.hash) return; // 검색 섹션 등 해시 기반 스크롤과 충돌 방지
+      var v = sessionStorage.getItem(KEY);
+      if (v === null) return;
+      var y = parseInt(v, 10) || 0;
+      if (y <= 0) return;
+      var tries = 0, stop = false;
+      function onUser(){ stop = true; }
+      window.addEventListener('wheel', onUser, { passive:true });
+      window.addEventListener('touchmove', onUser, { passive:true });
+      window.addEventListener('keydown', onUser, true);
+      var iv = setInterval(function(){
+        if (stop) { clearInterval(iv); return; }
+        window.scrollTo(0, y);
+        if (++tries >= 12 || Math.abs(curY() - y) < 4) clearInterval(iv);
+      }, 60);
+    } catch(e){}
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', restoreScroll);
+  else restoreScroll();
+})();
+</script>
+
+<script>
+/* ✅ 가림막(blank.php) 복귀 직후 목록 오터치 방지:
+ *    가림막을 탭해 복귀하면 그 탭의 고스트클릭 또는 빠르게 누른 2번째 탭이 갓 로드된 목록 항목을
+ *    눌러 엉뚱한 항목으로 진입하던 문제. blank.php가 복귀 직전 남긴 플래그가 최근이면
+ *    짧은 시간(450ms) 동안 첫 click들을 흡수(취소)한다. click만 가로채므로 스크롤/touch 로직엔 영향 없음. */
+(function(){
+  try {
+    var v = sessionStorage.getItem('mycomix_curtain_return');
+    if (!v) return;
+    sessionStorage.removeItem('mycomix_curtain_return');
+    var age = Date.now() - parseInt(v, 10);
+    if (isNaN(age) || age > 1500) return;                 // 오래된 플래그면 정상 로드로 간주(흡수 안 함)
+    var until = Date.now() + 450;
+    function swallow(e){
+      if (Date.now() > until) { remove(); return; }
+      e.preventDefault(); e.stopPropagation();
+    }
+    function remove(){ document.removeEventListener('click', swallow, true); }
+    document.addEventListener('click', swallow, true);
+    setTimeout(remove, 480);
+  } catch(e){}
+})();
 </script>
 
 <?php require_once __DIR__ . '/privacy_shield.php'; ?>

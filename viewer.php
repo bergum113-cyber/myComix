@@ -2977,17 +2977,11 @@ $(document).on('onCloseAfter.lg', function () {
 });
 
 // 보던 위치(toon URL#bookmark)를 히스토리에 반영.
-// ⚠️ beforeunload에서 실행하면 '뒤로가기' 등 모든 이탈에서도 돌아가, 탭 폐기(bfcache 소멸)
-//    후 뒤로가기 시 히스토리 이동을 방해해 목록으로 가려면 두 번 눌러야 하는 증상이 생김.
-//    백그라운드 전환(visibilitychange→hidden) 시에만 실행하면 사생활 보호 복귀용 위치반영은
-//    유지하면서, 실제 back/forward 이동은 방해하지 않음.
-document.addEventListener('visibilitychange', function () {
-  if (document.visibilityState !== 'hidden') return;
-  var safeFile = <?php echo js(encode_url($getfile)); ?>;
-  var safeBookmark = <?php echo js($bookmark ?? '0'); ?>;
-  const toonUrl = "./viewer.php?<?php if ($_param_filetype === 'images'){echo 'filetype=images&';} ?>mode=toon&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>#" + safeBookmark;
-  history.replaceState(null, "", toonUrl);
-});
+// ℹ️ (제거됨) 백그라운드 전환(visibilitychange→hidden) 시 URL을 toonUrl로 replaceState 하던 코드 제거.
+//    iOS가 한참 뒤 탭을 폐기(discard)하고 복귀할 때 그 바뀐 URL(#bookmark)을 다시 로드하면서
+//    하얀 화면 + 목록으로 가려면 뒤로가기 2번이 필요한 부작용이 있었음.
+//    (v2.4의 beforeunload 방식은 폐기 시 잘 실행되지 않아 원래 화면이 그대로 보였음.)
+//    복귀 위치 복원은 자동저장(sendBeacon) + restoreToonPosition이 담당하므로 이 URL 바꿔치기는 불필요.
 
 $(document).one('onCloseAfter.lg', function () {
   var idx = 0;
@@ -5127,6 +5121,29 @@ function autosave(){
 <?php } ?>
 }
 
+// ✅ 사생활 보호 복귀용: 현재 toon 스크롤 위치를 "#imageN" 형태로 반환(autosave와 동일한 상단 이미지 판별).
+//    뷰어 URL 자체는 바꾸지 않고, privacy_shield가 blank 복귀 URL에 이 위치만 실어 보내도록 제공.
+window.myComixCurrentHash = function(){
+	try {
+<?php if ($mode == "toon"){ ?>
+		var imgs = document.querySelectorAll("#lightgallery img[id^='image']");
+		var cur = ""; var off = 0;
+		for (var k = 0; k < imgs.length; k++){
+			var r = imgs[k].getBoundingClientRect();
+			if (r.top <= 5){ var mm = imgs[k].id.match(/image(\d+)/i); if (mm){ cur = "image" + mm[1]; off = Math.max(0, Math.round(-r.top)); } }
+			else break;
+		}
+		// 문서 맨 아래(끝페이지)인지: 끝이면 e 플래그를 붙여 복원 시 '바닥 고정'으로 정확히 복귀
+		var _sy = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+		var _docH = Math.max(document.documentElement.scrollHeight || 0, document.body ? document.body.scrollHeight : 0);
+		var atBottom = (window.innerHeight + _sy) >= (_docH - 4);
+		return cur ? ("#" + cur + (off > 0 ? ("o" + off) : "") + (atBottom ? "e" : "")) : "";
+<?php } else { ?>
+		return "";
+<?php } ?>
+	} catch(e){ return ""; }
+};
+
 $(window).on("beforeunload", function () {
 	autosave();
 });
@@ -5199,7 +5216,7 @@ document.addEventListener("DOMContentLoaded", function () {
   const imageStatus = new Map();
   let activeLoads = 0;
 
-  function loadLazyImage(img) {
+  function loadLazyImage(img, force) {
     if (!img || !img.dataset.src) return;
     
     const imgIndex = parseInt(img.id.replace("image", ""), 10);
@@ -5208,7 +5225,7 @@ document.addEventListener("DOMContentLoaded", function () {
       return;
     }
 
-    if (imgIndex > 0) {
+    if (!force && imgIndex > 0) {
       const prevStatus = imageStatus.get(imgIndex - 1);
       if (prevStatus !== 'loaded' && prevStatus !== 'failed') {
         if (!loadQueue.some(item => item.index === imgIndex)) {
@@ -5610,10 +5627,13 @@ if (file) {
   //    타임아웃 시 종료. 실패해도 최상단에 머무를 뿐이라 무해(fail-safe).
   (function restoreToonPosition(){
     try {
-      var m = (window.location.hash || '').match(/image(\d+)/i);
+      var m = (window.location.hash || '').match(/image(\d+)(?:o(\d+))?(e)?/i);
       if (!m) return;
       var targetIndex = parseInt(m[1], 10);
-      if (!targetIndex || targetIndex <= 0) return;                 // image0/없음이면 최상단 = 복원 불필요
+      var targetOffset = m[2] ? parseInt(m[2], 10) : 0;            // 이미지 내부 픽셀 오프셋(정밀 복원)
+      var atBottom = !!m[3];                                       // 저장 시 문서 맨 아래였음 → 바닥 고정 복원
+      if (targetIndex <= 0 && targetOffset <= 0 && !atBottom) return;  // 최상단이면 복원 불필요
+      if (targetIndex < 0) targetIndex = 0;
       if (typeof total === 'number' && targetIndex >= total) targetIndex = total - 1;
 
       function findTarget(){
@@ -5623,7 +5643,10 @@ if (file) {
       }
 
       var aborted = false;
-      function onUserScroll(){ aborted = true; }
+      var startTime = Date.now();
+      // 복귀 직후 탭 모멘텀/잔여 터치 등 의도치 않은 스크롤로 복원이 즉시 중단되는 것을 막기 위해
+      // 처음 600ms 동안의 스크롤은 무시(그 후의 실제 사용자 스크롤이면 중단).
+      function onUserScroll(){ if (Date.now() - startTime > 600) aborted = true; }
       window.addEventListener('wheel',     onUserScroll, { passive: true, capture: true });
       window.addEventListener('touchmove', onUserScroll, { passive: true, capture: true });
       window.addEventListener('keydown',   onUserScroll, true);
@@ -5635,6 +5658,8 @@ if (file) {
 
       var tries = 0;
       var MAX_TRIES = 120;                                          // 120 × 250ms ≈ 최대 30초 가드
+      var lastHeight = -1;                                          // 바닥 고정 시 문서 높이 안정 판정용
+      var stableTicks = 0;                                          // 일반 복원 시 위치 안정(드리프트 종료) 판정용
       var timer = setInterval(function(){
         // 사용자가 직접 스크롤했거나 전체화면 갤러리가 열렸으면 중단(충돌 방지)
         if (aborted || document.querySelector('.lg-outer.lg-visible')) { clearInterval(timer); cleanup(); return; }
@@ -5642,21 +5667,80 @@ if (file) {
 
         var el = findTarget();
         if (!el) {
-          // 대상 요소가 아직 없으면 점진 로딩으로 DOM 확장
+          // ✅ 대상이 아직 DOM에 없으면 채운다. 한 틱에 5장씩(appendImages 기본)만 늘리면
+          //    image90 같은 깊은 타겟까지 수 초가 걸려 복원이 미완료됨. appendImages는 동기 함수로
+          //    loading을 스스로 즉시 해제하므로, 이번 틱에서 타겟이 나타날 때까지 연속 호출해 빠르게 채운다.
+          //    (일반 스크롤 로딩 동작은 그대로 — 복원 경로에서만 빠르게 채움. 상한 가드로 무한루프 방지)
           if (typeof appendImages === 'function' && typeof currentIndex === 'number'
               && typeof total === 'number' && currentIndex < total) {
-            appendImages();
-          } else {
-            clearInterval(timer); cleanup();                        // 더 확장할 게 없으면 종료
+            var _g = 0;
+            while (!findTarget() && currentIndex < total && _g < 2000) {
+              var _before = currentIndex;
+              appendImages();
+              if (currentIndex === _before) break;                  // 더 안 늘면 중단(안전)
+              _g++;
+            }
           }
-          return;
+          el = findTarget();
+          if (!el) { clearInterval(timer); cleanup(); return; }     // 끝까지 채워도 없으면 종료
+          // 타겟 확보 → 이번 틱에서 아래 정렬/바닥고정 로직으로 계속 진행
         }
 
-        el.scrollIntoView({ block: 'start' });                      // 대상 위치로 정렬(변동 대비 반복)
+        // ✅ 깊은 위치로 점프 시, 순차 로딩 게이트 때문에 대상 이미지가 로드되지 않아
+        //    흰 화면이 되는 것을 방지: 대상과 주변 몇 장을 게이트 무시하고 강제 로드.
+        //    (loadLazyImage는 loading/loaded면 즉시 반환하므로 매 틱 재호출돼도 무해)
+        if (typeof loadLazyImage === 'function') {
+          for (var _d = -1; _d <= 3; _d++) {
+            var _nb = document.getElementById('image' + (targetIndex + _d))
+                   || document.getElementById('image' + (targetIndex + _d) + '_left')
+                   || document.getElementById('image' + (targetIndex + _d) + '_right');
+            if (_nb) loadLazyImage(_nb, true);
+          }
+        }
 
-        if (el.classList.contains('loaded')) {                      // 대상 로드 완료(높이 확정)면 마무리
-          el.scrollIntoView({ block: 'start' });
-          clearInterval(timer); cleanup();
+        // ✅ 끝페이지(저장 시 맨 아래) 복원: 꼬리 이미지들을 강제 로드하며 문서 바닥에 고정.
+        //    위쪽 이미지가 뒤늦게 로드돼 대상이 밀려 올라가는 것을 막기 위해, 높이가 안정될 때까지
+        //    매 틱 바닥으로 스크롤한다.
+        if (atBottom) {
+          // 끝(바닥) 복원은 문서 끝까지 DOM이 있어야 정확히 바닥에 닿음 → 끝까지 빠르게 채움
+          if (typeof appendImages === 'function' && typeof currentIndex === 'number'
+              && typeof total === 'number' && currentIndex < total) {
+            var _gb = 0;
+            while (currentIndex < total && _gb < 2000) {
+              var _bb = currentIndex;
+              appendImages();
+              if (currentIndex === _bb) break;
+              _gb++;
+            }
+          }
+          if (typeof loadLazyImage === 'function' && typeof total === 'number') {
+            for (var _t = targetIndex; _t < total; _t++) {
+              var _te = document.getElementById('image' + _t)
+                     || document.getElementById('image' + _t + '_left')
+                     || document.getElementById('image' + _t + '_right');
+              if (_te) loadLazyImage(_te, true);
+            }
+          }
+          var _dh = Math.max(document.documentElement.scrollHeight || 0, document.body ? document.body.scrollHeight : 0);
+          window.scrollTo(0, _dh);                                  // 바닥으로(클램프됨)
+          if (el.classList.contains('loaded') && _dh === lastHeight) { clearInterval(timer); cleanup(); }
+          lastHeight = _dh;
+          return;                                                   // 끝 케이스는 일반 정렬 건너뜀
+        }
+
+        // 의도 위치로 재정렬하되, 재정렬에 필요한 이동량(moved)을 측정한다.
+        // 위쪽 이미지가 늦게 로드돼 대상이 밀리면 moved가 커지므로 재정렬이 계속된다.
+        var _y0 = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+        el.scrollIntoView({ block: 'start' });                      // 대상 위치로 정렬(변동 대비 반복)
+        if (targetOffset > 0) window.scrollBy(0, targetOffset);     // 이미지 내부 정밀 위치
+        var _y1 = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+
+        // 대상 로드 + 재정렬 이동이 거의 없음(±2px)이 2틱 연속 = 주변 레이아웃 안정 → 완료.
+        // (대상만 로드됐다고 끝내면, 이후 위쪽 이미지가 로드되며 대상이 밀려 위치가 어긋났음)
+        if (el.classList.contains('loaded') && Math.abs(_y1 - _y0) <= 2) {
+          if (++stableTicks >= 2) { clearInterval(timer); cleanup(); }
+        } else {
+          stableTicks = 0;
         }
       }, 250);
     } catch (e) { /* 복원 실패는 무해: 최상단 유지 */ }

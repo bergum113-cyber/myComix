@@ -33,8 +33,8 @@ function sanitize_viewer($val) {
 }
 
 function sanitize_page_order($val) {
-    // page_order는 0, 1, 2만 허용
-    return in_array($val, ['0', '1', '2'], true) ? $val : '0';
+    // page_order는 뷰어 정식 값 0~4만 허용(0:기본,1/2:묶음,3/4:세로분할 좌→우/우→좌). 그 외(pdf 등)는 '0'.
+    return in_array($val, ['0', '1', '2', '3', '4'], true) ? $val : '0';
 }
 
 // ============================================================

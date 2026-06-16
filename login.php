@@ -50,7 +50,8 @@ if (!empty($_GET['return'])) {
         && $_ps_parts['path'][0] === '/'          // 절대경로(/로 시작)만 허용
         && strpos($_ps_return, '\\') === false) {  // 백슬래시 우회 차단
         $_ps_redirect = $_ps_parts['path']
-            . (isset($_ps_parts['query']) ? '?' . $_ps_parts['query'] : '');
+            . (isset($_ps_parts['query']) ? '?' . $_ps_parts['query'] : '')
+            . (isset($_ps_parts['fragment']) ? '#' . $_ps_parts['fragment'] : '');
     }
 }
 

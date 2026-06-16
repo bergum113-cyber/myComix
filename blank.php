@@ -35,7 +35,7 @@ $_login_url = $base_path . '/login.php';
 </head>
 <body>
 <div id="cover" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;">
-  <div style="font:14px sans-serif;color:#9aa0a6;">화면을 탭하면 계속 봅니다</div>
+  <div style="font:15px/1.5 sans-serif;color:#555;text-align:center;padding:14px 24px;border:1px solid #e2e4e8;border-radius:12px;background:#fafbfc;box-shadow:0 1px 3px rgba(0,0,0,0.06);">화면을 탭하면 계속 봅니다</div>
 </div>
 <div class="loading" id="loadingIndicator" style="display:none;">
   <div class="spinner"></div>
@@ -76,42 +76,83 @@ $_login_url = $base_path . '/login.php';
     var _load = document.getElementById('loadingIndicator');
     if (_cover) _cover.style.display = 'none';
     if (_load) _load.style.display = 'block';
-    
-    fetch(SESSION_CHECK_URL, {
-      method: 'GET',
-      credentials: 'same-origin',
-      cache: 'no-store'
-    })
-    .then(function(response) {
-      return response.json();
-    })
-    .then(function(data) {
-      if (data.valid) {
-        // 세션 유효 → 원래 페이지로
-        // ✅ 복귀 직후 목록(index)에서 가림막 탭의 고스트클릭/빠른 2번째 탭이 항목을 눌러 엉뚱하게
-        //    진입하는 것을 막기 위한 플래그. index가 로드 시 이 플래그를 읽어 짧게 첫 클릭을 흡수함.
-        try { sessionStorage.setItem('mycomix_curtain_return', String(Date.now())); } catch(e){}
-        location.replace(returnUrl);
-      } else {
-        // 세션 만료 → 로그인 페이지로 (보던 화면 URL을 함께 전달하여,
-        // 로그인 유지 자동로그인 시 홈이 아닌 보던 화면으로 복귀하도록 함)
-        location.replace(LOGIN_URL + '?return=' + encodeURIComponent(returnUrl));
-      }
-    })
-    .catch(function() {
-      // ✅ 에러 시 커튼 유지 (보안: 어디로도 이동 안함), 재탭 가능하도록 복구
+
+    // 세션 확인. 5G↔LTE 등 네트워크 전환 순간엔 이 통신이 일시적으로 실패하거나 멈출 수 있어,
+    // 실패 시 짧게 자동 재시도하고, 멈춤(hang) 방지를 위해 각 시도에 타임아웃을 둔다.
+    // 성공 시 동작은 기존과 동일(유효→원위치 복원 / 만료→로그인 이동). 재시도 모두 실패 시에만 커튼 유지.
+    var MAX_TRIES = 3;        // 총 시도 횟수
+    var RETRY_DELAY = 700;    // 재시도 간격(ms)
+    var FETCH_TIMEOUT = 4000; // 한 시도가 응답 없이 멈춰있을 때 끊는 시간(ms)
+
+    function restoreCurtain() {
+      // 재시도 소진 → 커튼 유지(보안: 어디로도 이동 안 함), 사용자가 다시 탭 가능
       isChecking = false;
-      var _cover = document.getElementById('cover');
-      var _load = document.getElementById('loadingIndicator');
-      if (_load) _load.style.display = 'none';
-      if (_cover) _cover.style.display = 'flex';
-    });
+      var c = document.getElementById('cover');
+      var l = document.getElementById('loadingIndicator');
+      if (l) l.style.display = 'none';
+      if (c) c.style.display = 'flex';
+    }
+
+    function attempt(n) {
+      var ctrl = null, to = null;
+      try { if (typeof AbortController !== 'undefined') ctrl = new AbortController(); } catch(e){}
+      var opts = { method: 'GET', credentials: 'same-origin', cache: 'no-store' };
+      if (ctrl) { opts.signal = ctrl.signal; to = setTimeout(function(){ try { ctrl.abort(); } catch(e){} }, FETCH_TIMEOUT); }
+
+      fetch(SESSION_CHECK_URL, opts)
+        .then(function(response) {
+          if (to) { clearTimeout(to); to = null; }
+          if (!response.ok) throw new Error('status ' + response.status);
+          return response.json();
+        })
+        .then(function(data) {
+          if (data.valid) {
+            // 세션 유효 → 원래 페이지로 (스크롤 위치 #는 returnUrl에 포함됨)
+            // ✅ 복귀 직후 목록(index)에서 가림막 탭의 고스트클릭/빠른 2번째 탭이 항목을 눌러 엉뚱하게
+            //    진입하는 것을 막기 위한 플래그. index가 로드 시 이 플래그를 읽어 짧게 첫 클릭을 흡수함.
+            try { sessionStorage.setItem('mycomix_curtain_return', String(Date.now())); } catch(e){}
+            location.replace(returnUrl);
+          } else {
+            // 세션 만료 → 로그인 페이지로 (보던 화면 URL을 함께 전달)
+            location.replace(LOGIN_URL + '?return=' + encodeURIComponent(returnUrl));
+          }
+        })
+        .catch(function() {
+          if (to) { clearTimeout(to); to = null; }
+          // 네트워크 전환(5G↔LTE 등)으로 실패/타임아웃 → 짧게 자동 재시도
+          if (n < MAX_TRIES) {
+            setTimeout(function(){ attempt(n + 1); }, RETRY_DELAY);
+          } else {
+            restoreCurtain();
+          }
+        });
+    }
+    attempt(1);
   }
 
   // ✅ 진짜 커튼: 자동 복귀하지 않음. 사용자가 화면을 탭(클릭/터치)해야만 세션 확인 후 내용으로 이동.
   //    → 백그라운드 복귀 시 내용이 자동 노출되지 않음(사생활 보호).
   document.addEventListener('click', checkSessionAndRedirect, { passive: true });
   document.addEventListener('touchend', checkSessionAndRedirect, { passive: true });
+
+  // ✅ iOS Safari가 오래된 탭을 freeze/discard(또는 bfcache) 했다가 되살릴 때,
+  //    직전 탭으로 cover가 숨겨졌거나 세션확인이 멈춘 채 되살아나 "흰 화면"으로 보이는 문제 방지.
+  //    되살아나면 커튼을 깨끗한 탭 가능 상태로 되돌린다(자동 복귀는 하지 않음 → 사생활 보호 유지).
+  function resetCurtainState() {
+    isChecking = false;
+    var c = document.getElementById('cover');
+    var l = document.getElementById('loadingIndicator');
+    if (l) l.style.display = 'none';
+    if (c) c.style.display = 'flex';
+  }
+  window.addEventListener('pageshow', function(){ resetCurtainState(); });
+  document.addEventListener('visibilitychange', function(){
+    if (document.visibilityState === 'visible') resetCurtainState();
+  });
+  // ✅ 최후 보루: 브라우저 완전 종료 후 재실행 등으로 cover가 숨겨진 채(이전 세션확인 진행 중 상태로)
+  //    복원되고 pageshow/visibilitychange가 오지 않아 흰 화면이 남는 경우 대비.
+  //    세션확인 진행 중(isChecking)이 아니면 커튼을 다시 보이게 한다(자동 복귀는 하지 않음 → 사생활 보호 유지).
+  setTimeout(function(){ if (!isChecking) resetCurtainState(); }, 800);
 })();
 </script>
 </body>

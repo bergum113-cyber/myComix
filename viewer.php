@@ -1987,7 +1987,18 @@ img.loaded {
 
 	</style>
 <!-- ✅ CSS 로드 완료 후 화면 표시 -->
-<script>document.documentElement.classList.add('ready');</script>
+<script>
+(function(){
+  // ✅ 브라우저 자동 스크롤 복원 비활성화(콜드 리오픈 시 우리 복원을 덮지 않도록). 복원은 우리 JS가 전담.
+  if ('scrollRestoration' in history) { try { history.scrollRestoration = 'manual'; } catch(e){} }
+  function _show(){ var h=document.documentElement; h.classList.remove('leaving'); h.classList.add('ready'); }
+  _show();
+  // 브라우저 완전 종료 후 재실행, freeze/discard, bfcache 등 어떤 복원 경로에서도 흰 화면이 남지 않도록 보장.
+  window.addEventListener('pageshow', _show);
+  document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible') _show(); }, {passive:true});
+  setTimeout(_show, 1200); // 최후 보루(정상 로드에선 이미 ready라 무해)
+})();
+</script>
    </head>
 <?php
 render_viewer_i18n([
@@ -5625,9 +5636,15 @@ if (file) {
   //    점진 로딩(요소가 스크롤 시 추가됨)이라 대상 요소가 생길 때까지 appendImages()로 확장 후 스크롤.
   //    레이아웃 변동(상단 이미지 로드로 높이 증가)에 대비해 잠시 재정렬하고, 대상 로드 완료/사용자 조작/
   //    타임아웃 시 종료. 실패해도 최상단에 머무를 뿐이라 무해(fail-safe).
+  // (정리됨) 뷰어 위치 localStorage 백업(_vpSave/_vpRead)은 이어보기 자동점프 비활성 이후 아무도 읽지 않아 제거함.
+  //          위치 복원은 URL 해시(#imageN)만 사용: 목록 '눌러서 이어보기'·사생활 복귀·저장위치 버튼.
+
   (function restoreToonPosition(){
     try {
       var m = (window.location.hash || '').match(/image(\d+)(?:o(\d+))?(e)?/i);
+      // ✅ 이어보기 자동점프 비활성: URL 해시(#imageN)가 있을 때만 위치 복원한다(목록의 "눌러서 이어보기"·
+      //    사생활 복귀·저장위치 버튼). 파일목록에서 그냥 열 때(해시 없음)는 localStorage 백업으로 자동
+      //    점프하지 않고 처음부터 본다. 자동 저장(서버)과 자동저장 목록은 그대로 유지된다.
       if (!m) return;
       var targetIndex = parseInt(m[1], 10);
       var targetOffset = m[2] ? parseInt(m[2], 10) : 0;            // 이미지 내부 픽셀 오프셋(정밀 복원)

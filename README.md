@@ -273,7 +273,7 @@ mycomix/
 
 ## 📝 변경 이력
 
-### v2.4.2 (2026-06-12 ~ 06-14)
+### v2.4.2 (2026-06-12 ~ 06-17)
 
 **버그 수정/개선 — toon(웹툰) 모드 위치 저장·복원 (점진 로딩 환경 대응)**
 - toon 뷰어는 이미지를 **점진적으로 로딩**함(진입 시 일부만 DOM에 렌더, 스크롤하면 `appendImages()`로 더 추가, 데이터는 0번부터 순차 로드). 기존 위치 저장 로직은 "모든 이미지가 처음부터 존재한다"고 가정해 고정 범위(`image_counter`)를 돌며 `$("#image"+j).position().top`을 비교했는데, ① 갱신 조건(`.navbar` 존재 시에만)으로 전역 `scroll_top`이 0으로 남으면 항상 첫 페이지(image0)가 저장되고, ② 아직 로드/추가되지 않은 깊은 페이지 이미지에서 위치 계산이 어긋났음. 또한 진입 시 깊은 페이지(`#imageN`)는 요소 자체가 없어 복원도 되지 않았음.
@@ -356,6 +356,81 @@ mycomix/
 
 **개선 — 가림막 복귀 직후 목록에서 빠른 두 번 탭 시 엉뚱한 항목으로 진입하던 문제**
 - 가림막(`blank.php`)을 탭해 복귀하면, 그 탭의 고스트클릭이나 빠르게 누른 두 번째 탭이 갓 로드된 목록(`index.php`)의 항목 링크(`<a href>`/`onclick`)에 떨어져 의도치 않은 항목으로 진입했음(뷰어는 항목 링크가 적어 증상이 드묾). `blank.php`가 세션 유효로 복귀하기 직전 `sessionStorage`에 복귀 플래그를 남기고, `index.php`가 로드 시 그 플래그가 최근(1.5초 이내)이면 **450ms 동안 첫 click들을 흡수**(`preventDefault`+`stopPropagation`)하도록 함. `click`만 가로채므로 스크롤·`touch`·`privacy_shield` 로직에는 영향 없으며, 450ms 후에는 정상적으로 항목을 열 수 있음.
+
+**개선 — 5G↔LTE 등 네트워크 전환 후 가림막 복귀 시 위치 복원이 안 되던 문제 (세션확인 자동 재시도)**
+- 가림막(`blank.php`)에서 탭하면 `fetch(session_check.php)`로 세션을 확인한 뒤 원위치(스크롤 `#` 포함 URL)로 복귀하는데, 모바일에서 5G↔LTE가 전환되는 순간엔 이 통신이 일시적으로 실패하거나 멈춰(hang) 복귀가 안 되고 가림막만 유지되었음(세션 자체는 IP 바인딩이 없어 유지되며, 즉석/동일망에서는 정상 복원됨). 세션확인을 `AbortController` 타임아웃(4초)과 함께 수행하고, 실패/타임아웃 시 짧게 자동 재시도(총 3회, 700ms 간격)하도록 함. 성공 시 동작(유효→원위치 복원 / 만료→로그인 이동)은 기존과 동일하며, 재시도가 모두 실패할 때만 기존처럼 가림막을 유지해 수동 재탭이 가능하게 둠. 목록·뷰 공통(둘 다 같은 `blank.php` 경유).
+
+**개선 — 목록 스크롤 위치도 복귀 URL에 실어 탭 폐기/장시간/망 전환에도 복원**
+- 기존에는 목록(`index.php`)의 스크롤 위치를 `sessionStorage`로만 보존해, iOS가 탭을 폐기하거나(수 시간 방치) 망 전환 등으로 `sessionStorage`가 비워지면 복귀 시 목록이 맨 위로 갔음(뷰어는 위치를 복귀 URL에 실어 이런 경우에도 복원됨). 목록도 뷰어처럼 위치를 복귀 URL에 포함하도록 `index.php`에 `myComixCurrentHash`(목록판, `#ly<픽셀>` 형식 — 뷰어의 `#imageN`과 구분)를 정의함. `privacy_shield`는 백그라운드 전환 시 이미 `myComixCurrentHash`를 호출하므로 수정 없이 목록 위치가 복귀 URL에 실림. 복원 로직(`restoreScroll`)은 ① URL의 `#ly`(가장 내구성, 탭 폐기에도 보존) → ② 그 외 해시(`#search-section` 등)는 기존대로 회피 → ③ 해시 없으면 기존 `sessionStorage` 순으로 처리. 기존 동작·검색 섹션 해시 동작은 보존.
+
+**개선 — 세션 만료로 로그인을 거칠 때도 스크롤 위치(#) 보존**
+- 사생활 복귀 시 세션이 유효하면 `blank.php`가 원위치(#포함 URL)로 바로 복귀하지만, 백그라운드가 길어져 **세션이 만료**되면 `login.php`를 거치는데, 이때 `login.php`가 복귀 대상을 `경로+쿼리`로만 만들고 `#fragment`(스크롤 위치)를 누락해 로그인 후 목록/뷰가 맨 위로 갔음. 복귀 대상 구성에 `fragment`가 있으면 `#...`를 보존하도록 함. 기존 오픈 리다이렉트 방지 검증(같은 호스트·절대경로만 허용, 백슬래시 차단, CRLF 제거)은 그대로이며, fragment는 클라이언트 전용이라 리다이렉트 안전성에 영향 없음. 이로써 세션 유효/만료 양쪽 모두에서 위치 복원이 일관되게 동작.
+
+**개선 — iOS가 오래된 탭을 freeze/discard 후 되살릴 때 가림막이 흰 화면으로 멈추던 문제**
+- 시간이 오래 지나고(특히 네트워크 변경 동반) iOS Safari가 가림막(`blank.php`) 탭을 얼리거나 폐기했다가 되살리면, 직전 탭으로 cover가 숨겨졌거나 세션확인이 멈춘 상태로 되살아나 흰 화면이 보이고, 한 번 더 탭해야 복귀되던 문제. `pageshow`(bfcache 포함)와 `visibilitychange`(visible 복귀) 시 가림막을 깨끗한 탭 가능 상태로 되돌리도록 함(`resetCurtainState`). 자동 복귀는 하지 않으므로(탭해야 내용 노출) 사생활 보호 동작은 그대로 유지. 목록·뷰 공통(둘 다 `blank.php` 경유).
+
+**개선 — 목록이 장시간 방치(iOS freeze/discard) 후 복귀 시 흰 화면으로 남던 문제**
+- 목록(`index.php`)은 `html{opacity:0}` 기본 + `ready`(보임)/`leaving`(이탈 fade-out, opacity:0) 전환을 쓰는데, 복귀 시 `leaving` 해제가 `pageshow`의 `persisted`(bfcache)일 때만 수행됐음. iOS가 오래된 목록을 freeze/discard 후 `persisted=false`로 되살리면 `leaving`(opacity:0)이 남아 목록이 흰 화면이 되고, 사생활 모드를 다시 거쳐 강제 재이동해야 풀렸음(뷰어는 `leaving`을 추가하지 않아 무관). 페이지가 보일 때 `pageshow`(무조건)와 `visibilitychange`(visible) 양쪽에서 `leaving`을 해제(=opacity:1)하도록 하여 항상 보이게 함. 이탈 시 fade-out(`leaving` 추가) 동작은 그대로 유지.
+
+**개선 — 장시간(iOS 탭 폐기) 후 뷰어→뒤로가기→목록 시 목록 스크롤 위치 유지 (localStorage 단기 백업)**
+- 뷰어는 위치(#imageN)를 복귀 URL에 실어 탭 폐기 후에도 복원되지만, 목록은 그 경로(뷰어→뒤로가기)에서 위치가 sessionStorage에만 저장돼, iOS가 목록 탭을 폐기하면 sessionStorage가 비워져 목록이 맨 위로 갔음(비대칭). 목록 위치를 sessionStorage와 함께 localStorage에 타임스탬프와 단기(30분) 백업하고, 복원 시 sessionStorage가 비어 있으면 30분 이내 백업으로 복원하도록 함. 우선순위는 ①복귀 URL #ly ②검색 해시 회피 ③sessionStorage ④localStorage(30분 내) 순. 30분 지난 백업은 무시해 한참 뒤 새 방문은 맨 위에서 시작. 정상/bfcache 복귀는 DOMContentLoaded에서만 동작하므로 영향 없음.
+
+**개선 — 브라우저 완전 종료 후 재실행 등 복원 시 목록·뷰어 흰 화면 방지(ready 보장 failsafe)**
+- 목록·뷰어는 `html{opacity:0}` 기본 + `ready`(보임)로 페이드인하는데, 브라우저를 완전히 닫았다 재실행해 페이지가 복원될 때 `ready`가 확실히 적용되지 않으면 흰 화면이 남을 수 있었음(특히 뷰어는 `visible`/`pageshow`에서 `ready`를 재적용하는 처리가 없었음). 목록(`index.php`)·뷰어(`viewer.php`) 모두 페이지가 보일 때 `pageshow`·`visibilitychange(visible)`에서 `ready`를 보장하고, 추가로 짧은 지연(약 1.2초) 후 한 번 더 강제 적용하는 최후 보루를 둠. 정상 로드에서는 인라인 `ready`로 이미 보이므로 무해한 no-op이며, 이탈 fade-out 동작에는 영향이 없음.
+
+**개선 — 브라우저 완전종료 후 재실행 시 뷰어 스크롤 위치 유지(localStorage 단기 백업, 목록과 대칭)**
+- 뷰어 위치 복원(`restoreToonPosition`)은 URL 해시(#imageN)에 의존하는데, 브라우저를 완전히 닫았다 재실행하면 iOS가 주소창 해시를 보존하지 않을 수 있어 위치가 풀렸음. 목록과 동일하게 뷰어 위치도 `hidden`/`pagehide` 시 `myComixCurrentHash()`로 localStorage에 타임스탬프와 단기(30분) 백업하고, 복원 시 URL 해시가 없으면 30분 이내 백업으로 복원하도록 함(해시가 있으면 해시 우선 — 정상/사생활-복귀/bfcache는 영향 없음). 파일+권(bidx)별 키라 책마다 분리되고, 30분 지난 백업은 무시.
+
+**개선 — 브라우저 완전 종료 후 재실행 시 가림막(blank.php)이 흰 화면으로 보이던 문제**
+- 가림막은 사생활 보호상 자동 복귀하지 않고 사용자가 화면을 탭해야 세션 확인 후 내용으로 돌아가는 설계인데(그래서 기다려도 자동 복귀하지 않고 탭하면 스크롤 위치까지 복원됨), ① 세션 확인 진행 중(cover 숨김 상태)에 브라우저가 종료되면 재실행 시 cover가 숨겨진 채 복원되고 pageshow/visibilitychange가 오지 않으면 흰 화면이 남을 수 있었고, ② 안내 문구가 너무 흐려(연회색) 정상적인 커튼도 흰 화면처럼 보였음. 진행 중이 아니면 짧은 지연 후 커튼을 강제로 다시 보이게 하는 최후 보루를 추가하고(자동 복귀는 하지 않음 → 사생활 유지), 안내 문구를 또렷하게(진한 색 + 박스) 개선함.
+
+**개선 — 브라우저 완전 종료 후 재실행 시 목록/뷰어 스크롤이 복원됐다가 맨 위로 되돌아가던 문제(history.scrollRestoration)**
+- 디버그 로그 분석 결과, 콜드 리오픈(완전 종료 후 재실행) 시 우리 복원 로직이 목표 위치(예: 9312px)에 정확히 도달(LIST_RESTORE_DONE finalY=목표)했는데도 수 초 뒤 스크롤이 0으로 밀려 LIST_SAVE y=0이 되는 현상이 확인됨. 원인은 `history.scrollRestoration`이 기본값 `auto`라, 브라우저가 자체 스크롤 복원을 우리 복원 뒤에 수행해 맨 위로 덮었기 때문. `index.php`·`viewer.php` 모두 이른 시점에 `history.scrollRestoration='manual'`로 설정(admin.php가 쓰던 패턴)해 브라우저 간섭을 제거하고, 스크롤 복원은 우리 JS(#ly/sessionStorage/localStorage, #imageN/백업)가 전담하도록 함. 정상/사생활-복귀/bfcache 동작에는 영향 없음.
+
+**개선 — 앱 스위처(꾹 눌러 밀어올리기) 제스처에서 사생활 가림막이 늦어 내용이 노출되던 문제**
+- 기존 사생활 보호는 화면이 hidden이 될 때 `location.replace(blank.php)`로 가림막 페이지로 이동하는 방식인데, 이 이동은 비동기라 앱 스위처(길게 눌러 밀어올리는 멀티태스킹 제스처)의 스냅샷이 이동보다 먼저 찍히면 내용이 그대로 노출됐음(일반 홈-스와이프는 이동할 시간이 있어 가려짐). `privacy_shield.php`에 hidden 전환 즉시 동기적으로 불투명 커버(전체 화면, 최상위 z-index)를 덮는 로직을 추가해, 이동 타이밍과 무관하게 스냅샷이 항상 가려지도록 함. 복귀(visible/bfcache) 시 커버를 제거하며, 모바일에서만(데스크톱 게이팅 이후) 동작하고 평소에는 display:none이라 일반 사용에는 영향이 없음.
+
+**개선 — 앱 스위처 제스처(꾹 눌러 밀어올리기)에서 hidden보다 먼저 찍히는 스냅샷 대비(blur 커버)**
+- 디버그 로그 분석 결과, 이 제스처에서는 일부 기기가 visibilitychange(hidden)보다 먼저(창이 포커스를 잃어 화면이 살짝 작아지는 순간=blur) 앱 스냅샷을 찍어, hidden 시점에만 뜨던 커버로는 그 스냅샷을 가리지 못했음. `privacy_shield.php`에 window의 `blur` 시 즉시 커버를 덮고 `focus` 시 제거하는 로직을 추가함. blur는 커버 표시만 담당하고 가림막 이동(goBlank)은 기존 hidden/pagehide 경로 그대로이며, 네이티브 폼 컨트롤(드롭다운/입력/버튼) 포커스로 인한 blur는 제외해 불필요한 깜빡임을 방지함. 모바일 전용.
+
+**개선 — 앱 스위처 진행 중 일시적 focus로 사생활 커버가 조기 해제되던 문제(커버 지연 해제)**
+- 디버그 로그상 앱 스위처는 "작아짐(blur)→스위처 화면의 일시적 focus→hidden(닫힘)" 순서로 진행되는데, focus에서 커버를 즉시 제거하니 스위처 카드가 보이는 순간 커버가 꺼져 내용이 노출됐음. focus 시 즉시 제거하지 않고 약 400ms 지연 후 제거하도록 바꾸고, 그 사이 hidden/blur(백그라운드 진행)가 오면 예약을 취소해 커버를 유지함. 진짜 포그라운드 복귀(visibilitychange visible)에선 즉시 제거. 가림막 이동(goBlank) 로직은 변경 없음.
+
+**개선 — 가림막 복귀 직후 전환 잔상 hidden으로 한 번 reload되며 "걸리던" 현상 제거**
+- 디버그 로그상 blank.php↔index 전환(가림막 복귀) 직후 iOS가 일시적으로 visibilitychange(hidden)를 한 번 더 보내, goBlank가 즉시 재발동→blank.php로 갔다가 reload되며 화면이 한 번 걸리는(stutter) 현상이 있었음. 페이지 로드 직후 1.2초 내에 들어오는 hidden은 전환 잔상으로 보고 goBlank(이동)를 보류하도록 함. 이때도 커버(showCover)는 이미 표시되므로 사생활은 유지되고, 잔상이면 곧 visible로 돌아와 커버가 제거됨(scheduleHide 보조). 실제 백그라운드는 기존 pagehide(hidden, forced) 경로로 확실히 가림막 처리되어 영향 없음.
+
+**개선 — 앱 강제종료(스위처에서 카드 위로 밀기) 후 재실행 시 사생활 가림막이 안 되던 문제(localStorage 흔적)**
+- 빈 곳을 터치해 닫는 경우(케이스1)는 goBlank의 blank.php 이동이 완료된 뒤 닫혀 재실행 시 가림막이 정상이지만, 스위처에서 카드를 위로 밀어 강제종료하는 경우(케이스2)는 location.replace(blank.php)가 비동기라 그 이동이 끊겨 앱이 index 상태로 종료→재실행 시 내용이 그대로 복원됐음. 백그라운드(hidden) 순간 localStorage에 사생활 흔적(mc_pp)을 동기적으로 기록하고, index.php·viewer.php가 로드 즉시 이 흔적(30분 내)을 확인해 있으면 blank.php로 리다이렉트하도록 함. 흔적은 blank.php 탭 복귀(세션 유효) 시 해제되어 재리다이렉트(루프)를 방지하며, 흔적 기록은 전환 잔상(로드 1.2초 내 hidden) 통과 후에만 수행해 복귀 직후 잔상으로 인한 오동작을 막음. 흔적은 모바일 privacy_shield에서만 기록되므로 데스크톱에는 영향이 없음.
+
+**버그픽스 — 사생활 흔적(mc_pp)이 bfcache/일반 포그라운드 복귀 시 해제되지 않아 정상 사용에도 가림막이 뜨던 부작용**
+- 직전 흔적 방식 도입 후, 흔적 해제가 'blank.php 탭 복귀'에서만 일어나 bfcache 복귀(앱 재진입 시 흔히 발생) 등에서는 흔적이 남았음. 그 결과 ① 새로고침 시 가림막으로 리다이렉트, ② 목록에서 파일 클릭해 뷰 진입 시 viewer가 흔적을 보고 blank를 경유(`index→blank→viewer`), ③ 그로 인해 뷰에서 뒤로가기가 blank/엉뚱한 위치로 가는 부작용이 발생했음. `privacy_shield.php`에서 포그라운드 복귀(visibilitychange visible) 및 bfcache 복귀(pageshow persisted) 시에도 흔적을 해제하도록 추가함. 이로써 정상 사용 중에는 흔적이 남지 않아 새로고침·파일 클릭·뒤로가기가 정상 동작하고, 강제종료(포그라운드 복귀 이벤트 없이 종료)된 경우에만 흔적이 유지되어 재실행 시 가림막이 뜨는 동작(케이스2)은 그대로 유지됨.
+
+**버그픽스 — 파일 클릭으로 뷰 진입 시 가림막을 경유(→뒤로가기 깨짐)하던 부작용: 흔적 기록 시점 교정**
+- 사생활 흔적(mc_pp)을 visibilitychange(hidden) 핸들러에서 goBlank 호출 전에 기록하다 보니, 파일 클릭 등 내부 이동으로 발생한 hidden에서도(goBlank는 타이밍 가드로 정상 차단됨에도) 흔적이 남아, 이어 로드되는 viewer가 그 흔적을 보고 blank.php로 리다이렉트했음. 그 결과 `index→blank→viewer`로 history가 오염돼 뷰에서 뒤로가기가 깨졌음. 흔적 기록을 goBlank 내부의 모든 가드(jumped·타이밍)를 통과한 직후(실제로 blank.php로 이동하는 순간)로 옮겨, 내부 이동에서는 흔적이 남지 않고 실제 백그라운드에서만 기록되도록 함. 강제종료가 이동을 끊어도 흔적은 location.replace 직전에 동기적으로 기록되므로 케이스2(재실행 가림막)는 유지됨.
+
+**되돌림 — localStorage 흔적(mc_pp) 기반 강제종료-재실행 가림막 방식 철회(정상 사용 방해)**
+- 강제종료(앱 스위처에서 카드 위로 밀기) 후 재실행 시 가림막을 띄우려고 도입한 localStorage 흔적 + index/viewer 로드 시 blank.php 리다이렉트 방식이, 새로고침·뒤로가기 등 정상 내부 동작까지 가림막으로 보내고 히스토리를 오염(루트/빈 URL 진입)시키는 부작용을 일으켰음. 해당 메커니즘(index·viewer의 mc_pp 리다이렉트, privacy_shield의 흔적 기록/해제, blank의 흔적 해제)을 전부 제거해 새로고침은 목록 유지, 뷰 뒤로가기는 목록(스크롤) 복원으로 되돌림. 사생활 보호는 기존 방식(백그라운드 시 goBlank→blank.php, 앱 스위처 대비 동기 커버, 전환 잔상 goBlank 보류)으로 동작하며, 강제종료 직후 재실행 케이스는 부작용 대비 정상 사용을 우선해 제외함(앱 스위처 스냅샷은 커버로 보호됨).
+
+**버그픽스 — 목록/뷰에서 새로고침(reload) 시 가림막이 뜨던 문제(reload를 백그라운드로 오인)**
+- 새로고침은 페이지 언로드라 pagehide(및 beforeunload)가 visibilitychange(hidden)보다 먼저 발생하는데, 그 hidden을 실제 백그라운드로 오인해 goBlank가 blank.php로 보냈음(같은 페이지로 reload되어야 하는데 가림막이 뜸). 반면 실제 백그라운드(앱 전환/홈 이동)는 hidden이 먼저 오고 pagehide는 그 뒤에 옴. 이 순서 차이를 이용해, beforeunload/pagehide(언로드 신호)가 먼저 와 isNavigating가 켜진 상태에서 들어온 hidden에서는 goBlank를 보류하도록 함(커버는 무해하게 표시되며 곧 reload로 사라짐). 실제 백그라운드는 hidden이 선행해 isNavigating가 꺼져 있으므로 가림막이 정상 동작함. 새로고침·링크 이동은 같은 페이지/대상으로 정상 진행됨.
+
+**버그픽스 — 뷰어에서 뒤로가기 시 목록이 맨 위로 가던 문제(bfcache 복원에서 스크롤 미복원)**
+- 목록 스크롤은 pagehide에서 sessionStorage(및 localStorage 백업)에 정상 저장되나, 복원 함수 restoreScroll가 DOMContentLoaded에서만 실행됐음. 뒤로가기는 보통 bfcache 복원이라 DOMContentLoaded가 발생하지 않고 pageshow(persisted=true)만 발생해 restoreScroll가 호출되지 않았고, 콜드 리오픈용으로 둔 scrollRestoration='manual' 때문에 브라우저 자동 스크롤 복원도 비활성이라 결국 목록이 맨 위로 갔음. pageshow(persisted) 시 restoreScroll를 직접 호출하도록 추가해, 저장된 목록 위치(#ly/sessionStorage/localStorage)로 복원함. 일반(persisted=false) 로드는 기존 DOMContentLoaded 경로로 복원하므로 중복 없음. 콜드 리오픈 스크롤 유지(manual) 동작은 그대로 보존.
+
+**버그픽스 — 뷰어 뒤로가기 시 목록이 항상 같은(오래된) 위치로 복원되던 문제(stale #ly 우선)**
+- 사생활 복귀 때 URL에 한 번 박힌 #ly<픽셀> 해시는 이후 사용자가 더 스크롤해도 갱신되지 않는데, restoreScroll가 그 URL #ly를 sessionStorage보다 먼저 사용해, 뒤로가기마다 항상 그 오래된 위치(예: 4680)로 튀었음(사용자는 6892/6127까지 내려갔는데도). 매 이탈(pagehide)마다 최신 위치가 저장되는 sessionStorage를 최우선(값>0)으로 하고, URL #ly는 sessionStorage가 없거나 0일 때(사생활 복귀·iOS 탭 폐기)만 폴백으로 쓰도록 우선순위를 조정함. #search-section 등 다른 해시는 기존대로 회피.
+
+**버그픽스 — 뷰어 뒤로가기(bfcache 복원) 이후 목록을 백그라운드해도 가림막이 안 뜨던 문제**
+- 새로고침/이동 구분용 isNavigating 플래그가, 파일 클릭(pagehide)으로 true가 된 상태 그대로 페이지가 bfcache에 얼려진 뒤 뒤로가기로 복원되면 true인 채 되살아났음. 그 결과 복원된 목록을 실제로 백그라운드해도 "이동 중"으로 오인되어 goBlank가 스킵(goBlank skip)되고 가림막이 뜨지 않았음. visibilitychange(visible)·pageshow(persisted) 복귀 시 isNavigating을 false로 리셋하도록 추가해, bfcache로 보존된 낡은 플래그가 다음 백그라운드의 가림막을 막지 않도록 함. 새로고침 시 가림막 보류(언로드가 hidden보다 선행 → isNavigating)는 reload 직전에 다시 설정되므로 그대로 동작.
+
+**개선 — 사생활 커버 표시 속도(앱 스위처 스냅샷 대비)**
+- 기존엔 백그라운드 첫 진입 때 커버 엘리먼트를 그 자리에서 createElement+appendChild로 생성한 뒤 표시해, 첫 노출에 DOM 삽입 비용이 붙었음. 이 스크립트는 body 끝에 포함되어 body가 이미 존재하므로, 커버 엘리먼트를 초기화 시점에 미리 생성(display:none)해 두도록 함. 백그라운드 순간엔 showCover가 display 토글만 수행하여 즉시 표시되고, 앱 스위처 스냅샷보다 먼저 화면을 덮을 확률을 높임. showCover/hideCover의 로직과 발동 시점(blur·visibilitychange hidden·pagehide)은 변경하지 않았고, showCover 내 지연생성은 안전 폴백으로 그대로 유지. 목록·뷰어 공통(privacy_shield)이라 양쪽 동일 적용.
+
+**변경 — 뷰어 이어보기 자동점프 비활성(요청: 들어간 뷰가 자동으로 이어져 불편)**
+- 토온 뷰어의 restoreToonPosition가 URL 해시(#imageN)가 없을 때 localStorage 백업(_vpRead, 30분)으로 마지막 위치에 자동 점프하던 동작을 제거. 이제 URL 해시가 있을 때만 위치를 복원하므로, 파일 목록에서 그냥 열면 처음부터 보고, "눌러서 이어보기"(자동저장/북마크 목록 링크는 #imageN 포함)·사생활 복귀·저장위치 버튼 등 해시 기반 복원은 그대로 동작함. 서버 자동저장(autosave)과 index의 자동저장 목록은 변경 없이 유지(목록에서 수동으로 이어보기 가능). _vpRead/_vpSave 정의는 남겨두었으나 자동점프 경로에서 호출하지 않음(무해).
+
+**정리 — 뷰어 위치 localStorage 백업(_vpSave/_vpRead) 제거(비활성 코드)**
+- 이어보기 자동점프 비활성 이후 _vpRead가 더 이상 호출되지 않아, 뷰어 위치 localStorage 단기백업 코드 일체(_VPKEY, _vpSave, _vpRead, visibilitychange/pagehide 리스너)를 제거. 해당 키(mycomix_viewer_pos:*)는 _vp* 내부에서만 쓰였고 외부 의존·전역 노출이 없어 제거가 안전함을 확인. 위치 복원은 URL 해시(#imageN)만 사용하므로 목록 '눌러서 이어보기'·사생활 복귀·저장위치 버튼 동작에는 영향 없음. 백그라운드마다 발생하던 불필요한 localStorage 쓰기도 함께 사라짐. (자동 저장 서버 기록·자동저장 목록은 변경 없음)
 
 > 코드 변경은 `config.php`(버전)와 `blank.php`·`login.php`·`viewer.php`·`index.php`·`bookmark.php`·`function.php`·`privacy_shield.php`에 한정됩니다. v2.4.1의 변경 파일(`index.php`·`function.php`·`thumb.php`·`archive_handler.php`)은 그대로 유지되며, 그 외 파일은 v2.4 원본과 동일합니다. 실서버(iOS·실세션·PC 브라우저) 환경에서의 재현 검증은 배포 후 확인이 필요합니다.
 

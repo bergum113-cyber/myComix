@@ -1614,7 +1614,9 @@ function bookmark_toggle() {
 }
 </script>
 <!-- ✅ CSS 로드 완료 후 화면 표시 -->
-<script>document.documentElement.classList.add('ready');</script>
+<script>document.documentElement.classList.add('ready');
+// ✅ 브라우저 자동 스크롤 복원 비활성화: 콜드 리오픈 시 브라우저가 우리 #ly 복원을 0으로 덮던 문제 방지.
+if ('scrollRestoration' in history) { try { history.scrollRestoration = 'manual'; } catch(e){} }</script>
 </head>
 <body>
 
@@ -8109,7 +8111,7 @@ document.addEventListener('DOMContentLoaded', function() {
             if (listContainer) {
                 // 저장된 HTML 콘텐츠로 목록 컨테이너 복원
                 listContainer.innerHTML = state.html;
-                
+
                 // 저장된 스크롤 위치로 이동
                 // setTimeout을 사용하여 DOM 로드 및 렌더링이 완료된 후 스크롤을 실행
                 setTimeout(() => {
@@ -8249,12 +8251,23 @@ document.addEventListener('DOMContentLoaded', function() {
         document.documentElement.classList.add('leaving');
     });
     
-    // 뒤로가기(bfcache) 복원
+    // ✅ 페이지가 보일 때는 항상 leaving 해제(=html opacity:1)하여 흰 화면 방지.
+    //    과거엔 pageshow의 persisted일 때만 해제해, iOS가 오래된 목록을 freeze/discard 후
+    //    persisted=false로 되살리면 leaving(opacity:0)이 남아 목록이 흰 화면이 됐음(뷰어는 leaving을
+    //    추가하지 않아 무관). → pageshow(무조건) + visibilitychange(visible) 양쪽에서 해제. 이탈 시 fade-out은 그대로.
+    function _showPage(){
+        document.documentElement.classList.remove('leaving');
+        document.documentElement.classList.add('ready');
+    }
+    document.addEventListener('visibilitychange', function(){
+        if (document.visibilityState === 'visible') _showPage();
+    }, {passive:true});
+    // ✅ 최후 보루: 브라우저 완전 종료 후 재실행 등 어떤 복원 경로에서도 흰 화면이 남지 않도록
+    //    짧은 지연 후 한 번 더 보이게 강제(정상 로드에선 이미 ready라 무해한 no-op).
+    setTimeout(_showPage, 1200);
+    // 뒤로가기(bfcache)·freeze 복원
     window.addEventListener('pageshow', function(e) {
-        if (e.persisted) {
-            document.documentElement.classList.remove('leaving');
-            document.documentElement.classList.add('ready');
-        }
+        _showPage();
         // ✅ viewer에서 자동저장/북마크 변경 시, 새로고침 없이 목록 갱신 (bfcache·일반 로드 모두).
         //    자동저장 저장($.get)이 비동기라 이탈 직후엔 아직 안 끝났을 수 있어, 약간의 지연 후 갱신해
         //    옛 데이터를 받아오는 race를 완화(실패 시 refreshBookmarkTable 내부에서 reload 폴백).
@@ -10030,31 +10043,72 @@ function deleteFolder(folderPath) {
    - bfcache 복원은 브라우저가 스크롤을 유지하므로 영향 없음(DOMContentLoaded에서만 동작) */
 (function(){
   var KEY = 'mycomix_list_scroll:' + location.pathname + location.search;
+  // ✅ localStorage 단기 백업 키 — sessionStorage는 iOS 탭 폐기 시 비워지므로, 장시간 후
+  //    뷰어→뒤로가기→목록 복귀에도 위치를 살리기 위한 보조 저장. 30분 지난 백업은 무시(새 방문은 맨 위).
+  var LKEY = 'mycomix_list_scroll_p:' + location.pathname + location.search;
+  var LMAX_AGE = 30 * 60 * 1000;
   function curY(){ return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0; }
-  function saveScroll(){ try { sessionStorage.setItem(KEY, String(curY())); } catch(e){} }
+  function saveScroll(){
+    try {
+      var y = curY();
+      sessionStorage.setItem(KEY, String(y));
+      try { localStorage.setItem(LKEY, JSON.stringify({ y: y, t: Date.now() })); } catch(e2){}
+    } catch(e){}
+  }
   document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'hidden') saveScroll(); });
   window.addEventListener('pagehide', saveScroll);
+
+  // ✅ 목록 위치를 복귀 URL에도 실어, iOS 탭 폐기/장시간/망(5G↔LTE) 전환으로 sessionStorage가
+  //    비워져도 복원되게 한다. privacy_shield가 백그라운드 전환 시 이 함수를 호출해 반환값을
+  //    복귀 URL에 포함한다. 목록은 #ly<픽셀> 형식(뷰어의 #imageN과 구분 — 서로 다른 페이지라 충돌 없음).
+  window.myComixCurrentHash = function(){
+    try { var y = curY(); return y > 0 ? ('#ly' + Math.round(y)) : ''; } catch(e){ return ''; }
+  };
+
+  // 목표 위치로 복원(썸네일 로드로 높이가 변하는 동안 잠시 재적용, 사용자가 스크롤하면 중단)
+  function scrollToY(y){
+    if (!(y > 0)) return;
+    var tries = 0, stop = false;
+    function onUser(){ stop = true; }
+    window.addEventListener('wheel', onUser, { passive:true });
+    window.addEventListener('touchmove', onUser, { passive:true });
+    window.addEventListener('keydown', onUser, true);
+    var iv = setInterval(function(){
+      if (stop) { clearInterval(iv); return; }
+      window.scrollTo(0, y);
+      if (++tries >= 12 || Math.abs(curY() - y) < 4) clearInterval(iv);
+    }, 60);
+  }
+
   function restoreScroll(){
     try {
-      if (location.hash) return; // 검색 섹션 등 해시 기반 스크롤과 충돌 방지
+      // #search-section 등 #ly가 아닌 해시가 있으면 스크롤 복원을 건드리지 않음(기존 동작)
+      var ly = (location.hash || '').match(/^#ly(\d+)$/);
+      if (location.hash && !ly) return;
+      // ✅ sessionStorage가 가장 신선한 위치(직전 pagehide 저장). URL의 #ly는 사생활 복귀 때 한 번
+      //    박히면 갱신되지 않아 뒤로가기마다 그 값으로 튀므로, 유효한 sessionStorage(>0)를 최우선으로 한다.
       var v = sessionStorage.getItem(KEY);
-      if (v === null) return;
-      var y = parseInt(v, 10) || 0;
-      if (y <= 0) return;
-      var tries = 0, stop = false;
-      function onUser(){ stop = true; }
-      window.addEventListener('wheel', onUser, { passive:true });
-      window.addEventListener('touchmove', onUser, { passive:true });
-      window.addEventListener('keydown', onUser, true);
-      var iv = setInterval(function(){
-        if (stop) { clearInterval(iv); return; }
-        window.scrollTo(0, y);
-        if (++tries >= 12 || Math.abs(curY() - y) < 4) clearInterval(iv);
-      }, 60);
+      var vy = (v !== null) ? (parseInt(v, 10) || 0) : -1;
+      if (vy > 0) { scrollToY(vy); return; }
+      // sessionStorage 없음/0 → URL #ly 폴백(사생활 복귀·iOS 탭 폐기 대비)
+      if (ly) { scrollToY(parseInt(ly[1], 10) || 0); return; }
+      // 그래도 없으면 localStorage 단기 백업(30분 내). 30분 지난 건 무시(새 방문 맨 위).
+      try {
+        var lv = localStorage.getItem(LKEY);
+        if (lv) {
+          var o = JSON.parse(lv);
+          if (o && (Date.now() - (o.t || 0)) < LMAX_AGE) scrollToY(parseInt(o.y, 10) || 0);
+        }
+      } catch(e2){}
     } catch(e){}
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', restoreScroll);
   else restoreScroll();
+  // ✅ 뒤로가기(bfcache 복원)는 DOMContentLoaded가 뜨지 않고 pageshow(persisted)만 뜬다. 게다가
+  //    콜드 리오픈용 scrollRestoration='manual' 때문에 브라우저도 스크롤을 복원하지 않아 맨 위로 간다.
+  //    따라서 여기서 저장해 둔 목록 위치(#ly/sessionStorage/localStorage)로 직접 복원한다
+  //    → 뷰어에서 뒤로가기 시 목록 스크롤 위치 유지. (persisted=false 일반 로드는 위에서 이미 복원함)
+  window.addEventListener('pageshow', function(e){ if (e && e.persisted) restoreScroll(); });
 })();
 </script>
 

@@ -98,7 +98,48 @@ $_debug = $_privacy_settings['debug'] ?? false;
   var isInternalNavigation = false;
   var pendingHide = false;   // hidden 전환이 시작됐는지(빠른 백그라운드에서 pagehide가 stale visible로 와도 보강)
   var lastClickTime = 0;  // ✅ 문서 3에서 추가
+  var pageLoadTime = Date.now();  // ✅ blank↔index 전환 직후 일시적 hidden(전환 잔상) 판별용
+  var isNavigating = false;  // ✅ 새로고침/링크이동 등 페이지 언로드 신호(beforeunload/pagehide 선행) → 가림막 보류용
   var debug = <?php echo $_debug ? 'true' : 'false'; ?>;
+
+  /* ===========================
+   * 사생활 커버 (앱 스위처 스냅샷 대비)
+   * - location.replace(가림막)는 비동기라, 앱 스위처(꾹 눌러 밀어올리기) 스냅샷이 이동보다 먼저
+   *   찍히면 내용이 노출됨. hidden 순간 동기적으로 불투명 커버를 덮어 스냅샷이 항상 가려지게 한다.
+   * - 복귀(visible/bfcache) 시 제거. 이동이 일어나면 새 페이지 로드로 커버는 자연 소멸.
+   * =========================== */
+  var _pcov = null;
+  function showCover(){
+    try {
+      if (!_pcov) {
+        _pcov = document.createElement('div');
+        _pcov.id = '__mc_privacy_cover';
+        _pcov.setAttribute('aria-hidden', 'true');
+        _pcov.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:#ffffff;z-index:2147483647;display:none;';
+        (document.body || document.documentElement).appendChild(_pcov);
+      }
+      _pcov.style.display = 'block';
+    } catch(e){}
+  }
+  function hideCover(){ try { if (_pcov) _pcov.style.display = 'none'; } catch(e){} }
+  // ✅ 속도 개선: 커버 엘리먼트를 미리 생성해 둔다(이 스크립트는 body 끝에 포함되어 body가 이미 존재).
+  //    백그라운드 순간엔 showCover가 display 토글만 하므로 createElement/appendChild 비용 없이 즉시 표시되어
+  //    앱 스위처 스냅샷보다 먼저 화면을 덮을 확률을 높인다. (showCover의 지연생성은 안전 폴백으로 그대로 유지)
+  try {
+    if (!_pcov) {
+      _pcov = document.createElement('div');
+      _pcov.id = '__mc_privacy_cover';
+      _pcov.setAttribute('aria-hidden', 'true');
+      _pcov.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;background:#ffffff;z-index:2147483647;display:none;';
+      (document.body || document.documentElement).appendChild(_pcov);
+    }
+  } catch(e){}
+  // ✅ 커버 제거는 약간 지연 후 수행(앱 스위처는 작아짐→일시적 focus→hidden 순서라, focus에서 즉시 끄면
+  //    스위처 카드가 보이는 순간 커버가 꺼져 노출됨). 지연 중 hidden/blur(백그라운드 진행)가 오면 취소되어
+  //    커버가 유지되고, 진짜 포그라운드 복귀(visibilitychange visible)에선 즉시 제거한다.
+  var _coverHideTimer = null;
+  function cancelHide(){ if (_coverHideTimer) { clearTimeout(_coverHideTimer); _coverHideTimer = null; } }
+  function scheduleHide(){ cancelHide(); _coverHideTimer = setTimeout(function(){ _coverHideTimer = null; if (document.visibilityState === 'visible') hideCover(); }, 400); }
 
   var touchStartX = 0;
   var touchStartY = 0;
@@ -229,28 +270,44 @@ $_debug = $_privacy_settings['debug'] ?? false;
    * =========================== */
   document.addEventListener('visibilitychange', function(){
     if (document.visibilityState === 'hidden') {
+      cancelHide();  // 예약된 커버 제거 취소(백그라운드 진행 중)
+      showCover();   // ✅ 스냅샷 대비: 이동(비동기)보다 먼저 동기적으로 가린다
       pendingHide = true;
       debugLog('hidden');
+      // ✅ 새로고침/링크이동(언로드)은 pagehide/beforeunload가 hidden보다 먼저 와 isNavigating가 켜짐.
+      //    이때는 같은 페이지로 reload/이동하는 것이므로 가림막(goBlank)을 띄우지 않는다(커버는 무해).
+      if (isNavigating) { debugLog('goBlank skip (navigating/reload)'); return; }
+      // ✅ blank.php↔index 전환 직후 iOS가 일시적으로 hidden을 한 번 보내, goBlank가 재발동→reload되며
+      //    "한 번 걸리는" 현상이 있었음. 페이지 로드 직후(1.2초 내)의 hidden은 전환 잔상으로 보고 즉시
+      //    이동(goBlank)을 보류한다. 커버(showCover)는 이미 떴으므로 사생활은 유지되고, 잔상이면 곧
+      //    visible로 돌아와 커버가 제거됨(scheduleHide 보조). 실제 백그라운드는 pagehide(hidden, forced)
+      //    경로로 확실히 가림막 처리된다.
+      if (Date.now() - pageLoadTime < 1200) { debugLog('goBlank deferred (just loaded)'); scheduleHide(); return; }
       // ✅ 이전엔 100ms 후 재확인했는데, 그 사이(밀어올리자마자) 재진입하면 visible이 되어
       //    가림막이 안 켜졌음. 즉시 발동으로 변경 → 빠른 백그라운드/재진입에도 확실히 가림막.
       //    (링크/뒤로가기 이동은 visibilityState가 hidden이 되지 않아 여기 도달하지 않음.
       //     탭 직후 500ms 내 백그라운드만 goBlank의 타이밍 가드로 보류됨.)
       goBlank(false);
     } else {
+      cancelHide();
+      hideCover();   // ✅ 복귀: 커버 제거
       pendingHide = false;
       jumped = false;
       isInternalNavigation = false;
       lastClickTime = 0;  // ✅ 리셋
+      isNavigating = false;  // ✅ bfcache로 보존된 낡은 언로드 플래그 해제(이후 진짜 백그라운드가 스킵되지 않도록)
       debugLog('visible reset');
     }
   }, {passive:true});
 
   window.addEventListener('pageshow', function(e){
     if (e.persisted) {
+      hideCover();   // ✅ bfcache 복귀: 커버 제거
       pendingHide = false;
       jumped = false;
       isInternalNavigation = false;
       lastClickTime = 0;  // ✅ 리셋
+      isNavigating = false;  // ✅ bfcache 복원 시 보존된 낡은 언로드 플래그 해제(다음 백그라운드 가림막 정상화)
       debugLog('bfcache restore');
     }
   }, {passive:true});
@@ -259,11 +316,31 @@ $_debug = $_privacy_settings['debug'] ?? false;
   //    visibilitychange의 100ms 타이머가 실행되지 못해 가림막이 안 켜지는 경우 대비:
   //    pagehide에서도 가림막으로 이동 시도. 단, 뒤로가기/링크 이동(이때는 visibilityState='visible')에서는
   //    발동하면 안 되므로(가림막으로 가로채 느려짐), 화면이 hidden(=앱 백그라운드)일 때만 실행.
+  // ✅ 새로고침/링크이동/닫기 = 언로드 → isNavigating. 백그라운드(앱전환)는 언로드가 아니라 발생 안 함.
+  window.addEventListener('beforeunload', function(){ isNavigating = true; }, {passive:true});
   window.addEventListener('pagehide', function(){
+    isNavigating = true;   // ✅ 언로드 신호(새로고침/이동). hidden이 이 뒤에 오면 가림막 보류됨.
     // 확정 백그라운드(hidden) 또는 hidden 전환이 이미 시작된 경우(pendingHide) → forced로 가드 우회하여 확실히 가림막.
     // 링크/뒤로가기 이동은 visible 상태이고 pendingHide도 false라 여기서 발동하지 않음(가로채지 않음).
-    if (document.visibilityState === 'hidden' || pendingHide) goBlank(true);
+    if (document.visibilityState === 'hidden' || pendingHide) {
+      showCover();
+      if (Date.now() - pageLoadTime < 1200) { debugLog('goBlank deferred (just loaded, pagehide)'); return; }
+      goBlank(true);
+    }
   }, {passive:true});
+
+  // ✅ 앱 스위처(꾹 눌러 밀어올리기)는 일부 기기에서 visibilitychange(hidden)보다 먼저, 창이 포커스를
+  //    잃는(blur=화면이 살짝 작아지는) 순간에 스냅샷이 찍힘(로그상 hidden이 늦게 옴). 이 순간 커버를 덮어
+  //    스냅샷을 가린다. 이동/가림막(goBlank)은 기존 hidden/pagehide 경로 그대로 — blur는 커버만 담당.
+  //    단, 네이티브 폼 컨트롤(드롭다운/입력/공유버튼) 포커스로 인한 blur는 무시해 불필요한 깜빡임을 막는다.
+  window.addEventListener('blur', function(){
+    cancelHide();   // 백그라운드 진행 중이면 예약된 커버 제거를 취소(커버 유지)
+    var ae = document.activeElement;
+    if (ae && /^(INPUT|SELECT|TEXTAREA|BUTTON)$/.test(ae.tagName || '')) return;
+    showCover();
+  }, {passive:true});
+  // focus는 즉시 끄지 않고 지연 제거 — 앱 스위처의 일시적 focus 직후 hidden이 오면 취소되어 커버가 유지됨.
+  window.addEventListener('focus', function(){ scheduleHide(); }, {passive:true});
 
   debugLog('ready');
 

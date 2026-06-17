@@ -432,6 +432,9 @@ mycomix/
 **정리 — 뷰어 위치 localStorage 백업(_vpSave/_vpRead) 제거(비활성 코드)**
 - 이어보기 자동점프 비활성 이후 _vpRead가 더 이상 호출되지 않아, 뷰어 위치 localStorage 단기백업 코드 일체(_VPKEY, _vpSave, _vpRead, visibilitychange/pagehide 리스너)를 제거. 해당 키(mycomix_viewer_pos:*)는 _vp* 내부에서만 쓰였고 외부 의존·전역 노출이 없어 제거가 안전함을 확인. 위치 복원은 URL 해시(#imageN)만 사용하므로 목록 '눌러서 이어보기'·사생활 복귀·저장위치 버튼 동작에는 영향 없음. 백그라운드마다 발생하던 불필요한 localStorage 쓰기도 함께 사라짐. (자동 저장 서버 기록·자동저장 목록은 변경 없음)
 
+**개선 — 목록 스크롤 복원: 진입 방식 구분(새 진입=맨 위, 뒤로가기/새로고침=복원) + 시간 만료 제거**
+- 목록(파일/폴더) 스크롤 위치의 localStorage 단기 백업 localStorage 백업의 시간 만료(LMAX_AGE)를 제거(무제한). 또한 진입 방식을 구분하도록 개선: 폴더목록→파일목록처럼 새로 진입(performance navigation 'navigate')한 목록은 저장 위치를 복원하지 않고 맨 위에서 시작하고, 뷰어에서 뒤로가기/새로고침('back_forward'/'reload')으로 복귀하거나 bfcache(pageshow persisted)로 복원될 때만 마지막 위치를 복원한다. URL #ly(사생활 복귀로 위치가 명시된 경우)는 진입 방식과 무관하게 복원. 증상: 목록→뷰어→사생활 보호→장시간 경과→복귀→뷰어에서 뒤로가기 시, 목록 위치가 맨 위로 가던 문제. 원인은 이 흐름에서 사생활 보호가 '뷰어'에서 발생해 목록 URL엔 #ly가 박히지 않고, sessionStorage는 iOS 탭 폐기로 비워지며, localStorage 백업마저 30분이 지나면 만료되던 것. localStorage 백업의 시간 만료(LMAX_AGE)를 제거해, 며칠이 지나도 마지막 목록 위치가 복원됨. (트레이드오프: 목록을 완전히 새로 열어도 해당 페이지의 마지막 스크롤 위치로 복원될 수 있음 — 개인 만화 서버의 '이어서 보기' 용도에 맞춤) (뷰어 위치는 URL #imageN 기반이라 시간과 무관하게 복원되어 변경 없음. 시간 만료를 언급하던 주석도 '만료 없음'으로 일치시킴)
+
 > 코드 변경은 `config.php`(버전)와 `blank.php`·`login.php`·`viewer.php`·`index.php`·`bookmark.php`·`function.php`·`privacy_shield.php`에 한정됩니다. v2.4.1의 변경 파일(`index.php`·`function.php`·`thumb.php`·`archive_handler.php`)은 그대로 유지되며, 그 외 파일은 v2.4 원본과 동일합니다. 실서버(iOS·실세션·PC 브라우저) 환경에서의 재현 검증은 배포 후 확인이 필요합니다.
 
 ### v2.4.1 (2026-06-07)

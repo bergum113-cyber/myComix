@@ -10044,9 +10044,8 @@ function deleteFolder(folderPath) {
 (function(){
   var KEY = 'mycomix_list_scroll:' + location.pathname + location.search;
   // ✅ localStorage 단기 백업 키 — sessionStorage는 iOS 탭 폐기 시 비워지므로, 장시간 후
-  //    뷰어→뒤로가기→목록 복귀에도 위치를 살리기 위한 보조 저장. 30분 지난 백업은 무시(새 방문은 맨 위).
+  //    뷰어→뒤로가기→목록 복귀에도 위치를 살리기 위한 보조 저장. 만료 없음(무제한) — 장시간 후에도 마지막 목록 위치를 복원.
   var LKEY = 'mycomix_list_scroll_p:' + location.pathname + location.search;
-  var LMAX_AGE = 30 * 60 * 1000;
   function curY(){ return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0; }
   function saveScroll(){
     try {
@@ -10080,35 +10079,52 @@ function deleteFolder(folderPath) {
     }, 60);
   }
 
-  function restoreScroll(){
+  // ✅ 진입 방식 판별: 새 진입(navigate)이면 false, 뒤로/앞으로가기·새로고침(복귀)이면 true.
+  //    폴더목록→파일목록처럼 "새로 들어온" 목록은 맨 위가 정상이고, 뒤로가기 복귀일 때만 저장 위치를 복원한다.
+  function isReturnNav(){
+    try {
+      var e = (performance.getEntriesByType && performance.getEntriesByType('navigation')) || [];
+      if (e.length && e[0] && e[0].type) return (e[0].type === 'back_forward' || e[0].type === 'reload');
+      if (performance.navigation) { var t = performance.navigation.type; return (t === 1 || t === 2); } // 1=reload,2=back_forward
+    } catch(_e){}
+    return false;
+  }
+  function restoreScroll(force){
     try {
       // #search-section 등 #ly가 아닌 해시가 있으면 스크롤 복원을 건드리지 않음(기존 동작)
       var ly = (location.hash || '').match(/^#ly(\d+)$/);
       if (location.hash && !ly) return;
-      // ✅ sessionStorage가 가장 신선한 위치(직전 pagehide 저장). URL의 #ly는 사생활 복귀 때 한 번
-      //    박히면 갱신되지 않아 뒤로가기마다 그 값으로 튀므로, 유효한 sessionStorage(>0)를 최우선으로 한다.
-      var v = sessionStorage.getItem(KEY);
-      var vy = (v !== null) ? (parseInt(v, 10) || 0) : -1;
-      if (vy > 0) { scrollToY(vy); return; }
-      // sessionStorage 없음/0 → URL #ly 폴백(사생활 복귀·iOS 탭 폐기 대비)
+      // ✅ 새 진입(navigate)에서는 저장 위치를 복원하지 않는다(맨 위). 뒤로가기/새로고침(복귀) 또는
+      //    bfcache 복원(pageshow persisted=force)일 때만 복원. 단 URL #ly(사생활 복귀로 위치가 명시된
+      //    경우)는 진입 방식과 무관하게 복원한다.
+      var allow = !!force || isReturnNav();
+      // sessionStorage가 가장 신선한 위치(직전 pagehide 저장) — 복귀일 때만 사용.
+      if (allow) {
+        var v = sessionStorage.getItem(KEY);
+        var vy = (v !== null) ? (parseInt(v, 10) || 0) : -1;
+        if (vy > 0) { scrollToY(vy); return; }
+      }
+      // URL #ly 폴백(사생활 복귀로 위치 명시) — 진입 방식과 무관하게 복원.
       if (ly) { scrollToY(parseInt(ly[1], 10) || 0); return; }
-      // 그래도 없으면 localStorage 단기 백업(30분 내). 30분 지난 건 무시(새 방문 맨 위).
-      try {
-        var lv = localStorage.getItem(LKEY);
-        if (lv) {
-          var o = JSON.parse(lv);
-          if (o && (Date.now() - (o.t || 0)) < LMAX_AGE) scrollToY(parseInt(o.y, 10) || 0);
-        }
-      } catch(e2){}
+      // 그래도 없으면 localStorage 백업(만료 없음) — 복귀일 때만 사용.
+      if (allow) {
+        try {
+          var lv = localStorage.getItem(LKEY);
+          if (lv) {
+            var o = JSON.parse(lv);
+            if (o) scrollToY(parseInt(o.y, 10) || 0);
+          }
+        } catch(e2){}
+      }
     } catch(e){}
   }
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', restoreScroll);
-  else restoreScroll();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ restoreScroll(false); });
+  else restoreScroll(false);
   // ✅ 뒤로가기(bfcache 복원)는 DOMContentLoaded가 뜨지 않고 pageshow(persisted)만 뜬다. 게다가
   //    콜드 리오픈용 scrollRestoration='manual' 때문에 브라우저도 스크롤을 복원하지 않아 맨 위로 간다.
   //    따라서 여기서 저장해 둔 목록 위치(#ly/sessionStorage/localStorage)로 직접 복원한다
   //    → 뷰어에서 뒤로가기 시 목록 스크롤 위치 유지. (persisted=false 일반 로드는 위에서 이미 복원함)
-  window.addEventListener('pageshow', function(e){ if (e && e.persisted) restoreScroll(); });
+  window.addEventListener('pageshow', function(e){ if (e && e.persisted) restoreScroll(true); });
 })();
 </script>
 

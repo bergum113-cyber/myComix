@@ -260,7 +260,7 @@ if ($auto_logout_enabled && !empty($_SESSION['user_id']) && !isset($_SESSION['ti
 // 로그인 유지 사용 시에도 캐시가 무한히 쌓이지 않도록 함
 if (!empty($_SESSION['user_id'])) {
     $cache_cleanup_interval = 3600; // 1시간마다 정리 실행
-    $cache_ttl = 86400; // 24시간 이상 된 캐시 삭제
+    $cache_ttl = 604800; // 7일 이상 된 캐시 삭제 (장시간 후 재압축해제로 위치복원이 어긋나는 빈도 감소)
     $last_cleanup = $_SESSION['last_cache_cleanup'] ?? 0;
     
     if (($now - $last_cleanup) > $cache_cleanup_interval) {

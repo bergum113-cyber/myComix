@@ -206,6 +206,12 @@ function get_bookmark_file() {
     $user_id = $_SESSION['user_id'] ?? 'guest';
     return __DIR__ . '/src/' . preg_replace('/[^a-zA-Z0-9_]/', '', $user_id) . '_bookmark.json';
 }
+
+// ✅ [B단계1] 뷰어 이미지 크기 캐시 파일(계정별). 콜드 리로드 높이예약용. get_bookmark_file 패턴 동일.
+function get_dims_file() {
+    $user_id = $_SESSION['user_id'] ?? 'guest';
+    return __DIR__ . '/src/' . preg_replace('/[^a-zA-Z0-9_]/', '', $user_id) . '_dims.json';
+}
 }
 
 if (!function_exists('get_autosave_file')) {

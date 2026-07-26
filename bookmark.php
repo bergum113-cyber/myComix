@@ -109,6 +109,35 @@ if ($mode === "delete_bookmark") {
     $autosave_arr[$getfile]['bidx'] = $bidx;
     save_json_with_lock($autosave_file, $autosave_arr);
 
+} elseif ($mode === "save_dims") {
+    // ✅ [B단계1] 뷰어 이미지 크기(가로x세로) 저장 — 세션 사용자만(토큰 불필요, autosave 동일 권한).
+    //    콜드 리로드 시 높이 예약(리플로우 제거)용. best-effort: 실패해도 뷰잉/기존 동작에 영향 없음.
+    if (!verify_state_change_request(false)) {
+        simple_error_exit(403, 'Forbidden');
+    }
+    try {
+        $raw = file_get_contents('php://input');
+        $incoming = json_decode($raw, true);
+        if (is_array($incoming) && $getfile !== '') {
+            $dims_file = get_dims_file();
+            $dims_all = load_json_with_lock($dims_file);
+            if (!is_array($dims_all)) $dims_all = [];
+            if (!isset($dims_all[$getfile]) && count($dims_all) >= 500) {
+                array_shift($dims_all); // 파일 수 상한(무한증가 방지)
+            }
+            if (!isset($dims_all[$getfile]) || !is_array($dims_all[$getfile])) $dims_all[$getfile] = [];
+            foreach ($incoming as $idx => $wh) {
+                if (is_array($wh) && isset($wh[0], $wh[1])) {
+                    $w = (int)$wh[0]; $h = (int)$wh[1];
+                    if ($w > 0 && $h > 0 && $w <= 20000 && $h <= 40000) {
+                        $dims_all[$getfile][(string)(int)$idx] = [$w, $h];
+                    }
+                }
+            }
+            save_json_with_lock($dims_file, $dims_all);
+        }
+    } catch (\Throwable $e) { /* best-effort: 실패 무시 (뷰잉 무영향) */ }
+
 } elseif ($mode === "delete_epub_progress") {
     // ✅ EPUB 읽기 진행 삭제
     $progress_file = get_epub_progress_file();

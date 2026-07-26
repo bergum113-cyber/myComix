@@ -6541,7 +6541,7 @@ if(strpos($zip_file, "_imgfolder") == true){
     <a href='viewer.php?filetype=images&mode=<?php echo $viewer; ?>&file=<?php echo encode_url($getdir."/".str_replace("_imgfolder","", $fileinfo)) . $bidx_param; ?>'>
       <div class="col mb-3">
         <div class="card text-black m-0 p-1" style="position:relative;" <?php if ($is_admin): ?>data-folder-path="<?php echo h($getdir."/".str_replace("_imgfolder","", $fileinfo)); ?>"<?php endif; ?>>
-            <img src="thumb.php?file=<?php echo encode_url($getdir."/".str_replace("_imgfolder","", $fileinfo)) . $bidx_param; ?>" class="rounded card-img-top card-img" alt="thumbnail" loading="lazy">
+            <img src="thumb.php?file=<?php echo encode_url($getdir."/".str_replace("_imgfolder","", $fileinfo)) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="thumbnail" loading="lazy">
 <?php 
 // ✅ 즐겨찾기 버튼
 $_fav_file_path = $getdir."/".str_replace("_imgfolder","", $fileinfo);
@@ -6708,7 +6708,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 </button>
 <?php if ($video_thumb && file_exists($video_thumb)): ?>
 <!-- 동영상 썸네일 이미지 - 이미지 ZIP과 동일한 크기 -->
-<img src="index.php?thumb=video&file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" alt="video thumbnail">
+<img src="index.php?thumb=video&file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="video thumbnail">
 <?php else: ?>
 <!-- 동영상 아이콘 SVG - 이미지 ZIP과 동일한 크기 -->
 <div class="rounded card-img-top card-img" style="display: flex; align-items: center; justify-content: center; background: #e9e9e9; min-height: 200px;">
@@ -7336,7 +7336,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 				  <div class="col mb-3">
 					<div class="card text-black m-0 p-1">
 						<!-- 동영상 아이콘 - thumb.php 사용 -->
-						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" alt="video" loading="lazy" style="min-height: 120px; object-fit: contain; background: #e9e9e9;">
+						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="video" loading="lazy" style="min-height: 120px; object-fit: contain; background: #e9e9e9;">
 						<div class="card-img-overlay m-1 p-0">
 							<span class="badge badge-pill badge-primary">ZIP</span>
 							<span class="badge badge-pill badge-info badge-filecount"><?php echo h($totalpage); ?> files</span>
@@ -7405,7 +7405,7 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
         title="<?php echo $_is_favorite ? __h('ui_unfavorite') : __h('ui_add_favorite'); ?>">
     <?php echo $_is_favorite ? '⭐' : '⭐'; ?>
 </button>
-						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" alt="thumbnail" loading="lazy">
+						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="thumbnail" loading="lazy">
 									<div class="card-img-overlay m-1 p-0">
 									<span class="badge badge-pill badge-success"><?php echo h($totalpage); ?>p</span>
 									<span class="badge badge-pill badge-success"><?php echo h($pageorder); ?></span>
@@ -10046,12 +10046,72 @@ function deleteFolder(folderPath) {
   // ✅ localStorage 단기 백업 키 — sessionStorage는 iOS 탭 폐기 시 비워지므로, 장시간 후
   //    뷰어→뒤로가기→목록 복귀에도 위치를 살리기 위한 보조 저장. 만료 없음(무제한) — 장시간 후에도 마지막 목록 위치를 복원.
   var LKEY = 'mycomix_list_scroll_p:' + location.pathname + location.search;
+  var _userScrolled = false;
+  var _anchorStop = null; // 진행 중인 앵커 정착 세션 종료 함수(중복 방지) // 사용자가 실제 스크롤했는지(콘텐츠 밀림과 구분) — 앵커 갱신 판단용
+  try { ['wheel','touchmove','keydown'].forEach(function(evn){ window.addEventListener(evn, function(){ _userScrolled = true; }, { passive:true, capture:true }); }); } catch(e){}
   function curY(){ return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0; }
+  // ✅ 항목 앵커: 목록 내용(이어보기 등)이 바뀌어 픽셀이 밀려도 '같은 항목'으로 정확히 복원하기 위한 헬퍼.
+  function _cardText(c){ try { return (c.textContent||'').replace(/\s+/g,' ').trim().slice(0,40); } catch(e){ return ''; } }
+  function topAnchor(){
+    try {
+      var cards = document.querySelectorAll('.card');
+      var best=null, bestTop=-1e9, bi=-1;
+      for (var i=0;i<cards.length;i++){ var r=cards[i].getBoundingClientRect(); if (r.height<=0) continue; if (r.top<=5 && r.top>bestTop){ bestTop=r.top; best=cards[i]; bi=i; } }
+      if (best) return { txt:_cardText(best), n:bi, off:Math.round(-bestTop) }; // 실제 오프셋: 첫 목록의 스크롤 위치(반쯤 걸친 것 등) 그대로 보존. 썸네일 높이 예약으로 레이아웃 안정 → 드리프트 없음.
+    } catch(e){}
+    return null;
+  }
+  function findAnchorEl(a){
+    try {
+      if (!a || !a.txt) return null;
+      var cards = document.querySelectorAll('.card');
+      if (a.n>=0 && a.n<cards.length && _cardText(cards[a.n])===a.txt) return cards[a.n];
+      var best=null, bestD=1e9;
+      for (var i=0;i<cards.length;i++){ if (_cardText(cards[i])===a.txt){ var d=Math.abs(i-(a.n||0)); if (d<bestD){ bestD=d; best=cards[i]; } } }
+      return best;
+    } catch(e){}
+    return null;
+  }
+  function scrollToAnchor(a){
+    // 항목을 상단에 재정착: 콘텐츠(이미지) 로드로 레이아웃이 바뀔 때마다 다시 맞춘다(느린 로드로 정착이
+    // 뒤늦게 깨지는 것 방지). 사용자가 스크롤하면 즉시 중단(사용자 의도 우선). 정착(1.5초 안정) 또는 최대 10초 후 자동 종료.
+    try {
+      if (!findAnchorEl(a)) return false;
+      try { if (_anchorStop) _anchorStop(); } catch(e){} // 이전 정착 세션 종료(중복/누수 방지)
+      _userScrolled = false;
+      var _off = (a && a.off) || 0;
+      var _t0 = Date.now(), _lastMove = Date.now(), _done = false, _iv = null, _ro = null;
+      function _finish(){ if (_done) return; _done = true; try { clearInterval(_iv); } catch(e){} try { if (_ro) _ro.disconnect(); } catch(e){} if (_anchorStop === _finish) _anchorStop = null; }
+      _anchorStop = _finish;
+      function _place(){
+        if (_done) return;
+        if (_userScrolled || (Date.now() - _t0) > 10000) { _finish(); return; } // 사용자 스크롤/최대10초 시 종료
+        var el = findAnchorEl(a); if (!el) { _finish(); return; }
+        var rect = el.getBoundingClientRect();
+        var cur = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
+        var h = rect.height || 0;
+        var useOff = Math.max(0, Math.min(_off, h > 40 ? (h - 40) : 0));
+        var target = Math.max(0, Math.round(rect.top + cur + useOff));
+        if (Math.abs(cur - target) > 2) { window.scrollTo(0, target); _lastMove = Date.now(); } // 실제 이동
+        else if ((Date.now() - _lastMove) > 1500) { _finish(); } // 1.5초간 조정 불필요 → 정착 완료 종료(늦은 움직임 방지)
+      }
+      _place();
+      _iv = setInterval(_place, 100); // 주기적 재정착(느린 로드 대비, 사용자 스크롤/정착/10초 시 종료)
+      try { if (window.ResizeObserver) { _ro = new ResizeObserver(_place); _ro.observe(document.body); } } catch(e){} // 레이아웃 변화(이미지 로드)마다 재정착
+      return true;
+    } catch(e){}
+    return false;
+  }
   function saveScroll(){
     try {
       var y = curY();
       sessionStorage.setItem(KEY, String(y));
-      try { localStorage.setItem(LKEY, JSON.stringify({ y: y, t: Date.now() })); } catch(e2){}
+      try {
+        var _sa = null;
+        if (!_userScrolled) { try { var _pv = JSON.parse(localStorage.getItem(LKEY) || 'null'); _sa = _pv && _pv.a; } catch(e3){} } // 사용자 스크롤 없었으면(콘텐츠 밀림뿐) 기존 앵커 유지
+        if (!_sa) _sa = topAnchor();
+        localStorage.setItem(LKEY, JSON.stringify({ y: y, t: Date.now(), a: _sa }));
+      } catch(e2){}
     } catch(e){}
   }
   document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'hidden') saveScroll(); });
@@ -10075,7 +10135,7 @@ function deleteFolder(folderPath) {
     var iv = setInterval(function(){
       if (stop) { clearInterval(iv); return; }
       window.scrollTo(0, y);
-      if (++tries >= 12 || Math.abs(curY() - y) < 4) clearInterval(iv);
+      if (++tries >= 50 || Math.abs(curY() - y) < 4) clearInterval(iv);
     }, 60);
   }
 
@@ -10097,7 +10157,20 @@ function deleteFolder(folderPath) {
       // ✅ 새 진입(navigate)에서는 저장 위치를 복원하지 않는다(맨 위). 뒤로가기/새로고침(복귀) 또는
       //    bfcache 복원(pageshow persisted=force)일 때만 복원. 단 URL #ly(사생활 복귀로 위치가 명시된
       //    경우)는 진입 방식과 무관하게 복원한다.
-      var allow = !!force || isReturnNav();
+      // ✅ 근본해결: 목록→뷰 진입 시 기록한 플래그(mycomix_from_viewer)가 이 목록과 일치하면, 진입 방식과
+      //    무관하게 복원(앱 완전종료·장시간 후 뒤로가기=full reload=navigate 케이스 대응). 복원 후 플래그 제거.
+      var fromViewer = false;
+      try {
+        var _thisUrl = location.pathname + location.search;
+        if (localStorage.getItem('mycomix_from_viewer') === _thisUrl) { fromViewer = true; localStorage.removeItem('mycomix_from_viewer'); }
+      } catch(_e){}
+      var allow = !!force || isReturnNav() || fromViewer;
+      // ✅ 항목 앵커 우선: 복귀(allow/fromViewer)일 때, 저장된 '그 항목'을 찾아 복원한다. 목록 내용(이어보기
+      //    갱신 등)이 바뀌어 픽셀이 밀려도 같은 항목으로 정확히 감. 앵커 못 찾으면 아래 픽셀 방식으로 폴백.
+      // #ly(사생활 복귀)일 때도 앵커 우선 — 목록에서 바로 사생활→닫기→복귀 시 내용 밀림 대응. 못 찾으면 #ly 픽셀 폴백.
+      if (allow || fromViewer || ly) {
+        try { var _la = localStorage.getItem(LKEY); if (_la) { var _oa = JSON.parse(_la); if (_oa && _oa.a && scrollToAnchor(_oa.a)) return; } } catch(_ea){}
+      }
       // sessionStorage가 가장 신선한 위치(직전 pagehide 저장) — 복귀일 때만 사용.
       if (allow) {
         var v = sessionStorage.getItem(KEY);
@@ -10125,6 +10198,23 @@ function deleteFolder(folderPath) {
   //    따라서 여기서 저장해 둔 목록 위치(#ly/sessionStorage/localStorage)로 직접 복원한다
   //    → 뷰어에서 뒤로가기 시 목록 스크롤 위치 유지. (persisted=false 일반 로드는 위에서 이미 복원함)
   window.addEventListener('pageshow', function(e){ if (e && e.persisted) restoreScroll(true); });
+  // ✅ 근본해결: 목록에서 뷰(viewer/epub/txt)로 이동하는 클릭을 잡아 "이 목록에서 뷰로 들어감"을 기록.
+  //    localStorage라 앱 종료·장시간 후에도 유지되며, 위치는 saveScroll이 함께 저장 → 그 목록 복귀 시 복원.
+  document.addEventListener('click', function(ev){
+    try {
+      var n = ev.target;
+      for (var _i = 0; n && n !== document && _i < 8; _i++) {
+        var _href = (n.tagName === 'A' && n.getAttribute && n.getAttribute('href')) || '';
+        var _oc = (n.getAttribute && n.getAttribute('onclick')) || '';
+        if (/(viewer|epub_viewer|txt_viewer)\.php/.test(_href) || /(viewer|epub_viewer|txt_viewer)\.php/.test(_oc)) {
+          try { localStorage.setItem('mycomix_from_viewer', location.pathname + location.search); } catch(_e1){}
+          try { saveScroll(); } catch(_e2){}
+          break;
+        }
+        n = n.parentNode;
+      }
+    } catch(e){}
+  }, true);
 })();
 </script>
 

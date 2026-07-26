@@ -5062,6 +5062,16 @@ const options = {
     threshold: 0.01
 };
 
+// ✅ [B단계1] 캡처한 이미지 크기를 서버에 저장(sendBeacon). 비어있으면 아무것도 안 함. 실패 무시(무회귀).
+function sendDims(){
+	try {
+		if (!window._mcDims) return;
+		if (!Object.keys(window._mcDims).length) return;
+		var _durl = <?php echo js("bookmark.php?mode=save_dims&file=" . encode_url($getfile) . "&bidx=" . $current_bidx); ?>;
+		var _body = JSON.stringify(window._mcDims);
+		if (navigator && navigator.sendBeacon) { navigator.sendBeacon(_durl, new Blob([_body], {type:'application/json'})); }
+	} catch(e){}
+}
 function sendAutosave(u){
 	// ✅ 페이지 이탈/숨김 시점 호출: sendBeacon으로 확실히 전송(비동기 $.get가 이탈로 취소되는 race 방지).
 	//    sendBeacon은 같은 출처라 세션 쿠키를 함께 보내고, bookmark.php의 autosave는 토큰 없이 세션만으로 허용됨.
@@ -5157,7 +5167,11 @@ window.myComixCurrentHash = function(){
 
 $(window).on("beforeunload", function () {
 	autosave();
+	try{ sendDims(); }catch(e){}
 });
+// ✅ [B단계1] 모바일 대비 크기 전송 훅(백그라운드/이탈). 실패 무시(무회귀).
+document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'hidden'){ try{ sendDims(); }catch(e){} } });
+window.addEventListener('pagehide', function(){ try{ sendDims(); }catch(e){} });
 
 window.addEventListener("visibilitychange", function(e) {
     if (document.visibilityState == 'hidden') {
@@ -5281,6 +5295,14 @@ document.addEventListener("DOMContentLoaded", function () {
       img.classList.add('loaded');
       img.classList.remove('lazyload');
       imageStatus.set(imgIndex, 'loaded');
+      // ✅ [B단계1] 로드된 실제 이미지 크기 캡처(높이 예약용). 추가비용 거의 0, 실패 무시.
+      //    단일모드(pageOrder 0)의 깨끗한 인덱스(^image\d+$)만 저장 → 세로분할 반쪽크롭이 캐시를 오염시키는 것 방지.
+      try {
+        if ((typeof pageOrder === 'undefined' || pageOrder === '0') && /^image\d+$/.test(img.id)
+            && tempImg.naturalWidth > 0 && tempImg.naturalHeight > 0) {
+          (window._mcDims = window._mcDims || {})[imgIndex] = [tempImg.naturalWidth, tempImg.naturalHeight];
+        }
+      } catch(e){}
       loadingImages.delete(img.id);
       activeLoads--;
       
@@ -5674,7 +5696,7 @@ if (file) {
       }
 
       var tries = 0;
-      var MAX_TRIES = 120;                                          // 120 × 250ms ≈ 최대 30초 가드
+      var MAX_TRIES = 240;                                          // 240 × 250ms ≈ 최대 60초 가드 (콜드 리로드에서 깊은 위치까지 재정렬할 시간 확보; 짧은시간 케이스는 2틱에 완료돼 무영향)
       var lastHeight = -1;                                          // 바닥 고정 시 문서 높이 안정 판정용
       var stableTicks = 0;                                          // 일반 복원 시 위치 안정(드리프트 종료) 판정용
       var timer = setInterval(function(){
@@ -5795,6 +5817,68 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
 <!-- ✅ 페이지 전환 (bootstrap.php 함수 사용으로 중복 코드 제거) -->
 <?php render_page_transition_script(true); ?>
 
+<?php
+// ✅ [B단계2] 이 파일의 캐시된 이미지 크기를 불러와, 툰 단일모드에서 img에 실제 width/height를 부여(높이 예약).
+//    → 콜드 리로드 시 위쪽 이미지 로드를 기다리지 않고도 높이가 확정돼 #imageN 위치가 정확해짐.
+//    크기를 모르는 이미지는 기존 동작(height=250px) 그대로 → 데이터 없으면 무동작(무회귀).
+$_mc_dims = new stdClass();
+try {
+    if ($mode == "toon" && function_exists('get_dims_file')) {
+        $_dims_raw = @file_get_contents(get_dims_file());
+        if ($_dims_raw !== false) {
+            $_dims_all = @json_decode($_dims_raw, true);
+            if (is_array($_dims_all) && isset($_dims_all[$getfile]) && is_array($_dims_all[$getfile]) && count($_dims_all[$getfile]) > 0) {
+                $_mc_dims = $_dims_all[$getfile];
+            }
+        }
+    }
+} catch (\Throwable $e) { $_mc_dims = new stdClass(); }
+?>
+<?php if ($mode == "toon"){ ?>
+<script>
+// [B단계2] 캐시된 크기로 높이 예약(단일모드). 실패/데이터없음 시 완전 무동작.
+window._mcDimsCache = <?php echo json_encode($_mc_dims); ?>;
+(function(){
+  try {
+    if (typeof pageOrder !== 'undefined' && pageOrder !== '0') return; // 단일모드만
+    var D = window._mcDimsCache;
+    if (!D || typeof D !== 'object') return;
+    if (!Object.keys(D).length) return; // 데이터 없으면 무동작(무회귀)
+    function apply(img){
+      try {
+        if (!img || (img.dataset && img.dataset._arSet)) return;
+        var m = (img.id || '').match(/^image(\d+)$/); // 단일 인덱스만(_left/_right 제외)
+        if (!m) return;
+        var d = D[m[1]];
+        if (d && d[0] > 0 && d[1] > 0) {
+          img.setAttribute('width', d[0]);
+          img.setAttribute('height', d[1]); // 실제 비율로 높이 예약(height=250px 대체) → img-fluid가 비례 스케일
+          if (img.dataset) img.dataset._arSet = '1';
+        }
+      } catch(e){}
+    }
+    function scan(root){ try { (root || document).querySelectorAll("img[id^='image']").forEach(apply); } catch(e){} }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function(){ scan(document); });
+    else scan(document);
+    try {
+      var mo = new MutationObserver(function(muts){
+        for (var i = 0; i < muts.length; i++){
+          var a = muts[i].addedNodes;
+          for (var j = 0; j < a.length; j++){
+            var n = a[j];
+            if (n && n.nodeType === 1){
+              if (n.matches && n.matches("img[id^='image']")) apply(n);
+              if (n.querySelectorAll) scan(n);
+            }
+          }
+        }
+      });
+      mo.observe(document.documentElement || document.body, { childList:true, subtree:true });
+    } catch(e){}
+  } catch(e){}
+})();
+</script>
+<?php } ?>
 <?php require_once __DIR__ . '/privacy_shield.php'; ?>
 </body>
 </html>

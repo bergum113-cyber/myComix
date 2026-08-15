@@ -29,7 +29,7 @@
 // ============================================================
 // 앱 버전
 // ============================================================
-define('MYCOMIX_VERSION', 'v2.4.2');
+define('MYCOMIX_VERSION', 'v2.4.3');
 
 // ============================================================
 // 설정 파일 경로
@@ -327,6 +327,7 @@ $max_autosave = $app_settings['max_autosave'] ?? '10';
 $max_bookmark = $app_settings['max_bookmark'] ?? '10';
 $max_favorites = $app_settings['max_favorites'] ?? '50';
 $new_badge_hours = $app_settings['new_badge_hours'] ?? '24';
+$viewed_mark_seconds = $app_settings['viewed_mark_seconds'] ?? '2';
 $use_cover = $app_settings['use_cover'] ?? 'y';
 $use_listcover = $app_settings['use_listcover'] ?? 'y';
 

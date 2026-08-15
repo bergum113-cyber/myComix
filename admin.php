@@ -1089,6 +1089,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     $settings['max_bookmark'] = (string)max(1, (int)($_POST['max_bookmark'] ?? 10));
     $settings['max_favorites'] = (string)max(1, (int)($_POST['max_favorites'] ?? 50));
     $settings['new_badge_hours'] = (string)max(0, (int)($_POST['new_badge_hours'] ?? 24));
+    $settings['viewed_mark_seconds'] = (string)max(0, min(60, (float)($_POST['viewed_mark_seconds'] ?? 2))); // 복귀 표시 유지 시간(초), 0=자동 해제 안 함
     $settings['use_cover'] = ($_POST['use_cover'] ?? 'n') === 'y' ? 'y' : 'n';
     $settings['use_listcover'] = ($_POST['use_listcover'] ?? 'n') === 'y' ? 'y' : 'n';
     
@@ -3030,6 +3031,7 @@ if (file_exists($_settings_file)) {
     if (isset($_loaded_settings['maxview_folder_mobile'])) $maxview_folder_mobile = $_loaded_settings['maxview_folder_mobile'];
     if (isset($_loaded_settings['maxview_file_mobile'])) $maxview_file_mobile = $_loaded_settings['maxview_file_mobile'];
     if (isset($_loaded_settings['new_badge_hours'])) $new_badge_hours = $_loaded_settings['new_badge_hours'];
+    if (isset($_loaded_settings['viewed_mark_seconds'])) $viewed_mark_seconds = $_loaded_settings['viewed_mark_seconds'];
     if (isset($_loaded_settings['max_bookmark'])) $max_bookmark = $_loaded_settings['max_bookmark'];
     if (isset($_loaded_settings['max_autosave'])) $max_autosave = $_loaded_settings['max_autosave'];
     if (isset($_loaded_settings['max_favorites'])) $max_favorites = $_loaded_settings['max_favorites'];
@@ -3037,7 +3039,7 @@ if (file_exists($_settings_file)) {
     if (isset($_loaded_settings['pages_per_group_mobile'])) $pages_per_group_mobile = $_loaded_settings['pages_per_group_mobile'];
 }
 if(!isset($max_bookmark))$max_bookmark=10;if(!isset($max_autosave))$max_autosave=3;
-if(!isset($max_favorites))$max_favorites=50;if(!isset($new_badge_hours))$new_badge_hours=24;
+if(!isset($max_favorites))$max_favorites=50;if(!isset($new_badge_hours))$new_badge_hours=24;if(!isset($viewed_mark_seconds))$viewed_mark_seconds=2;
 if(!isset($maxview_folder))$maxview_folder=50;if(!isset($maxview_file))$maxview_file=100;if(!isset($maxview_folder_mobile))$maxview_folder_mobile=30;if(!isset($maxview_file_mobile))$maxview_file_mobile=30;
 if(!isset($pages_per_group))$pages_per_group=5;if(!isset($pages_per_group_mobile))$pages_per_group_mobile=3;
 if(!isset($use_cover))$use_cover='n';if(!isset($use_listcover))$use_listcover='n';
@@ -3097,6 +3099,7 @@ foreach ($dirs as $idx => $dir): ?>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_bookmark"); ?></td><td class=""><input type="number" name="max_bookmark" class="form-control" value="<?php echo h($max_bookmark); ?>" min="1" required></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_favorites"); ?></td><td class=""><input type="number" name="max_favorites" class="form-control" value="<?php echo h($max_favorites); ?>" min="1" required><small class="text-muted">Max bookmarks for folders/files</small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_new_badge_hours"); ?></td><td class=""><input type="number" name="new_badge_hours" class="form-control" value="<?php echo h($new_badge_hours); ?>" min="0" max="8760" required><small class="text-muted">Files added within N hours get <span class="badge badge-danger">N</span> badge (0 = disabled, default: 24h)</small></td></tr>
+<tr class="border-bottom"><td class="text-right">최근 본 항목 강조 시간(초)</td><td class=""><input type="number" name="viewed_mark_seconds" class="form-control" value="<?php echo h($viewed_mark_seconds); ?>" min="0" max="60" step="0.5" required><small class="text-muted">만화·폴더를 열었다가 뒤로가기로 목록에 돌아오면 방금 본 항목이 테두리로 강조됩니다(즐겨찾기·북마크·자동저장 목록도 동일). 이 강조를 몇 초 동안 유지할지 정합니다. 0 = 계속 유지 (기본: 2초)</small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_cover"); ?></td><td class="">
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_cover" value="y" <?php if($use_cover=="y")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_enable"); ?></label></div>
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_cover" value="n" <?php if($use_cover=="n")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_disable"); ?></label></div>

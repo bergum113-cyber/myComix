@@ -506,6 +506,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                     }
                 }
                 
+                // ✅ [B] 삭제된 파일에 연결된 북마크/자동저장/즐겨찾기 항목도 함께 정리(고아 항목 방지).
+                //    키는 상대경로($file_path)로 저장되므로 원본 입력 경로로 매칭. best-effort(실패해도 삭제 자체는 성공).
+                try {
+                    $_clean_key = trim(str_replace('\\', '/', $file_path), '/');
+                    $_clean_targets = [];
+                    if (function_exists('get_bookmark_file'))  $_clean_targets[] = get_bookmark_file();
+                    if (function_exists('get_autosave_file'))  $_clean_targets[] = get_autosave_file();
+                    if (function_exists('get_favorites_file')) $_clean_targets[] = get_favorites_file();
+                    foreach ($_clean_targets as $_cf) {
+                        if (!$_cf || !is_file($_cf)) continue;
+                        $_arr = load_json_with_lock($_cf);
+                        if (!is_array($_arr)) continue;
+                        $_changed = false;
+                        foreach (array_keys($_arr) as $_k) {
+                            if (trim(str_replace('\\', '/', (string)$_k), '/') === $_clean_key) { unset($_arr[$_k]); $_changed = true; }
+                        }
+                        if ($_changed) save_json_with_lock($_cf, $_arr);
+                    }
+                } catch (\Throwable $_e) { /* best-effort */ }
+
                 log_user_activity('파일 삭제', $validated_path);
                 echo json_encode(['success' => true, 'message' => __('api_file_deleted', $file_name)]);
             } else {
@@ -5231,6 +5251,23 @@ $autosave_arr = array();
 $autosave_title = array();
 $autosave_mark = array();
 $favorites_arr = array();
+// ✅ [A] 북마크/자동저장/즐겨찾기 항목의 실제 파일 존재 확인(고아 항목 표시용).
+//    상대경로 키 + 항목별 bidx로 base_dir을 골라 확인. 같은 키 반복 조회는 정적 캐시로 1회만 stat.
+if (!function_exists('mc_entry_exists')) {
+    function mc_entry_exists($rel_path, $entry_bidx = null) {
+        global $base_dirs, $current_bidx;
+        static $_cache = [];
+        $rel = trim(str_replace('\\', '/', (string)$rel_path), '/');
+        if ($rel === '') return true; // 알 수 없으면 존재로 간주(오탐 방지)
+        $b = ($entry_bidx === null) ? (int)$current_bidx : (int)$entry_bidx;
+        $ck = $b . '|' . $rel;
+        if (isset($_cache[$ck])) return $_cache[$ck];
+        $base = $base_dirs[$b] ?? null;
+        if (!$base) return $_cache[$ck] = true; // base를 못 찾으면 존재로 간주(드라이브 미연결 등 오탐 방지)
+        $full = rtrim($base, '/\\') . '/' . $rel;
+        return $_cache[$ck] = (@file_exists($full));
+    }
+}
 $favorites_title = array();
 $favorites_mark = array();
 
@@ -5302,7 +5339,8 @@ if(count($autosave_arr)>0){
 for($count=0;$count < count($autosave_arr); $count++){
 	$title_temp = explode("/", $autosave_title[$count]);
 ?>
-	<tr class="border-bottom border-success"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0"><?php echo $_svg_warn; ?></button><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_autosave&file=<?php echo encode_url($autosave_title[$count]) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $autosave_mark[$count]['page_order']; ?>&file=<?php echo encode_url($autosave_title[$count]); ?>&bidx=<?php echo $autosave_mark[$count]['bidx'] ?? 0; ?>#<?php echo $autosave_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+<?php $_mc_miss = !mc_entry_exists($autosave_title[$count], $autosave_mark[$count]['bidx'] ?? null); ?>
+	<tr class="border-bottom border-success<?php echo $_mc_miss ? ' mc-missing' : ''; ?>"<?php echo $_mc_miss ? ' title="파일 없음"' : ''; ?> data-fav-thumb="<?php echo h("thumb.php?file=" . encode_url($autosave_title[$count]) . "&bidx=" . ($autosave_mark[$count]['bidx'] ?? 0)); ?>" data-fav-title="<?php echo h(mark_display_title($title_temp[count($title_temp) - 1])); ?>" data-fav-url="<?php echo h("viewer.php?mode=toon&page_order=" . $autosave_mark[$count]['page_order'] . "&file=" . encode_url($autosave_title[$count]) . "&bidx=" . ($autosave_mark[$count]['bidx'] ?? 0) . "#" . $autosave_mark[$count]['bookmark']); ?>"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0"><?php echo $_svg_warn; ?></button><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_autosave&file=<?php echo encode_url($autosave_title[$count]) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $autosave_mark[$count]['page_order']; ?>&file=<?php echo encode_url($autosave_title[$count]); ?>&bidx=<?php echo $autosave_mark[$count]['bidx'] ?? 0; ?>#<?php echo $autosave_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
 	}
 	}
@@ -5315,12 +5353,13 @@ if(count($bookmark_arr)>0){
 for($count=0;$count < count($bookmark_arr); $count++){
 	$title_temp = explode("/", $bookmark_title[$count]);
 ?>
-	<tr class="border-bottom border-light"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_bookmark&file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><?php
+<?php $_mc_miss = !mc_entry_exists($bookmark_title[$count], is_array($bookmark_mark[$count]) ? ($bookmark_mark[$count]['bidx'] ?? null) : null); ?>
+	<tr class="border-bottom border-light<?php echo $_mc_miss ? ' mc-missing' : ''; ?>"<?php echo $_mc_miss ? ' title="파일 없음"' : ''; ?> data-fav-thumb="<?php echo h("thumb.php?file=" . encode_url($bookmark_title[$count]) . "&bidx=" . (is_array($bookmark_mark[$count]) ? ($bookmark_mark[$count]['bidx'] ?? $current_bidx) : $current_bidx)); ?>" data-fav-title="<?php echo h(mark_display_title($title_temp[count($title_temp) - 1])); ?>" data-fav-url="<?php echo h("viewer.php?file=" . encode_url($bookmark_title[$count]) . $bidx_param . (!is_array($bookmark_mark[$count]) ? "#" . $bookmark_mark[$count] : "")); ?>"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_bookmark&file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><?php
 	if(!is_array($bookmark_mark[$count])){
-?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>#<?php echo $bookmark_mark[$count]; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>#<?php echo $bookmark_mark[$count]; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
 	} else {
-?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $bookmark_mark[$count]['page_order']; ?>&file=<?php echo encode_url($bookmark_title[$count]); ?>&bidx=<?php echo $bookmark_mark[$count]['bidx'] ?? 0; ?>#<?php echo $bookmark_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $bookmark_mark[$count]['page_order']; ?>&file=<?php echo encode_url($bookmark_title[$count]); ?>&bidx=<?php echo $bookmark_mark[$count]['bidx'] ?? 0; ?>#<?php echo $bookmark_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
 	}
 	}
@@ -5337,7 +5376,7 @@ if(false && count($epub_progress) > 0){
         $title_temp = explode("/", $file_path);
         $percent = (int)($progress_data['percent'] ?? 0);
 ?>
-	<tr class="border-bottom" style="border-color:#9b59b6 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-info" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_epub_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./epub_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📖 <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+	<tr class="border-bottom" style="border-color:#9b59b6 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-info" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_epub_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./epub_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📖 <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
     }
 }
@@ -5353,7 +5392,7 @@ if(false && count($txt_progress) > 0){
         $title_temp = explode("/", $file_path);
         $percent = (int)($progress_data['percent'] ?? 0);
 ?>
-	<tr class="border-bottom" style="border-color:#27ae60 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-success" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_txt_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./txt_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📝 <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+	<tr class="border-bottom" style="border-color:#27ae60 !important;"><td align=right style="white-space:nowrap;"><span class="badge badge-success" style="font-size:0.7em;"><?php echo $percent; ?>%</span><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_txt_progress&file=<?php echo encode_url($file_path) . $bidx_param; ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./txt_viewer.php?file=<?php echo encode_url($file_path) . $bidx_param; ?>'">📝 <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
     }
 }
@@ -5364,11 +5403,27 @@ $_fav_max = (int)get_app_settings('max_favorites', 50);
 <tr id="favCountRow"><td colspan="2"><small class="text-muted">⭐ <span id="favCount"><?php echo count($favorites_arr); ?></span>/<?php echo $_fav_max; ?></small></td></tr>
 <?php
 if(count($favorites_arr) > 0){
+    $_fav_no = 0;
     foreach($favorites_arr as $file_path => $fav_data){
+        $_fav_no++;
         $title_temp = explode("/", $file_path);
         $fav_bidx = $fav_data['bidx'] ?? 0;
+        // ✅ [즐겨찾기 미리보기] 이동 URL과 표시 제목을 미리 계산(아래 기존 출력과 동일 규칙). data 속성으로 전달.
+        $_fav_ext = strtolower(pathinfo($file_path, PATHINFO_EXTENSION));
+        if (in_array($_fav_ext, ['zip', 'cbz', 'rar', 'cbr', '7z', 'cb7'])) {
+            $_fav_url = "viewer.php?mode=toon&file=" . encode_url($file_path) . "&bidx=" . $fav_bidx;
+        } elseif ($_fav_ext === 'epub') {
+            $_fav_url = "epub_viewer.php?file=" . encode_url($file_path) . "&bidx=" . $fav_bidx;
+        } elseif ($_fav_ext === 'txt') {
+            $_fav_url = "txt_viewer.php?file=" . encode_url($file_path) . "&bidx=" . $fav_bidx;
+        } else {
+            $_fav_url = "index.php?dir=" . encode_url($file_path) . "&bidx=" . $fav_bidx;
+        }
+        $_fav_thumb = "thumb.php?file=" . encode_url($file_path) . "&bidx=" . $fav_bidx; // type 미지정=auto: 폴더/압축/txt·epub을 thumb.php가 자동 판별(목록 카드와 동일)
+        $_fav_title = mark_display_title($title_temp[count($title_temp) - 1]);
 ?>
-	<tr class="border-bottom" style="border-color:#f39c12 !important;" data-fav-path="<?php echo h($file_path); ?>"><td align=right style="white-space:nowrap;"><span class="badge badge-warning" style="font-size:0.7em;">⭐</span><button class="btn btn-sm m-0 p-0" onclick="removeFavoriteClick(this, '<?php echo addslashes($file_path); ?>', <?php echo $fav_bidx; ?>);"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./<?php 
+<?php $_mc_miss = !mc_entry_exists($file_path, $fav_bidx); ?>
+	<tr class="border-bottom<?php echo $_mc_miss ? ' mc-missing' : ''; ?>" style="border-color:#f39c12 !important;"<?php echo $_mc_miss ? ' title="파일 없음"' : ''; ?> data-fav-path="<?php echo h($file_path); ?>" data-fav-url="<?php echo h($_fav_url); ?>" data-fav-thumb="<?php echo h($_fav_thumb); ?>" data-fav-title="<?php echo h($_fav_title); ?>"><td align=right style="white-space:nowrap;"><span class="badge badge-warning" style="font-size:0.7em;">⭐</span><span class="badge badge-light" style="font-size:0.7em;"><?php echo $_fav_no; ?></span><button class="btn btn-sm m-0 p-0" onclick="removeFavoriteClick(this, '<?php echo addslashes($file_path); ?>', <?php echo $fav_bidx; ?>);"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./<?php 
         // 파일 타입에 따라 다른 뷰어로 이동
         $ext = strtolower(pathinfo($file_path, PATHINFO_EXTENSION));
         if (in_array($ext, ['zip', 'cbz', 'rar', 'cbr', '7z', 'cb7'])) {
@@ -5381,7 +5436,7 @@ if(count($favorites_arr) > 0){
             // 폴더인 경우
             echo "index.php?dir=" . encode_url($file_path) . "&bidx=" . $fav_bidx;
         }
-    ?>'">⭐ <?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+    ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
     }
 }
@@ -8323,6 +8378,7 @@ function refreshBookmarkTable() {
                 var cur = document.getElementById('bookmarkTable');
                 if (fresh && cur) {
                     cur.innerHTML = fresh.innerHTML;   // 카운트행+모든 행을 최신으로 교체(인라인 onclick 유지)
+                    try { if (window.mcFavReapplySel) window.mcFavReapplySel(); } catch(_e){} // ✅ 교체로 사라진 '최근 본 항목' 강조 복구
                 } else {
                     location.reload();                 // 구조 변동 시 안전하게 전체 새로고침
                 }
@@ -8431,12 +8487,13 @@ function addFavoriteToBookmark(filePath, bidx, filename, viewer) {
         viewerUrl = 'index.php?dir=' + encodeURIComponent(filePath) + '&bidx=' + bidx;
     }
     
+    var _favNo = table.querySelectorAll('tr[data-fav-path]').length + 1; // 동적 추가 행 번호 = 기존 행 수 + 1
     tr.innerHTML = '<td align="right" style="white-space:nowrap;">' +
-        '<span class="badge badge-warning" style="font-size:0.7em;">⭐</span>' +
+        '<span class="badge badge-warning" style="font-size:0.7em;">⭐</span><span class="badge badge-light" style="font-size:0.7em;">' + _favNo + '</span>' +
         '<button class="btn btn-sm m-0 p-0" onclick="removeFavoriteClick(this, \'' + filePath.replace(/'/g, "\\'") + '\', ' + bidx + ')">' +
         '<svg width="1em" height="1em" viewBox="0 0 18 18" fill="currentColor"><path fill-rule="evenodd" d="M16 8A8 8 0 1 1 0 8a8 8 0 0 1 16 0zM5.354 4.646a.5.5 0 1 0-.708.708L7.293 8l-2.647 2.646a.5.5 0 0 0 .708.708L8 8.707l2.646 2.647a.5.5 0 0 0 .708-.708L8.707 8l2.647-2.646a.5.5 0 0 0-.708-.708L8 7.293 5.354 4.646z"/></svg>' +
         '</button></td><td>' +
-        '<button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="location.href=\'./' + viewerUrl + '\'">⭐ ' + escapeHtml(filename) + '</button></td>';
+        '<button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="location.href=\'./' + viewerUrl + '\'">' + escapeHtml(filename) + '</button></td>';
     
     // 테이블 맨 아래에 추가
     table.appendChild(tr);
@@ -10200,6 +10257,24 @@ function deleteFolder(folderPath) {
   window.addEventListener('pageshow', function(e){ if (e && e.persisted) restoreScroll(true); });
   // ✅ 근본해결: 목록에서 뷰(viewer/epub/txt)로 이동하는 클릭을 잡아 "이 목록에서 뷰로 들어감"을 기록.
   //    localStorage라 앱 종료·장시간 후에도 유지되며, 위치는 saveScroll이 함께 저장 → 그 목록 복귀 시 복원.
+  // ✅ [본 항목 표시] 목록 URL별로 '방금 본 항목'을 따로 보관.
+  //    단일 키를 쓰면 폴더 표시가 그 안에서 연 파일 표시에 덮여 사라짐(폴더→파일→뷰→뒤로→뒤로 시 폴더 강조 실패).
+  var MC_VIEWED_MAP = 'mcViewedMap';
+  function mcListId(){ try { return location.pathname + location.search; } catch(e){ return ''; } }
+  function mcViewedRead(){ try { var v = JSON.parse(localStorage.getItem(MC_VIEWED_MAP) || '{}'); return (v && typeof v === 'object') ? v : {}; } catch(e){ return {}; } }
+  function mcViewedWrite(m){
+    try {
+      var ks = Object.keys(m);
+      if (ks.length > 12) { // 오래된 항목부터 정리(무한 증가 방지)
+        ks.sort(function(a,b){ return (m[a].t||0) - (m[b].t||0); });
+        for (var i = 0; i < ks.length - 12; i++) delete m[ks[i]];
+      }
+      localStorage.setItem(MC_VIEWED_MAP, JSON.stringify(m));
+    } catch(e){}
+  }
+  function mcViewedSet(href){ try { var m = mcViewedRead(); m[mcListId()] = { h: href, t: Date.now() }; mcViewedWrite(m); } catch(e){} }
+  function mcViewedGet(){ try { var e = mcViewedRead()[mcListId()]; return e ? e.h : null; } catch(e){ return null; } }
+  function mcViewedClear(){ try { var m = mcViewedRead(); delete m[mcListId()]; mcViewedWrite(m); } catch(e){} }
   document.addEventListener('click', function(ev){
     try {
       var n = ev.target;
@@ -10209,12 +10284,63 @@ function deleteFolder(folderPath) {
         if (/(viewer|epub_viewer|txt_viewer)\.php/.test(_href) || /(viewer|epub_viewer|txt_viewer)\.php/.test(_oc)) {
           try { localStorage.setItem('mycomix_from_viewer', location.pathname + location.search); } catch(_e1){}
           try { saveScroll(); } catch(_e2){}
+          // ✅ [본 항목 표시] 뷰로 들어간 카드를 기억(복귀 시 강조). 카드 밖(즐겨찾기 등) 클릭은 해당 없음.
+          try {
+            // 카드 찾기: 이 목록은 <a> 안에 .card가 있는 구조라 안쪽(querySelector) 우선, 혹시 반대 구조면 위쪽(closest) 보조
+            var _card = null;
+            try { _card = (n.querySelector ? n.querySelector('.card') : null) || (n.closest ? n.closest('.card') : null); } catch(_e4){}
+            if (_card) {
+              var _old = document.querySelectorAll('.card.mc-viewed');
+              for (var _k = 0; _k < _old.length; _k++) _old[_k].classList.remove('mc-viewed');
+              _card.classList.add('mc-viewed');
+              mcViewedSet(_href || _oc);
+            }
+          } catch(_e3){}
+          break;
+        }
+        // ✅ [본 항목 표시] 폴더 진입도 카드 기억 (from_viewer 플래그는 뷰 전용이므로 설정하지 않음)
+        if (_href && /index\.php\?/.test(_href) && /[?&]dir=/.test(_href)) {
+          try {
+            var _card2 = (n.querySelector ? n.querySelector('.card') : null) || (n.closest ? n.closest('.card') : null);
+            if (_card2) {
+              var _old2 = document.querySelectorAll('.card.mc-viewed');
+              for (var _k2 = 0; _k2 < _old2.length; _k2++) _old2[_k2].classList.remove('mc-viewed');
+              _card2.classList.add('mc-viewed');
+              mcViewedSet(_href);
+            }
+          } catch(_e5){}
           break;
         }
         n = n.parentNode;
       }
     } catch(e){}
   }, true);
+  // ✅ [본 항목 표시] 콜드 로드 복원: 저장된 뷰어 링크와 일치하는 카드를 강조 (bfcache 복귀는 클래스가 보존되어 불필요)
+  try {
+    var _vk = mcViewedGet();
+    if (_vk && !document.querySelector('.card.mc-viewed')) {
+      // <a href>가 .card의 부모인 구조: 링크를 순회하며 그 링크의 안쪽(자식) 카드 또는 바깥(부모) 카드를 매칭
+      var _links = document.querySelectorAll('a[href]');
+      for (var _li = 0; _li < _links.length; _li++) {
+        var _h = _links[_li].getAttribute('href') || '';
+        if (_h === _vk) {
+          var _c = _links[_li].querySelector('.card') || (_links[_li].closest ? _links[_li].closest('.card') : null);
+          if (_c) { _c.classList.add('mc-viewed'); break; }
+        }
+      }
+    }
+  } catch(e){}
+  // ✅ [본 항목 표시] 2초 유지 후 자동 해제 + 키 소비. pageshow는 콜드/bfcache 복귀 모두 발화하므로 한 곳에서 처리.
+  window.addEventListener('pageshow', function(){
+    try {
+      var _mv = Array.prototype.slice.call(document.querySelectorAll('.card.mc-viewed'));
+      if (_mv.length) {
+        try { mcViewedClear(); } catch(_e){} // 현재 목록의 표시만 소비(다른 목록의 표시는 유지)
+        var _holdMs = <?php echo (int)round(max(0, (float)get_app_settings('viewed_mark_seconds', 2)) * 1000); ?>; // 관리자 설정: 복귀 표시 유지 시간 (0=자동 해제 안 함)
+        if (_holdMs > 0) setTimeout(function(){ for (var _m = 0; _m < _mv.length; _m++) { try { _mv[_m].classList.remove('mc-viewed'); } catch(_e){} } }, _holdMs);
+      }
+    } catch(_e){}
+  });
 })();
 </script>
 
@@ -10242,6 +10368,249 @@ function deleteFolder(folderPath) {
 })();
 </script>
 
+<!-- ✅ [즐겨찾기 미리보기] PC=hover, 모바일=탭. 오버레이(fixed)라 목록 레이아웃을 밀지 않음(스크롤 복원 무영향). -->
+<style>
+/* ✅ [게시판식 행 하이라이트] PC: hover한 행 표시(즐겨찾기/북마크/자동저장 공통) */
+@media (hover: hover) and (pointer: fine){
+  tr[data-fav-thumb]:hover>td{background:rgba(243,156,18,.13)}
+}
+/* 모바일: 미리보기가 열린(선택된) 행 표시 */
+tr.mcfp-sel>td{background:rgba(243,156,18,.18)}
+/* ✅ [게시판식] 메인 목록 카드: PC hover 시 강조 */
+@media (hover: hover) and (pointer: fine){
+  .card:hover{outline:2px solid rgba(243,156,18,.45);outline-offset:-1px}
+}
+/* 뷰로 들어갔다 돌아온 '방금 본' 카드 표시 */
+.card.mc-viewed{outline:2px solid #f39c12;outline-offset:-1px}
+/* ✅ [A] 파일이 없는(고아) 항목 표시 — 흐리게 + 취소선, 뒤에 (파일 없음) 라벨. 데이터는 그대로 두고 표시만 구분. */
+tr.mc-missing{opacity:.5}
+tr.mc-missing td button{text-decoration:line-through}
+tr.mc-missing td:last-child::after{content:" (파일 없음)";font-size:11px;color:#c0392b;white-space:nowrap}
+#mcFavPreview{position:fixed;z-index:2000;display:none;background:#fff;border:1px solid #f39c12;border-radius:8px;box-shadow:0 6px 24px rgba(0,0,0,.28);padding:6px;max-width:220px}
+#mcFavPreview img{display:block;width:200px;height:266px;object-fit:contain;background:#f4f4f4;border-radius:4px}
+#mcFavPreview .mcfp-t{font-size:12px;line-height:1.3;margin-top:4px;max-width:200px;word-break:break-all;color:#333}
+#mcFavPreview .mcfp-open{display:block;width:100%;margin-top:5px;padding:6px 0;font-size:13px;border:0;border-radius:4px;background:#f39c12;color:#fff;cursor:pointer}
+#mcFavPreview.mcfp-mobile{max-width:240px}
+@media (prefers-color-scheme: dark){#mcFavPreview{background:#2b2b2b;border-color:#f39c12}#mcFavPreview .mcfp-t{color:#eee}}
+</style>
+<div id="mcFavPreview" role="dialog" aria-label="즐겨찾기 미리보기"></div>
+<script>
+(function(){
+  try {
+    var box = document.getElementById('mcFavPreview');
+    if (!box) return;
+    var canHover = false;
+    try { canHover = window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches; } catch(e){}
+    var showTimer = null, curRow = null;
+
+    function hide(){
+      try {
+        if (showTimer) { clearTimeout(showTimer); showTimer = null; }
+        box.style.display = 'none';
+        box.innerHTML = ''; // 이미지 해제(메모리/요청 정리)
+        curRow = null; // 선택(mcfp-sel)은 유지: 다른 행 선택/이동 시 clearSel()이 정리
+      } catch(e){}
+    }
+    function build(row){
+      var thumb = row.getAttribute('data-fav-thumb') || '';
+      var title = row.getAttribute('data-fav-title') || '';
+      var url   = row.getAttribute('data-fav-url') || '';
+      box.innerHTML = '';
+      var img = document.createElement('img');
+      img.alt = 'thumbnail'; img.loading = 'lazy';
+      img.onerror = function(){ try { img.style.display='none'; var p=document.createElement('div'); p.className='mcfp-t'; p.textContent='(미리보기 없음)'; box.insertBefore(p, box.firstChild); } catch(e){} };
+      img.src = thumb; // 열 때만 로드(온디맨드)
+      box.appendChild(img);
+      var t = document.createElement('div'); t.className = 'mcfp-t'; t.textContent = title; box.appendChild(t);
+      if (!canHover) { // 모바일: 명시적 열기 버튼(썸네일 탭도 동일 동작)
+        var b = document.createElement('button'); b.className = 'mcfp-open'; b.type='button'; b.textContent = '열기';
+        b.addEventListener('click', function(ev){ ev.stopPropagation(); go(url, row); });
+        box.appendChild(b);
+        img.style.cursor = 'pointer';
+        img.addEventListener('click', function(ev){ ev.stopPropagation(); go(url, row); });
+      }
+      return url;
+    }
+    function go(url, row){
+      if (!url) return;
+      try { if (window.myComixMarkNavigation) window.myComixMarkNavigation(); } catch(e){}
+      hide();
+      if (row) { markSel(row); saveReturn(row); } // 복귀 시 이 행을 선택 상태로
+      location.href = './' + url;
+    }
+    function place(row){
+      try {
+        var r = row.getBoundingClientRect();
+        box.style.display = 'block';
+        var bw = box.offsetWidth || 220, bh = box.offsetHeight || 300;
+        var left;
+        if (canHover) {
+          // 행 오른쪽에 공간이 있으면 오른쪽, 없으면 행 왼쪽에 배치(화면 끝에 붙어 잘리는 것 방지)
+          left = r.right + 12;
+          if (left + bw > window.innerWidth - 8) left = r.left - bw - 12;
+          if (left < 8) left = Math.max(8, Math.min(r.left, window.innerWidth - bw - 8));
+        } else {
+          left = 15; // 모바일: 화면 왼쪽 15px 고정
+        }
+        if (left + bw > window.innerWidth - 8) left = Math.max(8, window.innerWidth - bw - 8);
+        var top = canHover ? r.top : (r.bottom + 8);
+        if (top + bh > window.innerHeight - 8) top = Math.max(8, window.innerHeight - bh - 8);
+        box.style.left = Math.round(left) + 'px';
+        box.style.top  = Math.round(top) + 'px';
+      } catch(e){}
+    }
+    function open(row){
+      if (!row) return;
+      if (!canHover) { markSel(row); } // 모바일: 선택 행 하이라이트
+      curRow = row;
+      box.className = canHover ? '' : 'mcfp-mobile';
+      build(row);
+      box.style.display = 'block'; box.style.left='-9999px'; box.style.top='0px'; // 크기 측정 후 배치
+      place(row);
+    }
+    var _selUrl = null; // 현재 선택된 행의 식별자(테이블이 통째로 교체돼도 다시 찾기 위해 보관)
+    function clearSel(){ try { _selUrl = null; var els=document.querySelectorAll('tr.mcfp-sel'); for (var i=0;i<els.length;i++) els[i].classList.remove('mcfp-sel'); } catch(e){} }
+    function markSel(row){ try { clearSel(); row.classList.add('mcfp-sel'); _selUrl = row.getAttribute('data-fav-url') || null; } catch(e){} }
+    // 목록 테이블이 교체된 뒤(refreshBookmarkTable) 선택 표시를 복구. 해제 타이머가 이미 돌았으면 _selUrl이 없어 no-op.
+    window.mcFavReapplySel = function(){
+      try {
+        if (!_selUrl) return;
+        var rows = document.querySelectorAll('tr[data-fav-url]');
+        for (var i = 0; i < rows.length; i++) {
+          if (rows[i].getAttribute('data-fav-url') === _selUrl) { rows[i].classList.add('mcfp-sel'); break; }
+        }
+      } catch(e){}
+    };
+    var _selTimer = null;
+    function revealSel(){
+      // 선택 행이 패널(자체 스크롤 컨테이너) 밖에 있으면 보이도록 스크롤. 이미 보이면 건드리지 않음.
+      try {
+        var row = document.querySelector('tr.mcfp-sel'); if (!row) return;
+        var col = document.getElementById('bookmarkCollapse'); if (!col) return;
+        var cr = col.getBoundingClientRect(), rr = row.getBoundingClientRect();
+        if (rr.top < cr.top || rr.bottom > cr.bottom) {
+          col.scrollTop = col.scrollTop + (rr.top - cr.top) - Math.max(0, (cr.height - rr.height) / 2);
+        }
+      } catch(e){}
+    }
+    function scheduleSelClear(){
+      // 관리자 설정(복귀 표시 유지 시간)만큼 뒤에 선택 표시 해제. 0이면 자동 해제하지 않음.
+      try {
+        var ms = <?php echo (int)round(max(0, (float)get_app_settings('viewed_mark_seconds', 2)) * 1000); ?>;
+        if (_selTimer) { clearTimeout(_selTimer); _selTimer = null; }
+        if (ms > 0) _selTimer = setTimeout(function(){ clearSel(); _selTimer = null; }, ms);
+      } catch(e){}
+    }
+    function saveReturn(row){
+      // 뷰로 이동 직전: 선택 행 + 패널 내부 스크롤 저장(복귀 시 복원)
+      try {
+        var col = document.getElementById('bookmarkCollapse');
+        sessionStorage.setItem('mcFavReturn', JSON.stringify({ u: row.getAttribute('data-fav-url') || '', s: col ? col.scrollTop : 0 }));
+      } catch(e){}
+    }
+    // 인라인 onclick(location.href 즉시 이동)에서도 저장되도록 전역 노출 — 캡처 리스너는 이동 전에 실행될 틈이 없음
+    window.mcFavMarkAndSave = function(el){
+      try {
+        var row = el; var i = 0;
+        while (row && row.nodeType === 1 && !(row.hasAttribute && row.hasAttribute('data-fav-url')) && i < 8) { row = row.parentNode; i++; }
+        if (row && row.nodeType === 1 && row.hasAttribute && row.hasAttribute('data-fav-url')) {
+          markSel(row); saveReturn(row);
+        }
+      } catch(e){}
+    };
+    function rowOf(el){
+      try { for (var n=el, i=0; n && n!==document && i<6; n=n.parentNode, i++){ if (n.nodeType===1 && n.hasAttribute && n.hasAttribute('data-fav-thumb')) return n; } } catch(e){}
+      return null;
+    }
+
+    if (canHover) {
+      // PC: hover 시 지연 표시(스치는 이동에 깜빡임 방지), 벗어나면 닫힘. 클릭은 기존 동작 그대로.
+      document.addEventListener('mouseover', function(ev){
+        var row = rowOf(ev.target); if (!row || row === curRow) return;
+        if (showTimer) clearTimeout(showTimer);
+        showTimer = setTimeout(function(){ open(row); }, 180);
+      });
+      document.addEventListener('mouseout', function(ev){
+        var row = rowOf(ev.target); if (!row) return;
+        var to = ev.relatedTarget;
+        if (to && (rowOf(to) === row || box.contains(to))) return;
+        hide();
+      });
+    } else {
+      // 모바일: 제목 탭 → 미리보기. 바깥 탭/스크롤 → 닫힘. 썸네일/열기 → 이동.
+      document.addEventListener('click', function(ev){
+        try {
+          if (box.contains(ev.target)) return;
+          var row = rowOf(ev.target);
+          if (row) {
+            if (ev.target.closest && ev.target.closest('button') && !ev.target.closest('td:last-child')) { /* 삭제 등 다른 버튼은 기존 동작 */ }
+            var tgtBtn = ev.target.closest ? ev.target.closest('button') : null;
+            // 제목 버튼 판별: 행의 마지막 td(제목 칸) 안의 버튼 = 이동 버튼. 삭제/경고 아이콘 버튼(첫 td)은 제외.
+            var isTitle = false;
+            try {
+              if (tgtBtn) {
+                var td = tgtBtn.closest('td');
+                var tds = row.getElementsByTagName('td');
+                isTitle = !!(td && tds.length && td === tds[tds.length - 1]);
+              }
+            } catch(e2){}
+            if (isTitle) { ev.preventDefault(); ev.stopPropagation(); if (curRow === row) { hide(); } else { open(row); } return; }
+          }
+          hide();
+        } catch(e){}
+      }, true);
+      window.addEventListener('scroll', function(){ if (curRow) hide(); }, { passive:true });
+    }
+    // ✅ [복귀 선택 유지] 제목(마지막 td) 버튼으로 이동하는 모든 클릭에서 선택 표시 + 상태 저장 (PC 직클릭 포함)
+    document.addEventListener('click', function(ev){
+      try {
+        var row = rowOf(ev.target); if (!row) return;
+        var btn = ev.target.closest ? ev.target.closest('button') : null; if (!btn) return;
+        var td = btn.closest('td'); var tds = row.getElementsByTagName('td');
+        if (!(td && tds.length && td === tds[tds.length - 1])) return; // 제목 칸 버튼만
+        if (!canHover) return; // 모바일은 미리보기(go)에서 처리
+        markSel(row); saveReturn(row);
+      } catch(e){}
+    }, true);
+    // ✅ [복귀 복원] 뒤로가기 콜드 로드에서만: 패널 열기 + 내부 스크롤 + 선택 행 표시.
+    //    - back/forward 판정: bfcache 복귀는 스크립트가 재실행되지 않아 키가 남는데, 그 키가 이후 일반 이동(콜드)에서
+    //      발동해 패널이 저절로 열리던 버그 수정 → 일반 이동이면 키만 폐기하고 적용하지 않음.
+    try {
+      var _ret = sessionStorage.getItem('mcFavReturn');
+      if (_ret) {
+        var _isBack = false;
+        try { var _ne = performance.getEntriesByType('navigation'); _isBack = !!(_ne && _ne[0] && _ne[0].type === 'back_forward'); }
+        catch(_eb){ try { _isBack = !!(performance.navigation && performance.navigation.type === 2); } catch(_eb2){} }
+        sessionStorage.removeItem('mcFavReturn'); // 항상 1회 소비(오발동 방지)
+        if (_isBack) {
+          var _r = JSON.parse(_ret);
+          if (_r && _r.u) {
+            var _rows = document.querySelectorAll('tr[data-fav-url]');
+            for (var _i = 0; _i < _rows.length; _i++) {
+              if (_rows[_i].getAttribute('data-fav-url') === _r.u) {
+                var _col = document.getElementById('bookmarkCollapse');
+                if (_col) { _col.style.display = 'block'; _col.scrollTop = _r.s || 0; } // fadeToggle과 같은 display 제어
+                markSel(_rows[_i]);
+                revealSel(); scheduleSelClear(); // 선택 행 보이게 + 해제 타이머 시작
+                break;
+              }
+            }
+          }
+        }
+      }
+    } catch(e){}
+    // ✅ [복귀 선택 2초 해제] 복귀 시 표시된 선택(mcfp-sel)은 2초 후 자동 해제. bfcache 복귀는 키도 폐기.
+    window.addEventListener('pageshow', function(e){
+      try {
+        if (e && e.persisted) { try { sessionStorage.removeItem('mcFavReturn'); } catch(_e){} }
+        if (document.querySelector('tr.mcfp-sel')) { revealSel(); scheduleSelClear(); } // bfcache 복귀: 보이게 + 해제 타이머 재시작
+      } catch(_e){}
+    });
+    window.addEventListener('resize', hide, { passive:true });
+    document.addEventListener('keydown', function(ev){ if (ev.key === 'Escape') hide(); });
+  } catch(e){}
+})();
+</script>
 <?php require_once __DIR__ . '/privacy_shield.php'; ?>
 
 <div style="text-align:center; padding:15px 0 10px; color:#999; font-size:12px;">

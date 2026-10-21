@@ -7121,7 +7121,23 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 					}
 
 					$zip = new ZipArchive;
-					$_arc_opened = $_is_rar7z ? (($_arc = archive_open_handler($zip_file)) !== false) : ($zip->open($zip_file) == TRUE);
+					$_arc_opened = $_is_rar7z ? (($_arc = archive_open_handler($zip_file)) !== false) : ($zip->open($zip_file) === TRUE);
+
+					// ★ (2026-10-21) 압축 열기 실패 처리. 기존 `== TRUE` 느슨한 비교는 ZipArchive::open()의 실패 코드(정수, 예: 19)를
+					//   참으로 판정해, 열지 못한 zip을 "이미지 0개"로 보고 json에 viewer=video·totalpage=0 을 저장(캐시 오염)한 뒤
+					//   close()에서 PHP 8 ValueError(Fatal)로 그 아래 목록이 잘렸음(손상 파일·업로드 직후 백신 잠금 등).
+					//   → 엄격 비교로 판정하고, 실패 시 아무 파일도 쓰지 않은 채 이 카드만 기본값으로 표시(다음 방문 때 다시 시도).
+					//   동영상 zip 조기 종료와 같은 방식으로 표시용 변수를 직접 지정 — 이전 카드의 $json_data/$img_output 이 섞이지 않게 초기화.
+					if (!$_arc_opened) {
+						unset($zip);
+						$img_output = "";
+						$json_data = [];
+						$totalpage = (int)($cached_totalpage ?? 0);
+						$pageorder = "[ - ]";
+						$viewer = "toon";
+						$is_video_archive = false;
+						goto display_zip_item;
+					}
 
 					if ($_is_rar7z) {
 					}
@@ -7310,7 +7326,10 @@ $_is_favorite = isset($favorites_arr[$_fav_file_path]);
 			$img_output = $json_data['thumbnail'];
 			
 			// ✅ 캐시된 배지 정보가 있으면 사용, 없으면 JSON에서 읽기
-			if ($cached_totalpage !== null) {
+			// ★ (2026-09-30) 목록 캐시 totalpage=0 인데 방금 생성/보유한 json 에 실제 페이지수가 있으면 json 사용.
+			//   웹 업로드 직후 새로고침 시 목록 캐시가 json 생성 전에 만들어져 0 이 저장되고, 그 0 을 그대로 써서 0p 로 보이던 문제.
+			//   json 에도 값이 없으면(이미지 없는 zip 등) 기존대로 캐시 값 사용 → 기존 동작·경고 발생 여부 변화 없음.
+			if ($cached_totalpage !== null && ((int)$cached_totalpage > 0 || empty($json_data['totalpage']))) {
 				$totalpage = $cached_totalpage;
 				$pageorder = $cached_pageorder;
 				$viewer = $cached_viewer ?? 'toon';

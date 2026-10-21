@@ -1438,7 +1438,9 @@ if($type != "pdf"){
     } elseif ($json_file && !is_file($json_file)) {    
         if(preg_match('/\.(zip|cbz)$/i', $base_file)){
             $zip = new ZipArchive;
-            if ($zip->open($base_file) == TRUE) {
+            // ★ (2026-10-21) `== TRUE` → `=== TRUE`: 열기 실패 코드(정수)를 성공으로 보고 getFromIndex()에서 PHP 8 ValueError(Fatal)로
+            //   뷰어가 깨지던 문제. 실패 시 메타 생성을 건너뛰고(json 미작성 → 다음 열람 때 재시도) $mode 는 위에서 정한 기본값 사용.
+            if ($zip->open($base_file) === TRUE) {
                 $thumbnail_index = 0;
                 for ($findthumb = 0; $findthumb < $zip->numFiles; $findthumb++) {
                     $find_img = $zip->getNameIndex($findthumb);
@@ -1851,6 +1853,12 @@ if($type == "pdf") {
   border-radius: 8px;
   font-size: 0.85em;
   pointer-events: none;
+}
+/* ★ (2026-10-21) 이미지 로딩 전에는 페이지 번호 숨김 — 로딩 전 자리(placeholder)에 번호가 먼저 떠서
+   가운데에 1~끝 번호가 줄줄이 보이다가, 이미지가 뜨면 오른쪽 하단으로 이동하던 문제.
+   이미지가 loaded 되는 순간(lazyload 제거와 동시에) 함께 나타남 — 이미지도 그 순간 즉시 표시되므로 별도 transition 없음. 최종 실패(load-failed)는 어느 페이지인지 알 수 있게 번호 표시 유지. */
+img.lazyload:not(.loaded):not(.load-failed) + .img-overlay-page {
+  opacity: 0;
 }
 
 #scrollTopBtn {

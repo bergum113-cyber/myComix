@@ -59,8 +59,8 @@ function init_language() {
     // 5 → 4: 사이트 기본 언어 (app_settings.json)
     $settings_file = __DIR__ . '/src/app_settings.json';
     if (file_exists($settings_file)) {
-        $settings = json_decode(file_get_contents($settings_file), true);
-        if (isset($settings['language']) && array_key_exists($settings['language'], $available)) {
+        $settings = function_exists('load_app_settings') ? load_app_settings($settings_file) : json_decode((string)@file_get_contents($settings_file), true); // ★ (2026-11-02 08:55) 공유 잠금 읽기
+        if (is_array($settings) && isset($settings['language']) && is_string($settings['language']) && array_key_exists($settings['language'], $available)) {
             $lang = $settings['language'];
         }
     }
@@ -70,24 +70,26 @@ function init_language() {
         if (function_exists('load_users')) {
             $users = load_users();
             $uid = $_SESSION['user_id'];
-            if (isset($users[$uid]['lang']) && array_key_exists($users[$uid]['lang'], $available)) {
+            if (isset($users[$uid]['lang']) && is_string($users[$uid]['lang']) && array_key_exists($users[$uid]['lang'], $available)) {
                 $lang = $users[$uid]['lang'];
             }
         }
     }
     
     // 2: 세션에 저장된 언어
-    if (isset($_SESSION['lang']) && array_key_exists($_SESSION['lang'], $available)) {
+    if (isset($_SESSION['lang']) && is_string($_SESSION['lang']) && array_key_exists($_SESSION['lang'], $available)) {
         $lang = $_SESSION['lang'];
     }
     
     // 1: GET 파라미터로 언어 변경 → 사용자 설정에도 저장
-    if (isset($_GET['lang']) && array_key_exists($_GET['lang'], $available)) {
+    if (isset($_GET['lang']) && is_string($_GET['lang']) && array_key_exists($_GET['lang'], $available)) { // ★ (2026-11-02 09:11) lang[]=… 배열이면 모든 화면 500 이던 것
         $lang = $_GET['lang'];
         if (session_status() === PHP_SESSION_ACTIVE) {
             $_SESSION['lang'] = $lang;
-            // 로그인 사용자면 users.json에도 저장
-            if (!empty($_SESSION['user_id']) && function_exists('load_users') && function_exists('save_users')) {
+            // 로그인 사용자면 users.json에도 저장 — ★ (2026-10-30) 한 요청에서 두 번 불려도(init.php 메시지용) 한 번만 저장
+            static $__lang_saved = false;
+            if (!$__lang_saved && !empty($_SESSION['user_id']) && function_exists('load_users') && function_exists('save_users')) {
+                $__lang_saved = true;
                 save_user_language($_SESSION['user_id'], $lang);
             }
         }
@@ -123,6 +125,7 @@ function save_user_language($user_id, $lang) {
     
     $users = load_users();
     if (!isset($users[$user_id])) return false;
+    if (($users[$user_id]['lang'] ?? null) === $lang) return true; // ★ (2026-11-02 09:11) 같으면 회원 파일을 다시 쓰지 않음(?lang= 링크마다 users.json 전체를 쓰던 것)
     
     $users[$user_id]['lang'] = $lang;
     return save_users($users);

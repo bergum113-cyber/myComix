@@ -14,6 +14,8 @@
 
 // ✅ bootstrap.php 사용으로 통일
 // 로드 순서: config.php → security_helpers.php → function.php → init.php → cache_util.php
+// ★ (2026-11-09 14:10) 목록·뷰어가 뒤에서 부르는 그림 요청 — 자동 로그아웃용 활동 표시를 건드리지 않음(blank.php 와 같음). 전에는 썸네일 한 장에 '비대상 화면에서 옴'으로 잡혀 다음 화면의 비활동 자동 로그아웃 검사·만료 세션 연장 거절이 꺼졌음
+define('MC_NO_ACTIVITY_TOUCH', true);
 require_once __DIR__ . "/bootstrap.php";
 
 // ============================================================
@@ -28,8 +30,8 @@ function output_placeholder_image() {
     $placeholder = base64_decode("R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7");
     header('Content-Type: image/gif');
     header('Content-Length: ' . strlen($placeholder));
-    header('Cache-Control: public, max-age=86400');
-    header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
+    // ★ (2026-11-02 21:17) '아직 표지 없음'은 캐시하지 않음 — 하루 동안 캐시돼, 서재 '최근 추가' 등에서 먼저 불린 책은 표지가 생긴 뒤에도 목록·서재·즐겨찾기에서 빈칸이었음
+    header('Cache-Control: no-cache, must-revalidate');
     echo $placeholder;
     exit;
 }
@@ -51,7 +53,7 @@ function output_video_icon_image() {
     
     header('Content-Type: image/svg+xml');
     header('Content-Length: ' . strlen($svg));
-    header('Cache-Control: public, max-age=86400');
+    header('Cache-Control: private, max-age=86400');
     header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
     echo $svg;
     exit;
@@ -103,6 +105,8 @@ function detect_video_archive($filepath, $json_file) {
     }
     
     // 3. 압축 내용 직접 확인 (.json이 없을 때만 실행)
+    // ★ (2026-11-02 11:36) 주석대로 .json 이 있으면 건너뜀(그림 없는 압축·아주 큰 첫 그림은 썸네일 없이 .json 이 생겨, 전에는 요청마다 압축을 다시 열었음 — 7z 는 외부 프로그램)
+    if (is_file($json_file)) return $result;
     if (preg_match('/\.(zip|cbz)$/i', $filepath) && class_exists('ZipArchive')) {
         $zip = new ZipArchive();
         if ($zip->open($filepath) === true) {
@@ -169,6 +173,12 @@ if ($filepath === false) {
     // ✅ 에러 응답 통일: simple_error_exit() 사용
     simple_error_exit(403, $debug ? 'Error: invalid path' : 'Forbidden');
 }
+// ★ (2026-10-30) 보안: 폴더 권한(그룹별 숨김 폴더)의 표지·썸네일을 주소로 받지 못하게
+if (!mc_path_allowed($file)) {
+    simple_error_exit(403, $debug ? 'Error: no permission' : 'Forbidden');
+}
+// ★ (2026-11-04 00:26) 세션 일찍 닫기(warmup.php 와 같은 이유 — 썸네일·동영상 표지를 만드는 동안 한 로그아웃이 되살아나지 않게). 아래는 세션 값을 읽기만 함
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
 if ($debug) {
     header('Content-Type: text/plain; charset=utf-8');
@@ -194,9 +204,17 @@ if ($type === 'auto') {
         } else {
             $type = 'imgfolder';
         }
-    } elseif (preg_match('/\.(txt|epub)$/i', $filepath)) {
+    } elseif (preg_match('/\.(txt|epub)$/i', $filepath)
+        || (preg_match('/\.hwpx?$/i', $filepath) && (is_file(preg_replace('/\.hwpx?$/i', '', $filepath) . '.jpg') || is_file($filepath . '.jpg')))) {
+        // ★ (2026-11-02 14:34) hwp·hwpx 도 같은 이름 .jpg 가 있으면 그것을 표지로(목록 화면과 같게) — 없으면 전처럼 아래 압축 처리
         // TXT/EPUB 파일 - 같은 이름의 이미지 파일 찾기
         $type = 'book';
+    } elseif (preg_match('/\.pdf$/i', $filepath)) {
+        // ★ (2026-11-02 19:10) PDF — 목록 화면처럼 같은 이름 그림(이름.jpg·png…)을 표지로(즐겨찾기·북마크 화면 표지가 빈칸이었음). 없으면 기본 그림
+        $type = 'book';
+    } elseif (function_exists('is_video_file') && is_video_file($filepath)) {
+        // ★ (2026-11-02 19:10) 동영상 — 목록 화면이 만들어 둔 '이름.video_thumb.jpg' 가 있으면 그것(여기서 새로 만들지는 않음). 없으면 기본 그림
+        $type = 'vthumb';
     } else {
         $type = 'zip';
     }
@@ -218,7 +236,7 @@ if ($type === 'cover') {
     
 } elseif ($type === 'book') {
     // TXT/EPUB 파일의 썸네일 - 같은 이름의 이미지 파일 찾기
-    $base_name = preg_replace('/\.(txt|epub)$/i', '', $filepath);
+    $base_name = preg_replace('/\.(txt|epub|hwpx?|pdf)$/i', '', $filepath);
     $thumb_file = '';
     
     // 가능한 썸네일 파일 검색
@@ -249,6 +267,12 @@ if ($type === 'cover') {
         output_placeholder_image();  // ✅ 500 대신 placeholder
     }
     
+} elseif ($type === 'vthumb') {
+    $__vt = $filepath . '.video_thumb.jpg';
+    if (!is_file($__vt)) output_placeholder_image();
+    $thumbnail = @file_get_contents($__vt);
+    if ($thumbnail === false || $thumbnail === '') output_placeholder_image();
+
 } elseif ($type === 'imgfolder') {
     // imgfolder: 폴더경로.image_files.json
     $json_file = $filepath . '.image_files.json';
@@ -267,6 +291,10 @@ if ($type === 'cover') {
     // ZIP/RAR/7Z 파일: 파일명.json (확장자 제거)
     // 예: 파일명.zip → 파일명.json, 파일명.rar → 파일명.json
     $json_file = get_cache_json_path($filepath);
+    // ★ (2026-11-02 08:55) 지원하지 않는 확장자면 캐시 경로가 원본 그대로 — 원본(영상 등 큰 파일)을 통째로 읽거나 '복구'로 덮어쓰지 않게 바로 기본 그림
+    if ($json_file === $filepath && !$debug) {
+        output_placeholder_image();
+    }
     
     // ✅ 동영상 ZIP 감지 (함수화로 효율성 개선)
     if ($debug) {
@@ -328,7 +356,7 @@ if (isset($thumbnail[0], $thumbnail[1])) {
 // 캐시 헤더 설정 (1일)
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($thumbnail));
-header('Cache-Control: public, max-age=86400');
+header('Cache-Control: private, max-age=86400');
 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
 
 echo $thumbnail;

@@ -36,6 +36,16 @@
  * - init_bidx() 호출 후라면 $base_dir이 이미 설정되므로 validate_file_path() 권장
  */
 
+if (!function_exists('mc_path_within')) {
+/** ★ (2026-11-04 00:47) 실제 경로가 기준 폴더 자신이거나 그 안인지 — 앞부분만 비교하면 'D:\comics' 기준에 'D:\comics_old\…' 도 통과했음 */
+function mc_path_within($real_path, $real_base) {
+    if (!is_string($real_path) || !is_string($real_base) || $real_base === '') return false;
+    if ($real_path === $real_base) return true;
+    $b = rtrim($real_base, '/\\');
+    return strpos($real_path, $b . DIRECTORY_SEPARATOR) === 0 || (DIRECTORY_SEPARATOR === '\\' && strpos($real_path, $b . '/') === 0);
+}
+}
+
 /**
  * 사용자 입력 검증 및 정제
  * 
@@ -46,6 +56,10 @@
  */
 function sanitize_input($input, $type = 'string', $default = '') {
     if ($input === null || $input === '') {
+        return $default;
+    }
+    // ★ (2026-11-02 08:49) 배열(?x[]=…)이 오면 기본값 — 아래 문자열 함수가 PHP 8 에서 TypeError(500)로 멈췄음
+    if (is_array($input) || is_object($input)) {
         return $default;
     }
 
@@ -77,7 +91,9 @@ function sanitize_input($input, $type = 'string', $default = '') {
             
         case 'path':
             // 경로에서 위험한 문자 제거
-            $input = str_replace(['..', '<', '>', '"', "'", '\\'], '', $input);
+            // ★ (2026-11-02 09:03) 작은따옴표(')는 지우지 않음 — "Girl's Love" 같은 폴더가 "Girls Love" 로 바뀌어 열리지 않던 문제
+            //   (Windows 이름에 못 쓰는 < > " 와 '..' 는 그대로 지움 / 출력은 모두 h()·encode_url()·http_build_query 로 이스케이프)
+            $input = str_replace(['..', '<', '>', '"', '\\'], '', $input);
             return trim($input);
             
         case 'filename':
@@ -140,7 +156,8 @@ function hv($text) {
  * @return string JSON 인코딩된 문자열
  */
 function js($value) {
-    return json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE);
+    // ★ (2026-11-02 11:39) 깨진 글자(UTF-8 아님) 이름이어도 false 가 되지 않게 — false 면 'const X = ;' 로 그 화면 스크립트가 통째로 멈췄음
+    return json_encode($value, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
 }
 
 /**
@@ -176,6 +193,7 @@ function u($text) {
  * $file = decode_file_param($_GET['file']);
  */
 function decode_file_param($param) {
+    if (!is_string($param)) return is_scalar($param) ? (string)$param : ''; // ★ (2026-11-02 08:49) 배열이면 빈 값(500 오류 방지)
     // 1. + 기호 보존 (URL에서 공백으로 해석되는 것 방지)
     $value = str_replace('+', '%2B', $param);
     
@@ -247,7 +265,8 @@ function generate_csrf_token() {
  * @return bool 검증 결과
  */
 function verify_csrf_token($token) {
-    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+    // ★ (2026-10-30) 배열 등 문자열이 아닌 값이 오면 hash_equals TypeError(500) 대신 실패 처리
+    return isset($_SESSION['csrf_token']) && is_string($token) && is_string($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
 }
 
 /**
@@ -307,6 +326,7 @@ if (!function_exists('validate_file_path')) {
  * }
  */
 function validate_file_path($path, $base_dir) {
+    if (!is_string($path) || !is_string($base_dir)) return false; // ★ (2026-11-02 09:58) 배열(path[]=…)이면 preg_match 에서 500 이던 것
     // 1단계: 위험한 패턴 차단
     // - 실제 경로 순회 패턴 (..)
     // - NULL 바이트 (파일시스템 공격)
@@ -332,7 +352,7 @@ function validate_file_path($path, $base_dir) {
     // 4단계: 대상 경로 검증
     if (file_exists($full_path)) {
         $real_path = realpath($full_path);
-        if ($real_path === false || strpos($real_path, $real_base) !== 0) {
+        if ($real_path === false || !mc_path_within($real_path, $real_base)) {
             return false;
         }
         return $full_path;
@@ -342,7 +362,7 @@ function validate_file_path($path, $base_dir) {
     $parent_dir = dirname($full_path);
     if (is_dir($parent_dir)) {
         $real_parent = realpath($parent_dir);
-        if ($real_parent === false || strpos($real_parent, $real_base) !== 0) {
+        if ($real_parent === false || !mc_path_within($real_parent, $real_base)) {
             return false;
         }
     }
@@ -374,13 +394,21 @@ if (!function_exists('safe_redirect')) {
             header('Location: ' . $fallback);
             exit;
         }
-        
+        // ★ (2026-11-08 전체 점검 2차 fix72) 제어 문자·공백·역슬래시가 든 주소, http(s):// 가 아닌 스킴으로 시작하는 주소(https:/\… · javascript: 등)는 처음 화면으로
+        //   — 브라우저는 주소의 탭·줄바꿈을 지우고 역슬래시를 / 로 읽어 '/<탭>/다른곳/index.php'·'https:/\다른곳/index.php' 가 다른 사이트로 갔음(이 함수만으로 재현. 지금 부르는 곳은 브라우저가 정리한 Referer 뿐이라 실제로는 닿지 않음)
+        if (!is_string($url) || preg_match('/[\x00-\x20\x7f\\\\]/', $url) || (preg_match('#^[a-z][a-z0-9+.\-]*:#i', $url) && !preg_match('#^https?://#i', $url))) {
+            header('Location: ' . $fallback);
+            exit;
+        }
+
         // ✅ 외부 URL 방지 (http://, https://, // 등)
         if (preg_match('/^(https?:)?\/\//i', $url)) {
             $parsed = parse_url($url);
             $current_host = $_SERVER['HTTP_HOST'] ?? '';
             
-            if (isset($parsed['host']) && $parsed['host'] !== $current_host) {
+            // ★ (2026-11-02 11:39) 포트까지 같이 비교(host:8099 같은 주소에서 늘 첫 화면으로 가던 것) · 대소문자 무시
+            $__ph = isset($parsed['host']) ? $parsed['host'] . (isset($parsed['port']) ? ':' . $parsed['port'] : '') : null;
+            if ($__ph !== null && strcasecmp($__ph, $current_host) !== 0 && strcasecmp($parsed['host'], $current_host) !== 0) {
                 header('Location: ' . $fallback);
                 exit;
             }
@@ -430,6 +458,8 @@ if (!function_exists('safe_redirect')) {
         // ✅ 경로 검증 (정규식 대신 문자열 비교로 성능 개선)
         $path_only = parse_url($url, PHP_URL_PATH) ?? $url;
         $path_only = ltrim($path_only, './');  // 앞의 ./ 또는 / 제거
+        if (preg_match('#^\s*(//|\\\\|/\\\\)#', $url)) { header('Location: ' . $fallback); exit; } // ★ (2026-11-02 12:04) '//다른곳' 은 외부로 가므로 막음
+        if (strpos($path_only, '/') !== false && strpos($path_only, '..') === false) $path_only = basename($path_only); // ★ (2026-11-02 11:39) 하위 폴더 설치(/mycomix/index.php)도 파일 이름으로 확인
         
         // 루트 또는 허용된 파일인지 확인
         $is_allowed = empty($path_only) || in_array($path_only, $allowed_files, true);
@@ -644,7 +674,7 @@ if (!function_exists('verify_delete_token')) {
  * @return bool 유효 여부
  */
 function verify_delete_token($token) {
-    if (empty($token) || empty($_SESSION['delete_token'])) {
+    if (empty($token) || empty($_SESSION['delete_token']) || !is_string($token) || !is_string($_SESSION['delete_token'])) { // ★ (2026-10-30) 배열 입력 TypeError 방지
         return false;
     }
     return hash_equals($_SESSION['delete_token'], $token);
@@ -681,6 +711,12 @@ if (!function_exists('verify_state_change_request')) {
 function verify_state_change_request($require_token = false) {
     // 1. 세션 확인 (필수)
     if (empty($_SESSION['user_id'])) {
+        return false;
+    }
+    // ★ (2026-11-02 08:56) 다른 사이트에서 보낸 요청은 거절(브라우저가 붙이는 Sec-Fetch-Site — 없으면 옛 브라우저라 전처럼)
+    //   — 토큰 없이 받는 저장(자동 저장·북마크·즐겨찾기)을 남의 페이지 링크로 바꾸지 못하게
+    $__sfs = $_SERVER['HTTP_SEC_FETCH_SITE'] ?? '';
+    if ($__sfs === 'cross-site' || $__sfs === 'same-site') { // ★ (2026-11-02 21:17) same-site(같은 상위 도메인의 다른 하위 도메인 — 예: 남이 만든 다른 *.mooo.com 페이지)도 거절. 이 앱의 화면에서 보내면 same-origin
         return false;
     }
     
@@ -794,7 +830,7 @@ function resolve_path_from_basedirs($relative_path, $base_dirs_array = null) {
             $real_path = realpath($full_path);
             
             if ($real_base !== false && $real_path !== false && 
-                strpos($real_path, $real_base) === 0) {
+                mc_path_within($real_path, $real_base)) {
                 return [
                     'index' => $explicit_index,
                     'base_dir' => $base_dirs_array[$explicit_index],
@@ -815,7 +851,7 @@ function resolve_path_from_basedirs($relative_path, $base_dirs_array = null) {
             $real_path = realpath($full_path);
             
             if ($real_base !== false && $real_path !== false && 
-                strpos($real_path, $real_base) === 0) {
+                mc_path_within($real_path, $real_base)) {
                 return [
                     'index' => $index,
                     'base_dir' => $base_dir,
@@ -890,9 +926,11 @@ function save_remember_tokens($tokens) {
     $fp = fopen($file, 'c+');
     if (!$fp) return false;
     
-    if (flock($fp, LOCK_EX)) {
+    $__tj = json_encode($tokens, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE); // ★ (2026-10-30) 실패 시 비우지 않음
+    if ($__tj !== false && flock($fp, LOCK_EX)) {
         ftruncate($fp, 0);
-        fwrite($fp, json_encode($tokens, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        rewind($fp);
+        fwrite($fp, $__tj);
         fflush($fp);
         flock($fp, LOCK_UN);
     }
@@ -922,6 +960,59 @@ function generate_remember_token() {
 }
 }
 
+if (!function_exists('mc_remember_tokens_modify')) {
+/**
+ * ★ (2026-11-07 fix53) 로그인 유지 토큰 파일을 '읽기 → 고치기 → 저장'까지 한 번의 잠금(LOCK_EX) 안에서
+ *   예전: 읽기(load)와 저장(save)이 따로 잠겨, 동시에 온 요청(브라우저 업데이트 날 탭 여러 개가 한꺼번에 열림 등)이
+ *         서로의 새 토큰을 덮어써 지웠음 → 브라우저가 지워진 토큰을 쥐고 있으면 그날은 세션으로 버티다 다음 날 로그인이 풀림
+ *         (시험: 동시 12개 중 1~6개 사라짐 — 원본 소스도 같음)
+ * @param callable $fn function(array &$tokens): bool  — 바꿨으면 true(그때만 저장)
+ * @return mixed $fn 이 돌려준 값(파일을 못 열거나 잠그지 못하면 null)
+ */
+function mc_remember_tokens_modify(callable $fn) {
+    $file = get_remember_tokens_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) @mkdir($dir, 0755, true);
+    $htaccess = $dir . '/.htaccess'; // 보안: src 폴더 웹 접근 차단(save_remember_tokens 와 같음)
+    if (!file_exists($htaccess)) @file_put_contents($htaccess, "Deny from all\n", LOCK_EX);
+    $fp = @fopen($file, 'c+');
+    if (!$fp) return null;
+    $ret = null;
+    if (flock($fp, LOCK_EX)) {
+        $raw = stream_get_contents($fp);
+        $tokens = ($raw === '' || $raw === false) ? [] : json_decode($raw, true);
+        if (!is_array($tokens)) { // 깨진 파일: 예전처럼 빈 목록에서 다시 시작(깨진 토큰은 어차피 확인할 수 없음) — 내용은 .broken 으로 한 부 남김
+            @file_put_contents($file . '.broken', (string)$raw, LOCK_EX);
+            $tokens = [];
+        }
+        {
+            $changed = false;
+            $ret = $fn($tokens, $changed);
+            if ($changed) {
+                $j = json_encode($tokens, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($j !== false) { ftruncate($fp, 0); rewind($fp); fwrite($fp, $j); fflush($fp); }
+            }
+        }
+        flock($fp, LOCK_UN);
+    }
+    fclose($fp);
+    return $ret;
+}
+}
+
+if (!function_exists('mc_remember_token_entry')) {
+/** 새 토큰 한 칸(예전 create_remember_token 과 같은 내용) */
+function mc_remember_token_entry($user_id, $days) {
+    return [
+        'user_id' => $user_id,
+        'expires' => time() + ($days * 24 * 60 * 60),
+        'created' => time(),
+        'ip' => filter_var($_SERVER['REMOTE_ADDR'] ?? '', FILTER_VALIDATE_IP) ?: 'unknown',
+        'device_hash' => get_device_hash()
+    ];
+}
+}
+
 if (!function_exists('create_remember_token')) {
 /**
  * 로그인 유지 토큰 생성
@@ -930,25 +1021,17 @@ if (!function_exists('create_remember_token')) {
  * @return string 생성된 토큰
  */
 function create_remember_token($user_id, $days = 3650) {
-    $tokens = load_remember_tokens();
     $token = generate_remember_token();
-    $expires = time() + ($days * 24 * 60 * 60);
-    
-    // 만료된 토큰 정리
-    $tokens = array_filter($tokens, function($t) {
-        return ($t['expires'] ?? 0) > time();
+    // ★ fix53 한 번의 잠금 안에서 만료 정리 + 새 토큰 추가(동시에 만든 다른 토큰을 덮어쓰지 않게)
+    mc_remember_tokens_modify(function (&$tokens, &$changed) use ($token, $user_id, $days) {
+        $now = time();
+        $tokens = array_filter($tokens, function($t) use ($now) {
+            return (is_array($t) ? ($t['expires'] ?? 0) : 0) > $now; // 만료된 토큰 정리
+        });
+        $tokens[$token] = mc_remember_token_entry($user_id, $days); // 새 토큰 추가
+        $changed = true;
+        return true;
     });
-    
-    // 새 토큰 추가
-    $tokens[$token] = [
-        'user_id' => $user_id,
-        'expires' => $expires,
-        'created' => time(),
-        'ip' => filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP) ?: 'unknown',
-        'device_hash' => get_device_hash()
-    ];
-    
-    save_remember_tokens($tokens);
     return $token;
 }
 }
@@ -961,16 +1044,18 @@ if (!function_exists('verify_remember_token')) {
  * @return string|false 사용자 ID 또는 false
  */
 function verify_remember_token($token, $auto_refresh = true) {
-    if (empty($token)) return false;
+    if (empty($token) || !is_string($token)) return false; // ★ (2026-11-02 08:50) 쿠키가 배열(remember_token[]=…)이면 TypeError(모든 화면 500)
     
     $tokens = load_remember_tokens();
-    if (!isset($tokens[$token])) return false;
+    if (!isset($tokens[$token]) || !is_array($tokens[$token])) return false;
     
     $data = $tokens[$token];
     if (($data['expires'] ?? 0) < time()) {
-        // 만료된 토큰 삭제
-        unset($tokens[$token]);
-        save_remember_tokens($tokens);
+        // 만료된 토큰 삭제(★ fix53 잠근 채로)
+        mc_remember_tokens_modify(function (&$t, &$changed) use ($token) {
+            if (isset($t[$token]) && (is_array($t[$token]) ? ($t[$token]['expires'] ?? 0) : 0) < time()) { unset($t[$token]); $changed = true; }
+            return true;
+        });
         return false;
     }
     
@@ -980,7 +1065,29 @@ function verify_remember_token($token, $auto_refresh = true) {
     
     if ($auto_refresh && !empty($token_device) && $token_device !== $current_device) {
         $user_id = $data['user_id'];
-        $new_token = create_remember_token($user_id, 3650);
+        // ★ fix53 새 토큰 발급과 옛 토큰 정리를 한 번의 잠금 안에서 —
+        //   · 같은 옛 토큰으로 동시에 온 요청(탭 여러 개)은 먼저 만든 새 토큰을 같이 받음(전엔 요청마다 새 토큰을 만들고 서로 덮어써 일부가 사라졌음)
+        //   · ★ (2026-11-02 08:50) 옛 토큰은 지움 — 남겨 두면 기기(브라우저)가 바뀔 때마다 10년짜리 토큰이 쌓이고, 훔친 토큰을 다른 기기에서 써도 원래 것이 계속 살아 있음
+        //   · ★ (2026-11-02 09:35) 바로 지우지 않고 10분 뒤 만료로 — 브라우저 업데이트 뒤 탭 여러 개가 한꺼번에 열릴 때 늦은 요청이 로그인 화면으로 가지 않게
+        $new_token = mc_remember_tokens_modify(function (&$t, &$changed) use ($token, $user_id, $current_device) {
+            $now = time();
+            if (!isset($t[$token]) || !is_array($t[$token]) || ($t[$token]['expires'] ?? 0) < $now) return null; // 그 사이 지워짐(로그아웃 등)
+            $nx = (string)($t[$token]['next'] ?? '');
+            if ($nx !== '' && isset($t[$nx]) && is_array($t[$nx]) && ($t[$nx]['device_hash'] ?? '') === $current_device
+                && (string)($t[$nx]['user_id'] ?? '') === (string)$user_id && ($t[$nx]['expires'] ?? 0) > $now) return $nx; // 방금 다른 탭이 받은 새 토큰
+            $t = array_filter($t, function($x) use ($now) { return (is_array($x) ? ($x['expires'] ?? 0) : 0) > $now; }); // 만료된 토큰 정리(예전 create_remember_token 과 같음)
+            $nt = generate_remember_token();
+            $t[$nt] = mc_remember_token_entry($user_id, 3650);
+            if ((int)($t[$token]['expires'] ?? 0) > $now + 600) $t[$token]['expires'] = $now + 600;
+            $t[$token]['next'] = $nt;
+            $changed = true;
+            return $nt;
+        });
+        if (!is_string($new_token) || $new_token === '') {
+            // 파일을 못 열었거나 그 사이 토큰이 지워졌으면: 지워진 경우는 로그인하지 않음, 파일 문제면 예전처럼 이번만 통과(쿠키는 그대로)
+            $chk = load_remember_tokens();
+            return (isset($chk[$token]) && is_array($chk[$token]) && ($chk[$token]['expires'] ?? 0) >= time()) ? $user_id : false;
+        }
         
         // 새 토큰으로 쿠키 갱신
         $cookie_options = [
@@ -1005,13 +1112,21 @@ if (!function_exists('delete_remember_token')) {
  * @param string $token 삭제할 토큰
  */
 function delete_remember_token($token) {
-    if (empty($token)) return;
+    if (empty($token) || !is_string($token)) return; // ★ (2026-11-02 08:51) 배열 쿠키
     
-    $tokens = load_remember_tokens();
-    if (isset($tokens[$token])) {
-        unset($tokens[$token]);
-        save_remember_tokens($tokens);
-    }
+    // ★ fix53 잠근 채로 지움(그 사이 다른 요청이 만든 토큰을 덮어쓰지 않게) · 이 토큰에서 갈아탄 새 토큰(next)도 같이 지움(로그아웃했는데 다른 탭이 받은 새 토큰으로 다시 로그인되지 않게)
+    mc_remember_tokens_modify(function (&$tokens, &$changed) use ($token) {
+        if (isset($tokens[$token])) {
+            $nx = is_array($tokens[$token]) ? (string)($tokens[$token]['next'] ?? '') : '';
+            unset($tokens[$token]); $changed = true;
+            if ($nx !== '' && isset($tokens[$nx])) unset($tokens[$nx]);
+        }
+        // ★ fix54 반대로 이 토큰으로 갈아타기 전 옛 토큰(10분 유예 중)도 지움 — 새 토큰으로 로그아웃해도 옛 토큰으로 다시 로그인·새 토큰 발급이 됐음
+        foreach ($tokens as $k => $v) {
+            if (is_array($v) && (string)($v['next'] ?? '') === $token) { unset($tokens[$k]); $changed = true; }
+        }
+        return true;
+    });
 }
 }
 
@@ -1021,11 +1136,15 @@ if (!function_exists('delete_user_remember_tokens')) {
  * @param string $user_id 사용자 ID
  */
 function delete_user_remember_tokens($user_id) {
-    $tokens = load_remember_tokens();
-    $tokens = array_filter($tokens, function($t) use ($user_id) {
-        return ($t['user_id'] ?? '') !== $user_id;
+    // ★ fix53 잠근 채로(그 사이 다른 사용자의 새 토큰을 덮어쓰지 않게)
+    mc_remember_tokens_modify(function (&$tokens, &$changed) use ($user_id) {
+        $n = count($tokens);
+        $tokens = array_filter($tokens, function($t) use ($user_id) {
+            return (string)(is_array($t) ? ($t['user_id'] ?? '') : '') !== (string)$user_id; // ★ (2026-11-02 11:33) 숫자만 된 아이디는 회원 목록 키가 정수라 하나도 안 지워졌음
+        });
+        $changed = count($tokens) !== $n;
+        return true;
     });
-    save_remember_tokens($tokens);
 }
 }
 
@@ -1150,6 +1269,32 @@ if (!function_exists('verify_totp')) {
  * @return bool 유효 여부
  */
 function verify_totp($secret, $code, $window = 1) {
+    return mc_totp_match_step($secret, $code, $window) !== false;
+}
+}
+
+if (!function_exists('mc_reauth_locked')) {
+/**
+ * ★ (2026-11-08 전체 점검 4차 fix77) 로그인한 뒤 현재 비밀번호·2단계 코드를 다시 확인하는 곳(내 정보의 비밀번호·이메일 바꾸기·탈퇴, 2단계 끄기·지우기·백업 코드 새로)의 틀린 횟수
+ *   전엔 횟수 제한이 없어 로그인된 세션만 있으면 현재 비밀번호를 끝없이 맞혀 볼 수 있었음 → 로그인 시도 제한과 같은 기록·같은 설정(기본 5분에 5번, 15분 잠금, 화이트리스트 IP 제외)
+ */
+function mc_reauth_locked() {
+    if (!class_exists('IPBlocker')) return false;
+    try { $r = (new IPBlocker())->checkBruteforce(); return !empty($r['blocked']); } catch (\Throwable $e) { return false; }
+}
+function mc_reauth_fail($user_id) {
+    if (!class_exists('IPBlocker')) return;
+    try { (new IPBlocker())->recordLoginFailure(null, is_string($user_id) ? $user_id : ''); } catch (\Throwable $e) {}
+}
+}
+
+if (!function_exists('mc_totp_match_step')) {
+/**
+ * ★ (2026-11-08 전체 점검 fix73) 맞는 코드면 그 코드의 시간 칸 번호(30초 단위), 아니면 false — verify_totp 와 같은 판단(같은 칸 범위·같은 비교)
+ *   · 문자열이 아니면 false(부르는 곳 login.php·index.php 가 이미 배열을 빈 값으로 바꾸므로 실제로는 오지 않음 — 함수 혼자 쓰일 때 대비)
+ */
+function mc_totp_match_step($secret, $code, $window = 1) {
+    if (!is_string($code) || !is_string($secret)) return false;
     $code = preg_replace('/\s+/', '', $code); // 공백 제거
     
     if (!preg_match('/^\d{6}$/', $code)) {
@@ -1165,7 +1310,7 @@ function verify_totp($secret, $code, $window = 1) {
         $expected = get_totp_code($secret, $checkTime);
         
         if (hash_equals($expected, $code)) {
-            return true;
+            return (int)floor($checkTime / $period);
         }
     }
     
@@ -1255,13 +1400,86 @@ if (!function_exists('load_all_user_totp')) {
  * 모든 사용자 TOTP 설정 로드
  * @return array 사용자별 설정
  */
-function load_all_user_totp() {
+// ★ (2026-11-04 00:46) 읽기는 LOCK_SH, 쓰기는 LOCK_EX 안에서 읽고-고치고-쓰기 — 전엔 잠금 없이 써서(파일을 비운 순간) 다른 요청이 빈 내용을 읽으면
+//   2단계가 '꺼짐'으로 판정돼 OTP 없이 로그인됐고, 그 빈 내용으로 저장하면 다른 회원 설정이 지워질 수 있었음
+//   $ok: 파일이 있는데 못 읽거나 해석 실패면 false(is_user_2fa_enabled 는 이때 '켜짐'으로 보고 로그인 거절)
+function load_all_user_totp(&$ok = null) {
+    $ok = true;
     $file = get_user_totp_file();
-    if (file_exists($file)) {
-        $data = json_decode(file_get_contents($file), true);
-        return is_array($data) ? $data : [];
+    if (!file_exists($file)) {
+        return [];
     }
+    for ($try = 0; $try < 3; $try++) {
+        $fp = @fopen($file, 'rb');
+        if ($fp) {
+            @flock($fp, LOCK_SH);
+            $raw = stream_get_contents($fp);
+            @flock($fp, LOCK_UN);
+            fclose($fp);
+            // ★ (2026-11-04 01:16) 빈 파일(0바이트)은 '설정 없음'으로 — 잠금으로 쓰는 중인 빈 내용은 이제 안 보이고, 남는 빈 파일은 옛 코드가 쓰다 끊긴 것이라 거절하면 모든 회원이 로그인 못 했음
+            if ($raw === '' || (is_string($raw) && trim($raw) === '')) return [];
+            if (is_string($raw)) {
+                $data = json_decode($raw, true);
+                if (is_array($data)) return $data;
+            }
+        }
+        if (!file_exists($file)) return [];
+        usleep(50000);
+    }
+    $ok = false;
+    error_log('[mycomix] totp_users.json 을 읽지 못함(깨짐?) — 2단계 확인을 거절 쪽으로 처리');
     return [];
+}
+}
+
+if (!function_exists('mc_totp_modify')) {
+/**
+ * 잠금(LOCK_EX) 안에서 전체 TOTP 설정을 읽고 $fn(&$all) 로 고친 뒤 저장 — $fn 이 false 를 돌려주면 저장 안 함
+ * 파일이 있는데 해석 실패면 덮어쓰지 않고 null
+ * @return mixed $fn 의 반환값(실패 시 null)
+ */
+function mc_totp_modify(callable $fn) {
+    $file = get_user_totp_file();
+    $dir = dirname($file);
+    if (!is_dir($dir)) {
+        @mkdir($dir, 0755, true);
+    }
+    $fp = @fopen($file, 'c+b');
+    if (!$fp) return null;
+    if (!@flock($fp, LOCK_EX)) { fclose($fp); return null; }
+    $raw = stream_get_contents($fp);
+    $all = [];
+    if (is_string($raw) && trim($raw) !== '') {
+        $all = json_decode($raw, true);
+        if (!is_array($all)) {
+            @flock($fp, LOCK_UN); fclose($fp);
+            error_log('[mycomix] totp_users.json 해석 실패 — 덮어쓰지 않음');
+            return null;
+        }
+    }
+    $res = $fn($all);
+    if ($res !== false) {
+        $json = json_encode($all, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+        if ($json === false) {
+            $res = null;
+        } else {
+            ftruncate($fp, 0);
+            rewind($fp);
+            $__w = fwrite($fp, $json);
+            if ($__w === false || $__w < strlen($json)) {
+                // ★ (2026-11-04 01:50) 쓰기 실패(디스크 가득 등)면 원래 내용으로 되돌림 — 빈 파일로 남으면 모든 회원 2단계가 꺼진 것으로 보였음
+                $res = null;
+                ftruncate($fp, 0);
+                rewind($fp);
+                if (is_string($raw) && $raw !== '') @fwrite($fp, $raw);
+                error_log('[mycomix] totp_users.json 저장 실패 — 원래 내용으로 되돌림');
+            }
+            fflush($fp);
+        }
+    }
+    @flock($fp, LOCK_UN);
+    fclose($fp);
+    return $res;
 }
 }
 
@@ -1272,12 +1490,8 @@ if (!function_exists('save_all_user_totp')) {
  * @return bool 성공 여부
  */
 function save_all_user_totp($data) {
-    $file = get_user_totp_file();
-    $dir = dirname($file);
-    if (!is_dir($dir)) {
-        mkdir($dir, 0755, true);
-    }
-    return file_put_contents($file, json_encode($data, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE)) !== false;
+    if (!is_array($data)) return false;
+    return mc_totp_modify(function (&$all) use ($data) { $all = $data; return true; }) === true; // ★ (2026-11-04 00:46) 잠금 안에서 저장
 }
 }
 
@@ -1307,9 +1521,8 @@ if (!function_exists('save_user_totp')) {
  * @return bool 성공 여부
  */
 function save_user_totp($user_id, $settings) {
-    $all = load_all_user_totp();
-    $all[$user_id] = $settings;
-    return save_all_user_totp($all);
+    // ★ (2026-11-04 00:46) 잠금 안에서 최신 내용을 읽고 이 회원 것만 바꿈 — 전엔 따로 읽은 뒤 통째로 써서 동시 저장 때 다른 회원 설정이 사라질 수 있었음
+    return mc_totp_modify(function (&$all) use ($user_id, $settings) { $all[$user_id] = $settings; return true; }) === true;
 }
 }
 
@@ -1322,8 +1535,11 @@ if (!function_exists('delete_user_totp')) {
 function delete_user_totp($user_id) {
     $all = load_all_user_totp();
     if (isset($all[$user_id])) {
-        unset($all[$user_id]);
-        return save_all_user_totp($all);
+        return mc_totp_modify(function (&$all) use ($user_id) { // ★ (2026-11-04 00:46) 잠금 안에서
+            if (!isset($all[$user_id])) return false;
+            unset($all[$user_id]);
+            return true;
+        }) !== null;
     }
     return true;
 }
@@ -1336,7 +1552,9 @@ if (!function_exists('is_user_2fa_enabled')) {
  * @return bool 활성화 여부
  */
 function is_user_2fa_enabled($user_id) {
-    $settings = load_user_totp($user_id);
+    $all = load_all_user_totp($ok);
+    if (!$ok) return true; // ★ (2026-11-04 00:46) 설정 파일을 못 읽으면 '켜짐'으로 — 꺼짐으로 보면 OTP 없이 통과됐음
+    $settings = $all[$user_id] ?? [];
     return !empty($settings['enabled']) && !empty($settings['secret']);
 }
 }
@@ -1353,7 +1571,21 @@ function verify_user_totp($user_id, $code) {
     if (empty($settings['secret'])) {
         return false;
     }
-    return verify_totp($settings['secret'], $code);
+    $step = mc_totp_match_step($settings['secret'], $code);
+    if ($step === false) return false;
+    // ★ (2026-11-08 전체 점검 fix73) 한 번 쓴 코드(그 시간 칸)와 그보다 앞선 칸의 코드는 다시 받지 않음 — 예전엔 같은 6자리를 최대 90초 안에 몇 번이고 다시 써서 로그인할 수 있었음(재현함)
+    //   잠금 안에서 확인·기록(동시 요청 두 개가 같은 코드로 둘 다 통과하지 못하게). 기록할 파일을 못 열면(디스크 문제) 예전처럼 통과 — 그 때문에 로그인이 막히지 않게
+    $ok = false; // 콜백 안에서 정함 — 콜백은 고쳤을 때만 true(그때만 저장)
+    $res = mc_totp_modify(function (&$all) use ($user_id, $step, $settings, &$ok) {
+        if (!isset($all[$user_id]) || !is_array($all[$user_id]) || (string)($all[$user_id]['secret'] ?? '') !== (string)$settings['secret']) return false; // 그 사이 2단계가 꺼지거나 바뀜
+        $last = $all[$user_id]['last_step'] ?? null;
+        if (is_int($last) && $step <= $last) return false; // 이미 쓴 코드
+        $all[$user_id]['last_step'] = $step;
+        $ok = true;
+        return true;
+    });
+    if ($res === null && !$ok) return true; // 파일을 열거나 잠그지 못함(예전처럼 통과)
+    return $ok;
 }
 }
 
@@ -1372,11 +1604,19 @@ function verify_user_backup_code($user_id, $code) {
     
     foreach ($backup_codes as $idx => $stored) {
         if (hash_equals(strtoupper($stored), $code)) {
-            // 사용된 코드 제거
-            unset($backup_codes[$idx]);
-            $settings['backup_codes'] = array_values($backup_codes);
-            save_user_totp($user_id, $settings);
-            return true;
+            // 사용된 코드 제거 — ★ (2026-11-04 00:46) 잠금 안에서 그 코드가 아직 있을 때만 지우고 통과(동시 요청으로 같은 코드를 두 번 쓰지 못하게)
+            return mc_totp_modify(function (&$all) use ($user_id, $code) {
+                $codes = $all[$user_id]['backup_codes'] ?? [];
+                if (!is_array($codes)) return false;
+                foreach ($codes as $i => $s) {
+                    if (hash_equals(strtoupper((string)$s), $code)) {
+                        unset($codes[$i]);
+                        $all[$user_id]['backup_codes'] = array_values($codes);
+                        return true;
+                    }
+                }
+                return false;
+            }) === true;
         }
     }
     
@@ -1463,6 +1703,13 @@ function send_smtp_email($to, $subject, $body, $smtp = null) {
     $password = $smtp['password'] ?? '';
     $from_email = !empty($smtp['from_email']) ? $smtp['from_email'] : $username;
     $from_name = $smtp['from_name'] ?? 'myComix';
+    // ★ (2026-11-08 전체 점검 fix73) 받는·보내는 주소에 줄바꿈·꺾쇠·제어 문자가 있으면 보내지 않음 — 그대로 SMTP 명령(MAIL FROM·RCPT TO·머리글)에 들어가
+    //   '보내는 주소'(관리자 설정, 서버에서 형식 검사 없음)나 그 대신 쓰는 SMTP 아이디에 줄바꿈이 있으면 받는 사람을 몰래 더할 수 있었음(가짜 SMTP 서버로 재현 — 비밀번호 찾기 코드 메일이 다른 주소로도 감)
+    foreach ([$to, $from_email] as $__addr) {
+        if (!is_string($__addr) || $__addr === '' || preg_match('/[\x00-\x1f\x7f<>]/', $__addr)) {
+            return __('smtp_bad_address');
+        }
+    }
     
     // PHP 내장 fsockopen을 사용한 간단한 SMTP 구현
     $errno = 0;
@@ -1658,6 +1905,35 @@ function send_password_reset_email($to, $username, $temp_password) {
     </div>
     ";
     
+    return send_smtp_email($to, $subject, $body, $smtp);
+}
+
+/**
+ * ★ (2026-11-04 07:49) 비밀번호 찾기 확인 코드 메일 — 이 코드를 비밀번호 찾기 화면에 넣어야 임시 비밀번호로 바뀜(그 전엔 비밀번호 그대로)
+ */
+function send_password_reset_code_email($to, $username, $code) {
+    $smtp = get_app_settings('smtp', []);
+    if (empty($smtp['enabled']) || empty($smtp['host'])) {
+        return false;
+    }
+    $branding = load_branding();
+    $site_name = h($branding['logo_text'] ?? 'myComix');
+    $subject = '[' . ($branding['logo_text'] ?? 'myComix') . '] ' . __('security_pw_code_title');
+    $body = "
+    <div style='font-family: -apple-system, BlinkMacSystemFont, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;'>
+        <div style='background: #f8f9fa; border-radius: 10px; padding: 30px; text-align: center;'>
+            <h2 style='color: #333; margin-bottom: 20px;'>" . __h('security_pw_code_title') . "</h2>
+            <p style='color: #666; margin-bottom: 20px;'>" . __h('security_pw_code_msg', $username) . "</p>
+            <div style='background: #e8f0fe; border: 1px solid #8ab4f8; border-radius: 8px; padding: 20px; margin: 20px 0;'>
+                <p style='margin: 0 0 10px; color: #1a56c4;'><strong>" . __h('security_pw_code_label') . "</strong></p>
+                <p style='font-size: 26px; font-family: monospace; letter-spacing: 4px; margin: 0; color: #333;'>" . h($code) . "</p>
+            </div>
+            <p style='color: #666; font-size: 14px;'>" . __h('security_pw_code_ignore') . "</p>
+            <hr style='border: none; border-top: 1px solid #ddd; margin: 20px 0;'>
+            <p style='color: #999; font-size: 12px;'>{$site_name}</p>
+        </div>
+    </div>
+    ";
     return send_smtp_email($to, $subject, $body, $smtp);
 }
 

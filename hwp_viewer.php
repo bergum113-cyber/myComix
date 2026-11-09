@@ -18,6 +18,9 @@ require_once __DIR__ . "/bootstrap.php";
 handle_timeout_popup();
 
 $bidx = init_bidx();
+
+// ★ (2026-10-30) 보안: 폴더 권한 확인(API·스트림 포함 모든 요청)
+mc_file_param_guard(isset($_GET['action']) || isset($_POST['action']));
 $_branding = load_branding();
 
 $hwp_settings = $hwp_viewer_settings ?? [
@@ -58,18 +61,26 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     header('Content-Type: application/octet-stream');
     header('Content-Length: ' . $filesize);
     header('Accept-Ranges: bytes');
-    header('Cache-Control: public, max-age=86400');
+    header('Cache-Control: private, max-age=86400');
     
     // Range 요청 처리
     if (isset($_SERVER['HTTP_RANGE'])) {
         $range = $_SERVER['HTTP_RANGE'];
         if (preg_match('/bytes=(\d*)-(\d*)/', $range, $matches)) {
-            $start = $matches[1] !== '' ? intval($matches[1]) : 0;
-            $end = $matches[2] !== '' ? intval($matches[2]) : $filesize - 1;
+            // ★ (2026-10-30) 끝 위치를 파일 크기로 자르고(큰 값이면 메모리 할당 치명 오류·길이 불일치), 'bytes=-N'(끝에서 N바이트) 처리,
+            //   한 번에 다 읽지 않고 64KB 씩 보냄(큰 파일 메모리)
+            if ($matches[1] === '' && $matches[2] !== '') {
+                $start = max(0, $filesize - intval($matches[2]));
+                $end = $filesize - 1;
+            } else {
+                $start = $matches[1] !== '' ? intval($matches[1]) : 0;
+                $end = $matches[2] !== '' ? min(intval($matches[2]), $filesize - 1) : $filesize - 1;
+            }
             
             if ($start > $end || $start >= $filesize) {
                 http_response_code(416);
                 header("Content-Range: bytes */$filesize");
+                header('Content-Length: 0'); // ★ (2026-11-09 11:38) 위에서 보낸 파일 전체 길이를 0으로 바꿈 — 본문 없이 끝나는데 길이가 남아 받는 쪽이 끝까지 기다리다 끊기던 것
                 exit;
             }
             
@@ -81,7 +92,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
             
             $fp = fopen($base_file, 'rb');
             fseek($fp, $start);
-            echo fread($fp, $length);
+            $left = $length;
+            while ($left > 0 && !feof($fp)) {
+                $buf = fread($fp, min(65536, $left));
+                if ($buf === false || $buf === '') break;
+                echo $buf;
+                $left -= strlen($buf);
+                if (connection_aborted()) break;
+            }
             fclose($fp);
             exit;
         }
@@ -129,15 +147,19 @@ if ($link_dir === '.' || $link_dir === '/') {
     $link_dir = '';
 }
 
-$darkmode = $_COOKIE['darkmode'] ?? 'light';
+$darkmode = (is_string($_COOKIE['darkmode'] ?? null) && preg_match('/^[a-z]{1,12}$/', $_COOKIE['darkmode'])) ? $_COOKIE['darkmode'] : 'light'; // ★ (2026-11-02 19:21) 배열 쿠키(darkmode[]=)면 500 이던 것
 $file_url = "hwp_viewer.php?action=stream&file=" . rawurlencode($getfile) . "&bidx=" . $bidx;
 
 // 뒤로가기 URL - rawurlencode 사용
 $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
+$rhwp_url = "rhwp_viewer.php?file=" . rawurlencode($getfile) . "&bidx=" . $bidx; // ★ (2026-10-31) rhwp 뷰어
 ?>
 <!DOCTYPE html>
-<html lang="ko" data-theme="<?php echo h($darkmode); ?>">
+<html lang="ko" class="mc-fdk" data-theme="<?php echo h($darkmode); ?>"><?php /* ★ (2026-11-08 fix82) 다크면 바탕은 어둡게 두고 내용만 나타나게(bootstrap.php mc_fade_dark_style) */ ?>
+<?php if (function_exists('mc_fade_dark_style')) echo mc_fade_dark_style('#1a1a1a'); ?>
 <head>
+<?php if (function_exists('mc_back_origin_viewer_js')) echo mc_back_origin_viewer_js(); /* ★ (2026-11-05) 뒤로가기 = 들어온 곳(서재·즐겨찾기·북마크 등) — function.php */ ?>
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <title><?php echo h($title); ?> - <?php echo $is_hwpx ? 'HWPX' : 'HWP'; ?> <?php echo __h("viewer_label"); ?></title>
@@ -148,7 +170,7 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
         html.leaving{opacity:0;transition:opacity .1s ease-out}
     </style>
     <link rel="stylesheet" href="./css/bootstrap.min.css">
-    <link rel="shortcut icon" href="./favicon.ico">
+    <?php echo function_exists('mc_favicon_tags') ? mc_favicon_tags() : '<link rel="shortcut icon" href="./favicon.ico">'; // ★ (2026-11-03 23:50) 탭 아이콘 = 로고 ?>
     
     <style>
         :root {
@@ -218,6 +240,8 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
         }
         
         .back-btn:hover, .toolbar-btn:hover { background: var(--btn-hover); }
+        .toolbar-btn.rhwp-switch { width: auto; padding: 0 10px; gap: 4px; font-size: 13px; white-space: nowrap; } /* ★ (2026-10-31) 글자 있는 버튼 */
+        @media (max-width: 480px) { .toolbar-btn.rhwp-switch { width: 36px; padding: 0; } .toolbar-btn.rhwp-switch .rhwp-switch-lbl { display: none; } }
         
         .filename {
             font-size: 14px;
@@ -290,6 +314,8 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
         [data-theme="dark"] #hwp-viewer {
             box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         }
+        /* ★ (2026-11-02 19:21) 어두운 테마에서 옛 HWP(hwpjs) 글자가 검정이라 어두운 바탕 위에서 거의 안 보였음 → 그 문서만 흰 종이 */
+        [data-theme="dark"] #hwp-viewer.hwp-legacy { background: #fff; color: #222; }
         
         /* HWP/HWPX 컨텐츠 스타일 */
         #hwp-viewer p { margin: 0.5em 0; }
@@ -449,6 +475,7 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
                 <span class="file-badge"><?php echo strtoupper($file_ext); ?></span>
                 <?php render_lang_badge('sm-hwp'); ?>
             </span>
+            <?php if (function_exists('mc_doc_cover_btn')) echo mc_doc_cover_btn($getfile, $bidx ?? 0, 'back-btn'); /* ★ (2026-11-08 fix80) 이 책 표지를 폴더 표지로(관리자) */ ?>
         </div>
         
         <div class="header-right">
@@ -458,6 +485,8 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
                 <button onclick="zoomIn()" title="<?php echo __h('hwp_zoom_in'); ?>">+</button>
             </div>
             
+            <?php // ★ (2026-10-31) rhwp(WASM) 뷰어로 보기 — 문서가 이상하게 보일 때(FileStation 과 같은 방식) ?>
+            <a href="<?php echo h($rhwp_url); ?>" class="toolbar-btn rhwp-switch" title="<?php echo __h('rhwp_view_help'); ?>">🔄 <span class="rhwp-switch-lbl"><?php echo __h('rhwp_view_btn'); ?></span></a>
             <button class="toolbar-btn" onclick="printDocument()" title="<?php echo __h('hwp_print'); ?>">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M6 9V2h12v7"/><path d="M6 18H4a2 2 0 01-2-2v-5a2 2 0 012-2h16a2 2 0 012 2v5a2 2 0 01-2 2h-2"/>
@@ -502,7 +531,8 @@ render_viewer_i18n([
 
 <?php if ($is_hwpx): ?>
     <!-- HWPX용: JSZip -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- ★ (2026-10-30) JSZip 은 사이트 안 js/ 의 3.10.2 를 씀(문서 뷰어와 같은 파일) -->
+    <script src="js/jszip.min.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/jszip.min.js'); ?>"></script>
 <?php else: ?>
     <!-- HWP용: ohah/hwpjs legacy - v2 console suppressed -->
     <script>
@@ -514,9 +544,10 @@ render_viewer_i18n([
         };
         console.log = console.warn = function(){};
     </script>
-    <script src="https://cdn.jsdelivr.net/gh/ohah/hwpjs@main/legacy/cfb.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/ohah/hwpjs@main/legacy/pako.js"></script>
-    <script src="https://cdn.jsdelivr.net/gh/ohah/hwpjs@main/legacy/hwpjs.js"></script>
+    <!-- ★ (2026-10-30) main 브랜치 대신 커밋으로 고정(남의 저장소가 바뀌어도 그 코드가 바로 실행되지 않게) — legacy 파일이 마지막으로 바뀐 커밋(2025-11-22), 현재 main 과 내용 같음 -->
+    <script src="https://cdn.jsdelivr.net/gh/ohah/hwpjs@132f964d0905cc1bdaef4cdcfb3fc467c97cbb1d/legacy/cfb.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/ohah/hwpjs@132f964d0905cc1bdaef4cdcfb3fc467c97cbb1d/legacy/pako.js"></script>
+    <script src="https://cdn.jsdelivr.net/gh/ohah/hwpjs@132f964d0905cc1bdaef4cdcfb3fc467c97cbb1d/legacy/hwpjs.js"></script>
     <script>
         // console 복원하지 않음 - hwpjs 사용 후에도 로그 억제 유지
     </script>
@@ -527,8 +558,11 @@ render_viewer_i18n([
         
         // PHP에서 안전하게 JSON으로 전달
         const fileUrl = <?php echo json_encode($file_url); ?>;
-        const backUrl = <?php echo json_encode($back_url); ?>;
+        const backUrl = (window.mcBackUrl ? window.mcBackUrl(<?php echo json_encode($back_url); ?>) : <?php echo json_encode($back_url); ?>); // ★ (2026-11-05) 들어온 곳으로
         const fileName = <?php echo json_encode($filename); ?>;
+        const rhwpUrl = <?php echo json_encode($rhwp_url); ?>; // ★ (2026-10-31)
+        const rhwpAutoMsg = <?php echo json_encode(__('rhwp_auto_switch'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        const rhwpBtnLbl = <?php echo json_encode(__('rhwp_view_btn'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
         const isHwpx = <?php echo $is_hwpx ? 'true' : 'false'; ?>;
         const viewerEl = document.getElementById('hwp-viewer');
         const loadingOverlay = document.getElementById('loadingOverlay');
@@ -539,7 +573,7 @@ render_viewer_i18n([
         // 뒤로가기 버튼 - JavaScript로 처리
         document.getElementById('backBtn').addEventListener('click', function(e) {
             e.preventDefault();
-            window.location.href = backUrl;
+            (window.mcBackGo ? window.mcBackGo(backUrl, 'push') : (window.location.href = backUrl)); // ★ (2026-11-05 22:40) 바로 앞 기록이면 뒤로
         });
         
 <?php if ($is_hwpx): ?>
@@ -666,10 +700,13 @@ render_viewer_i18n([
             const allElements = doc.getElementsByTagName('*');
             const paragraphs = [];
             
+            // ★ (2026-11-02 09:04) 표 칸 안 문단은 따로 문단으로 내지 않음(표로 한 번만) — 전에는 표 글자가 바깥 문단·칸 문단·표로 세 번 나왔음
+            const isTbl = function (n) { const ln = n.localName || n.nodeName.split(':').pop(); return ln === 'tbl' || ln === 'table'; };
+            const inTable = function (n) { for (let a = n.parentNode; a && a.nodeType === Node.ELEMENT_NODE; a = a.parentNode) { if (isTbl(a)) return true; } return false; };
             for (let i = 0; i < allElements.length; i++) {
                 const el = allElements[i];
                 const localName = el.localName || el.nodeName.split(':').pop();
-                if (localName === 'p' || localName === 'P') {
+                if ((localName === 'p' || localName === 'P') && !inTable(el)) {
                     paragraphs.push(el);
                 }
             }
@@ -677,6 +714,8 @@ render_viewer_i18n([
             paragraphs.forEach(para => {
                 let paraText = '';
                 let paraImages = [];
+                let paraTables = []; // ★ (2026-11-02 09:04) 이 문단 안의 표 — 문단 자리에 그림(전에는 맨 끝에 모아서)
+                const usedImgEls = new Set(); // ★ (2026-11-02 14:31) pic 에서 찾은 hc:img 를 자식 탐색 때 또 넣어 그림이 두 번 나오던 것
                 
                 // 재귀적으로 텍스트와 이미지 수집
                 function extractContent(node) {
@@ -684,9 +723,11 @@ render_viewer_i18n([
                         paraText += node.textContent;
                     } else if (node.nodeType === Node.ELEMENT_NODE) {
                         const localName = node.localName || node.nodeName.split(':').pop();
+                        if (localName === 'tbl' || localName === 'table') { paraTables.push(node); return; } // 표 글자는 표로만
+                        if (localName === 'subList') return; // ★ (2026-11-02 10:02) 각주·글상자·머리말 속 문단은 그 문단이 따로 나오므로 여기선 빼기(전에는 두 번 나왔음)
                         
                         // 이미지 처리
-                        if (localName === 'img' || localName === 'pic' || localName === 'picture') {
+                        if ((localName === 'img' || localName === 'pic' || localName === 'picture') && !usedImgEls.has(node)) {
                             // binId 또는 binaryItemIDRef 속성 찾기
                             const binId = node.getAttribute('binaryItemIDRef') || 
                                          node.getAttribute('binId') ||
@@ -697,8 +738,9 @@ render_viewer_i18n([
                             // 하위 요소에서도 찾기
                             const binItem = node.querySelector('[binaryItemIDRef], [binId]');
                             if (binItem) {
+                                usedImgEls.add(binItem);
                                 const ref = binItem.getAttribute('binaryItemIDRef') || binItem.getAttribute('binId');
-                                if (ref && images[ref]) {
+                                if (ref && images[ref] && !(binId && images[binId])) { // 자기 속성으로 이미 넣었으면 또 넣지 않음
                                     paraImages.push(images[ref]);
                                 }
                             }
@@ -721,19 +763,22 @@ render_viewer_i18n([
                 paraImages.forEach(imgSrc => {
                     paraHtml += `<img src="${imgSrc}" alt="" data-i18n-alt="image">`;
                 });
-                if (!paraText.trim() && paraImages.length === 0) {
+                if (!paraText.trim() && paraImages.length === 0 && paraTables.length === 0) {
                     paraHtml += '&nbsp;'; // 빈 문단
                 }
                 paraHtml += '</div>';
                 html += paraHtml;
+                paraTables.forEach(t => { html += parseTable(t, images); });
             });
             
-            // 테이블 처리
+            // 문단 밖에 있는 표(드묾)는 전처럼 끝에
             for (let i = 0; i < allElements.length; i++) {
                 const el = allElements[i];
                 const localName = el.localName || el.nodeName.split(':').pop();
-                if (localName === 'tbl' || localName === 'table') {
-                    html += parseTable(el);
+                if ((localName === 'tbl' || localName === 'table') && !inTable(el)) {
+                    let inPara = false;
+                    for (let a = el.parentNode; a && a.nodeType === Node.ELEMENT_NODE; a = a.parentNode) { const ln = a.localName || a.nodeName.split(':').pop(); if (ln === 'p' || ln === 'P') { inPara = true; break; } }
+                    if (!inPara) html += parseTable(el, images);
                 }
             }
             
@@ -741,29 +786,47 @@ render_viewer_i18n([
             return html;
         }
         
-        function parseTable(tableEl) {
+        // ★ (2026-11-02 11:40) 표 안의 표는 그 칸 안에 표로(전에는 바깥 칸 글자에 섞이고 안쪽 줄이 바깥 표 줄로 한 번 더 나왔음),
+        //   칸 안 문단은 줄바꿈으로 나눔(전에는 붙어 버렸음) — 칸 글자·그림은 그 칸에 속한 것만(안쪽 표 것은 안쪽 표에서)
+        function parseTable(tableEl, images) {
+            const ln = function (n) { return n.localName || n.nodeName.split(':').pop(); };
+            const isTbl = function (n) { const l = ln(n); return l === 'tbl' || l === 'table'; };
+            const kids = function (n, names) { const out = []; (function walk(x) { for (let c = x.firstElementChild; c; c = c.nextElementSibling) { if (names.indexOf(ln(c)) >= 0) out.push(c); else if (!isTbl(c)) walk(c); } })(n); return out; };
             let html = '<table class="hwpx-table"><tbody>';
-            const allElements = tableEl.getElementsByTagName('*');
-            let currentRow = null;
-            
-            for (let i = 0; i < allElements.length; i++) {
-                const el = allElements[i];
-                const localName = el.localName || el.nodeName.split(':').pop();
-                
-                if (localName === 'tr') {
-                    if (currentRow) html += '</tr>';
-                    html += '<tr>';
-                    currentRow = el;
-                } else if (localName === 'tc' || localName === 'td' || localName === 'cell') {
-                    html += '<td>' + escapeHtml(el.textContent || '') + '</td>';
-                }
-            }
-            if (currentRow) html += '</tr>';
-            
+            kids(tableEl, ['tr']).forEach(function (tr) {
+                html += '<tr>';
+                kids(tr, ['tc', 'td', 'cell']).forEach(function (tc) {
+                    // ★ (2026-11-02 12:02) 칸 안 표는 문단 자리에(앞뒤 글자를 나눔), 가운데 빈 문단은 빈 줄로
+                    const parts = []; let cellImgs = ''; const seen = {}; let cur = null;
+                    (function walk(x) {
+                        for (let c = x.firstChild; c; c = c.nextSibling) {
+                            if (c.nodeType === Node.TEXT_NODE) { if (cur) cur.t += c.textContent; continue; }
+                            if (c.nodeType !== Node.ELEMENT_NODE) continue;
+                            const l = ln(c);
+                            if (isTbl(c)) { parts.push({ h: parseTable(c, images) }); if (cur) { cur = { t: '', split: true }; parts.push(cur); } continue; }
+                            if (l === 'p' || l === 'P') { const prev = cur; cur = { t: '' }; parts.push(cur); walk(c); cur = prev; continue; }
+                            if (images && (l === 'img' || l === 'pic' || l === 'picture')) {
+                                let ref = c.getAttribute('binaryItemIDRef') || c.getAttribute('binId') || c.getAttribute('hp:binaryItemIDRef');
+                                if (!ref) { const bi = c.querySelector('[binaryItemIDRef], [binId]'); if (bi) ref = bi.getAttribute('binaryItemIDRef') || bi.getAttribute('binId'); }
+                                if (ref && images[ref] && !seen[ref]) { seen[ref] = 1; cellImgs += `<img src="${images[ref]}" alt="" data-i18n-alt="image">`; }
+                            }
+                            walk(c);
+                        }
+                    })(tc);
+                    // 표 옆에서 갈라진 빈 조각은 빼고, 앞뒤 빈 줄은 다듬음
+                    let list = parts.filter(function (q, i) { return q.h !== undefined || q.t !== '' || !(q.split || (parts[i - 1] && parts[i - 1].h !== undefined) || (parts[i + 1] && parts[i + 1].h !== undefined)); });
+                    while (list.length && list[0].h === undefined && list[0].t === '') list.shift();
+                    while (list.length && list[list.length - 1].h === undefined && list[list.length - 1].t === '') list.pop();
+                    let txt = '';
+                    list.forEach(function (q, i) { if (q.h !== undefined) txt += q.h; else txt += (i > 0 && list[i - 1].h === undefined ? '<br>' : '') + escapeHtml(q.t); });
+                    if (!parts.length) txt = escapeHtml(tc.textContent || '');
+                    html += '<td>' + txt + cellImgs + '</td>';
+                });
+                html += '</tr>';
+            });
             html += '</tbody></table>';
             return html;
         }
-        
         function escapeHtml(text) {
             const div = document.createElement('div');
             div.textContent = text;
@@ -771,6 +834,25 @@ render_viewer_i18n([
         }
         
 <?php else: ?>
+        // ★ (2026-11-08 fix83) 옛 HWP(hwpjs) 결과는 글자를 거르지 않고 HTML로 이어 붙이므로, 화면에 넣기 전에 스크립트·이벤트·위험 주소를 걷어낸다(모양·data:image 그림은 그대로)
+        function mcSanitizeHwpHtml(html) {
+            const doc = new DOMParser().parseFromString('<body>' + html + '</body>', 'text/html');
+            doc.querySelectorAll('script,iframe,frame,frameset,object,embed,base,meta,link,form,noscript,template,style[media="print"]').forEach(el => el.remove());
+            const badUrl = /^\s*(javascript|vbscript|data(?!:image\/(png|jpe?g|gif|webp|bmp);))/i;
+            doc.body.querySelectorAll('*').forEach(el => {
+                for (const a of Array.from(el.attributes)) {
+                    const n = a.name.toLowerCase();
+                    const v = a.value.replace(/[\u0000-\u001F\s]+/g, '');
+                    if (n.startsWith('on') || n === 'srcdoc' || n === 'formaction') { el.removeAttribute(a.name); continue; }
+                    if (['href','src','xlink:href','action','background','poster','lowsrc','dynsrc','data'].includes(n) && badUrl.test(v)) { el.removeAttribute(a.name); continue; }
+                    if (n === 'style' && /expression\s*\(|javascript:|url\s*\(\s*['"]?\s*(javascript|vbscript)/i.test(a.value)) el.removeAttribute(a.name);
+                }
+                if (/^(animate|set|animatemotion|animatetransform|use|foreignobject)$/i.test(el.tagName)) el.remove();
+            });
+            // ★ (2026-11-09 14:11) 거른 결과를 글자로 바꿔 다시 읽지 않고 노드째 돌려줌 — 다시 읽을 때 구조가 달라지는 경우(math·style 섞임)에 걸렀던 <img onerror> 가 살아났음
+            return doc.body;
+        }
+
         // ============================================================
         // HWP 파일 로드 (ohah/hwpjs + CFB 직접 이미지 추출)
         // ============================================================
@@ -955,7 +1037,9 @@ render_viewer_i18n([
                 // 4. 이미지 처리
                 const extractedCount = Object.keys(extractedImages).length;
                 
-                viewerEl.innerHTML = html;
+                const __clean = mcSanitizeHwpHtml(html); // ★ (2026-11-08 fix83) 넣기 전 거르기
+                viewerEl.classList.add('hwp-legacy'); // ★ (2026-11-02 19:21) 옛 HWP(hwpjs)는 글자색이 검정으로 박혀 있어 어두운 테마에서도 흰 종이로(아래 CSS)
+                viewerEl.replaceChildren(...Array.from(__clean.childNodes).map(n => document.importNode(n, true))); // ★ (2026-11-09 14:11) 거른 노드를 그대로 넣음(innerHTML 로 다시 읽지 않음)
                 
                 // 이미지 스타일 강제 적용
                 if (extractedCount > 0) {
@@ -1005,14 +1089,15 @@ render_viewer_i18n([
             loadingOverlay.style.display = 'none';
             
             if (isUnsupportedFormat) {
+                // ★ (2026-10-31) 기본 뷰어(hwpjs)가 못 읽는 형식 → rhwp 뷰어로 자동 전환(뒤로가기에 이 화면이 남지 않게 replace). 아래 안내는 전환 전에 잠깐 보임
+                setTimeout(function () { try { location.replace(rhwpUrl); } catch (e) { location.href = rhwpUrl; } }, 600);
                 viewerContainer.innerHTML = `
                     <div class="error-container">
                         <div class="error-icon">📄</div>
-                        <div class="error-message">${_vi18n.hwp_unsupported}</div>
-                        <div style="color: #888; font-size: 13px; margin-top: 8px;">${_vi18n.hwp_save_hwpx}</div>
+                        <div class="error-message">${rhwpAutoMsg.replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; })}</div>
                         <div style="display: flex; gap: 10px; margin-top: 20px; justify-content: center; flex-wrap: wrap;">
-                            <a href="${fileUrl}" download="${fileName}" class="error-btn" style="background: #28a745;">${_vi18n.download}</a>
-                            <a href="javascript:void(0)" class="error-btn" onclick="window.location.href=backUrl">${_vi18n.close}</a>
+                            <a href="${rhwpUrl}" class="error-btn" style="background: #00897B;">🔄 ${rhwpBtnLbl}</a>
+                            <a href="${fileUrl}" download="${String(fileName).replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; })}" class="error-btn" style="background: #28a745;">${_vi18n.download}</a>
                         </div>
                     </div>
                 `;
@@ -1020,8 +1105,11 @@ render_viewer_i18n([
                 viewerContainer.innerHTML = `
                     <div class="error-container">
                         <div class="error-icon">📄</div>
-                        <div class="error-message">${message}</div>
-                        <a href="javascript:void(0)" class="error-btn" onclick="window.location.href=backUrl">${_vi18n.go_back}</a>
+                        <div class="error-message">${String(message || '').replace(/[&<>"']/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; })}</div>
+                        <div style="display: flex; gap: 10px; margin-top: 16px; justify-content: center; flex-wrap: wrap;">
+                            <a href="${rhwpUrl}" class="error-btn" style="background: #00897B;">🔄 ${rhwpBtnLbl}</a><?php /* ★ (2026-10-31) 다른 오류도 rhwp 로 열어 볼 수 있게 */ ?>
+                            <a href="javascript:void(0)" class="error-btn" onclick="window.location.href=backUrl">${_vi18n.go_back}</a>
+                        </div>
                     </div>
                 `;
             }
@@ -1043,6 +1131,7 @@ render_viewer_i18n([
         
         function applyZoom() {
             viewerEl.style.transform = `scale(${currentZoom / 100})`;
+            viewerEl.style.transformOrigin = currentZoom > 100 ? 'top left' : 'top center'; // ★ (2026-11-02 19:21) 100% 넘게 키우면 왼쪽이 잘려 볼 수 없던 것
             document.getElementById('zoomValue').textContent = currentZoom + '%';
         }
         
@@ -1056,6 +1145,7 @@ render_viewer_i18n([
             const next = current === 'dark' ? 'light' : 'dark';
             html.setAttribute('data-theme', next);
             document.cookie = `darkmode=${next};path=/;max-age=31536000`;
+            try { localStorage.setItem('mycomix_theme', next); } catch (e) {} // ★ (2026-11-02 09:04) 다른 화면은 이 값을 먼저 봄 — 여기서 바꾼 테마가 목록으로 돌아가면 되돌아가던 문제
         }
         
         // 키보드 단축키
@@ -1065,7 +1155,7 @@ render_viewer_i18n([
                 else if (e.key === '-') { e.preventDefault(); zoomOut(); }
                 else if (e.key === 'p') { e.preventDefault(); printDocument(); }
             }
-            if (e.key === 'Escape') window.location.href = backUrl;
+            if (e.key === 'Escape') (window.mcBackGo ? window.mcBackGo(backUrl, 'push') : (window.location.href = backUrl)); // ★ (2026-11-05 22:40) 바로 앞 기록이면 뒤로
         });
         
         // 터치 제스처 (핀치 줌)
@@ -1097,25 +1187,11 @@ render_viewer_i18n([
     </script>
 
 <?php
-$timeout = $auto_logout_settings['timeout'] ?? 1800;
-$remaining = $timeout - (time() - ($_SESSION['last_activity'] ?? time()));
-if ($remaining < 0) $remaining = 0;
-
-$_current_page = basename($_SERVER['SCRIPT_FILENAME']);
-$_auto_logout_pages = $auto_logout_settings['pages'] ?? ['index.php', 'viewer.php', 'epub_viewer.php', 'txt_viewer.php', 'hwp_viewer.php', 'bookmark.php'];
-$_is_target = in_array($_current_page, $_auto_logout_pages);
-$_is_remember_me = isset($_SESSION['remember_me']) && $_SESSION['remember_me'] === true;
-
-global $base_path;
-if (($auto_logout_settings['enabled'] ?? true) && $_is_target && !$_is_remember_me): 
+// ★ (2026-10-30) 공통 함수 사용 — 전에는 없는 세션 키(last_activity)를 읽어 남은 시간이 늘 꽉 찬 값이었고, 영어 안내 문구도 빠졌음
+render_auto_logout_script();
 ?>
-<script>
-window.SESSION_TIMEOUT = <?php echo $timeout; ?>;
-window.SESSION_REMAINING = <?php echo $remaining; ?>;
-</script>
-<script src="<?php echo $base_path; ?>/js/auto-logout.js?v=<?php echo @filemtime(__DIR__ . '/js/auto-logout.js') ?: '1'; ?>"></script>
-<?php endif; ?>
 
 <?php require_once __DIR__ . '/privacy_shield.php'; ?>
+<?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 </body>
 </html>

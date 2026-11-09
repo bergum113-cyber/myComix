@@ -119,7 +119,8 @@
             console.warn('테마 불러오기 실패:', e);
         }
         
-        return 'light'; // 기본값
+        // ★ (2026-10-30) 저장된 선택이 없으면 관리자 설정의 기본값(render_darkmode_script 가 window._dmDefault 로 넘김)
+        return (window._dmDefault === 'dark') ? 'dark' : 'light'; // 기본값
     }
     
     /**
@@ -280,6 +281,8 @@
         
         // 테마 적용 (깜빡임 방지를 위해 빠르게 적용)
         applyTheme(savedTheme);
+        // ★ (2026-11-02 22:27) 예전 TXT 뷰어가 남긴 darkmode=sepia 쿠키는 지금 테마로 바로잡음 — 문서 뷰어(쿠키를 봄)만 라이트로 나와 목록과 어긋났음
+        try { if (/(?:^|;\s*)darkmode=sepia(?:;|$)/.test(document.cookie) && (savedTheme === 'light' || savedTheme === 'dark')) document.cookie = `darkmode=${savedTheme}; path=/; max-age=31536000`; } catch (e) {}
         
         // DOM 로드 후 토글 버튼 생성
         if (document.readyState === 'loading') {

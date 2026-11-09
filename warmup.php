@@ -20,10 +20,15 @@ ob_start();
 
 // ✅ bootstrap.php 사용으로 통일 (정상 세션 시작)
 // ✅ cache_util.php는 bootstrap.php에서 자동 로드됨
+// ★ (2026-11-09 14:10) 뷰어가 뒤에서 부르는 미리 풀기 요청 — 자동 로그아웃용 활동 표시를 건드리지 않음(thumb.php·blank.php 와 같음)
+define('MC_NO_ACTIVITY_TOUCH', true);
 require_once __DIR__ . '/bootstrap.php';
 
 // ✅ init_bidx() 사용으로 다중 폴더 지원
 $bidx = init_bidx();
+
+// ★ (2026-10-30) 보안: 폴더 권한 확인
+mc_file_param_guard(true);
 
 // 버퍼 정리
 ob_end_clean();
@@ -43,6 +48,8 @@ $user_id = preg_replace('/[^a-zA-Z0-9]/', '', $_SESSION['user_id'] ?? 'guest');
 if (empty($user_id) || strlen($user_id) > 50) {
     $user_id = 'guest';
 }
+// ★ (2026-11-04 00:26) 세션을 일찍 닫음 — 압축 풀기가 수 초 걸리는 동안 로그아웃하면, 끝날 때 처음 읽은 세션을 다시 써서 로그인이 되살아났음(운영 Redis 는 세션 잠금 없음, 실측 재현)
+if (session_status() === PHP_SESSION_ACTIVE) session_write_close();
 
 // ============================================================
 // 이미지 폴더 캐시 생성 함수
@@ -78,23 +85,25 @@ function warmupImageFolderCache($src_dir, $user_id, $limit = 10) {
     $success = 0;
     
     try {
+        // ★ (2026-11-02 09:57) 뷰어와 같은 순서·기준(정렬, 표지·영상 썸네일 빼기)으로 앞 쪽들을 — 전에는 디렉터리 읽은 순서 그대로라 엉뚱한 쪽을 미리 만들었음
+        $__srcs = [];
         foreach (new DirectoryIterator($src_dir) as $fi) {
             if (!$fi->isFile()) continue;
-            
             // ✅ is_image_file() 헬퍼 함수 사용으로 패턴 통일 (2026-01-11)
-            if (!is_image_file($fi->getFilename())) {
-                continue;
-            }
-
-            $src  = $fi->getPathname();
-            $dest = $cache_dir . '/' . $fi->getFilename();
+            if (!is_image_file($fi->getFilename())) continue;
+            if (function_exists('mc_folder_nonpage') && mc_folder_nonpage($fi->getFilename())) continue;
+            $__srcs[] = $fi->getPathname();
+        }
+        $__srcs = function_exists('n_sort') ? n_sort($__srcs) : $__srcs;
+        foreach ($__srcs as $src) {
+            $dest = $cache_dir . '/' . basename($src);
 
             if (!file_exists($dest)) {
                 $raw = @file_get_contents($src);
                 
                 if ($raw !== false) {
                     $compressed = compressImage($raw, null, true);
-                    $tmp = $dest . '.tmp.' . getmypid();
+                    $tmp = $dest . '.tmp.' . bin2hex(random_bytes(4)); // ★ (2026-11-02 09:13) Windows Apache 는 한 프로세스(여러 스레드)라 pid 가 같아 겹쳤음
                     
                     if (@file_put_contents($tmp, $compressed, LOCK_EX) !== false) {
                         if (@rename($tmp, $dest)) {
@@ -142,6 +151,9 @@ $getfile = decode_file_param($_GET['file'] ?? '');
 
 // 특수 접미사 제거 (_imgfolder는 폴더 표시용 마커)
 $getfile = preg_replace('/_imgfolder$/', '', $getfile);
+if (trim(str_replace('\\', '/', (string)$getfile), '/.') === '') { if (!headers_sent()) http_response_code(400); exit(__("warmup_missing_params")); } // ★ (2026-11-02 19:11) 빈 경로면 콘텐츠 폴더 맨 위를 미리 만들던 것
+// ★ (2026-10-30) 접미사를 뗀 실제 폴더로 권한 다시 확인(Foo_imgfolder 로 요청해 숨김 폴더를 피하지 못하게)
+if (!mc_path_allowed($getfile)) { http_response_code(403); exit; }
 
 // ✅ validate_file_path() 사용으로 경로 검증 통합
 $base_file = validate_file_path($getfile, $base_dir);

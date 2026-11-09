@@ -25,6 +25,9 @@ require_once __DIR__ . "/bootstrap.php";
 handle_timeout_popup();
 
 $bidx = init_bidx();
+
+// ★ (2026-10-30) 보안: 폴더 권한 확인(API·스트림 포함 모든 요청)
+mc_file_param_guard(isset($_GET['action']) || isset($_POST['action']));
 $_branding = load_branding();
 
 $office_settings = $office_viewer_settings ?? [
@@ -77,18 +80,26 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
     header('Content-Type: ' . $mime);
     header('Content-Length: ' . $filesize);
     header('Accept-Ranges: bytes');
-    header('Cache-Control: public, max-age=86400');
+    header('Cache-Control: private, max-age=86400');
     
     // Range 요청 처리
     if (isset($_SERVER['HTTP_RANGE'])) {
         $range = $_SERVER['HTTP_RANGE'];
         if (preg_match('/bytes=(\d*)-(\d*)/', $range, $matches)) {
-            $start = $matches[1] !== '' ? intval($matches[1]) : 0;
-            $end = $matches[2] !== '' ? intval($matches[2]) : $filesize - 1;
+            // ★ (2026-10-30) 끝 위치를 파일 크기로 자르고(큰 값이면 메모리 할당 치명 오류·길이 불일치), 'bytes=-N'(끝에서 N바이트) 처리,
+            //   한 번에 다 읽지 않고 64KB 씩 보냄(큰 파일 메모리)
+            if ($matches[1] === '' && $matches[2] !== '') {
+                $start = max(0, $filesize - intval($matches[2]));
+                $end = $filesize - 1;
+            } else {
+                $start = $matches[1] !== '' ? intval($matches[1]) : 0;
+                $end = $matches[2] !== '' ? min(intval($matches[2]), $filesize - 1) : $filesize - 1;
+            }
             
             if ($start > $end || $start >= $filesize) {
                 http_response_code(416);
                 header("Content-Range: bytes */$filesize");
+                header('Content-Length: 0'); // ★ (2026-11-09 11:38) 위에서 보낸 파일 전체 길이를 0으로 바꿈 — 본문 없이 끝나는데 길이가 남아 받는 쪽이 끝까지 기다리다 끊기던 것
                 exit;
             }
             
@@ -100,7 +111,14 @@ if (isset($_GET['action']) && $_GET['action'] === 'stream') {
             
             $fp = fopen($base_file, 'rb');
             fseek($fp, $start);
-            echo fread($fp, $length);
+            $left = $length;
+            while ($left > 0 && !feof($fp)) {
+                $buf = fread($fp, min(65536, $left));
+                if ($buf === false || $buf === '') break;
+                echo $buf;
+                $left -= strlen($buf);
+                if (connection_aborted()) break;
+            }
             fclose($fp);
             exit;
         }
@@ -160,22 +178,27 @@ $file_types = [
     'pptx' => ['name' => 'PowerPoint', 'icon' => $office_svgs['pptx'], 'color' => '#d24726'],
 ];
 $file_info = $file_types[$ext] ?? ['name' => 'Office', 'icon' => $office_svgs['docx'], 'color' => '#666'];
-$is_legacy = in_array($ext, ['doc', 'xls', 'ppt']);
+// ★ (2026-10-30) .xls 도 SheetJS 로 바로 보기(예전 엑셀 형식도 읽을 수 있음) — 변환 안내는 .doc·.ppt 만
+$is_legacy = in_array($ext, ['doc', 'ppt']);
+$is_sheet = in_array($ext, ['xlsx', 'xls']);
 
 $link_dir = dirname($getfile);
 if ($link_dir === '.' || $link_dir === '/') {
     $link_dir = '';
 }
 
-$darkmode = $_COOKIE['darkmode'] ?? 'light';
+$darkmode = (is_string($_COOKIE['darkmode'] ?? null) && preg_match('/^[a-z]{1,12}$/', $_COOKIE['darkmode'])) ? $_COOKIE['darkmode'] : 'light'; // ★ (2026-11-02 19:21) 배열 쿠키(darkmode[]=)면 500 이던 것
 $file_url = "office_viewer.php?action=stream&file=" . rawurlencode($getfile) . "&bidx=" . $bidx;
 
 // 뒤로가기 URL
 $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
 ?>
 <!DOCTYPE html>
-<html lang="ko" data-theme="<?php echo h($darkmode); ?>">
+<html lang="ko" class="mc-fdk" data-theme="<?php echo h($darkmode); ?>"><?php /* ★ (2026-11-08 fix82) 다크면 바탕은 어둡게 두고 내용만 나타나게(bootstrap.php mc_fade_dark_style) */ ?>
+<?php if (function_exists('mc_fade_dark_style')) echo mc_fade_dark_style('#1a1a1a'); ?>
 <head>
+<?php if (function_exists('mc_back_origin_viewer_js')) echo mc_back_origin_viewer_js(); /* ★ (2026-11-05) 뒤로가기 = 들어온 곳(서재·즐겨찾기·북마크 등) — function.php */ ?>
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes">
     <title><?php echo h($title); ?> - <?php echo h($file_info['name']); ?> <?php echo __h("viewer_label"); ?></title>
@@ -186,7 +209,7 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
         html.leaving{opacity:0;transition:opacity .1s ease-out}
     </style>
     <link rel="stylesheet" href="./css/bootstrap.min.css">
-    <link rel="shortcut icon" href="./favicon.ico">
+    <?php echo function_exists('mc_favicon_tags') ? mc_favicon_tags() : '<link rel="shortcut icon" href="./favicon.ico">'; // ★ (2026-11-03 23:50) 탭 아이콘 = 로고 ?>
     
     <?php if ($ext === 'pptx'): ?>
     <!-- PPTX 슬라이드 스타일 -->
@@ -215,6 +238,17 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
             line-height: 1.8;
         }
         .slide-body p { margin-bottom: 0.5em; }
+        /* ★ (2026-10-30) PPT 표·그림 */
+        .slide-body .slide-table { border-collapse: collapse; margin: 0.5em 0 1em; font-size: 15px; line-height: 1.5; max-width: 100%; }
+        .slide-body .slide-table td { border: 1px solid var(--table-border, #ccc); padding: 4px 8px; vertical-align: top; }
+        .slide-body .slide-img { margin: 0.5em 0 1em; text-align: center; }
+        .slide-body .slide-img img { max-width: 100%; height: auto; }
+        /* ★ (2026-10-30) 휴대폰: 최소 높이 400px × 16:9 비율 때문에 슬라이드가 711px 이상으로 넓어져 오른쪽이 잘리던 것 */
+        @media (max-width: 768px) {
+            .slide-content { min-height: 0; aspect-ratio: auto; padding: 24px 20px; margin: 10px auto; }
+            .slide-title { font-size: 22px; }
+            .slide-body { font-size: 16px; }
+        }
     </style>
     <?php endif; ?>
     
@@ -389,19 +423,12 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
             background: var(--card-bg) !important;
         }
         
-        [data-theme="dark"] .docx-wrapper * {
-            color: var(--text-color);
-        }
+        /* ★ (2026-11-02 20:14) 다크에서도 DOCX 쪽은 흰 종이 + 문서 자기 색(옛 HWP 와 같은 방식)
+           — 글자만 밝게 바꾸면 흰 쪽 위에서 안 보이고, 쪽을 어둡게 하면 문서가 직접 지정한 검정 글자·형광펜이 안 보였음 */
+        [data-theme="dark"] .docx-wrapper > section.docx { background: #fff !important; color: #000; }
         
         /* docx-preview 테이블 스타일 다크모드 대응 */
-        [data-theme="dark"] .docx-wrapper table {
-            border-color: var(--table-border) !important;
-        }
-        
-        [data-theme="dark"] .docx-wrapper td,
-        [data-theme="dark"] .docx-wrapper th {
-            border-color: var(--table-border) !important;
-        }
+        /* ★ (2026-11-02 21:19) 다크 표 테두리 덮기 규칙 뺌 — 쪽이 흰 종이(문서 자기 색)가 된 뒤로는 빨강 테두리가 회색, 숨긴 테두리가 회색 선으로 드러났음 */
         
         /* ======================================
            XLSX 스타일
@@ -468,6 +495,10 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
             width: 40px;
             min-width: 40px;
         }
+        /* ★ (2026-10-30) 열 머리(A·B·C…) */
+        .excel-table th.col-head { text-align: center; color: #666; font-weight: 500; }
+        [data-theme="dark"] .row-num, [data-theme="dark"] .excel-table th.col-head { color: #9aa0a6; } /* ★ (2026-11-02 20:15) 다크 바탕(#363636)에서 #666 은 거의 안 보였음 */
+        .excel-table th.row-num { z-index: 2; }
         
         /* ======================================
            PPTX 스타일 (PPTXjs)
@@ -795,12 +826,13 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
 <body>
     <div class="header">
         <div class="header-left">
-            <a href="<?php echo h($back_url); ?>" class="back-btn" title="<?php echo __h('js_go_back'); ?>">
+            <a data-mc-back href="<?php echo h($back_url); ?>" class="back-btn" title="<?php echo __h('js_go_back'); ?>">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M19 12H5M12 19l-7-7 7-7"/>
                 </svg>
             </a>
             <span class="filename" title="<?php echo h($filename); ?>"><?php echo h($title); ?></span>
+            <?php if (function_exists('mc_doc_cover_btn')) echo mc_doc_cover_btn($getfile, $bidx ?? 0, 'back-btn'); /* ★ (2026-11-08 fix80) 이 책 표지를 폴더 표지로(관리자) */ ?>
             <span class="file-badge">
                 <span><?php echo $file_info['icon']; ?></span>
                 <span><?php echo h($file_info['name']); ?></span>
@@ -856,14 +888,14 @@ $back_url = "index.php?dir=" . rawurlencode($link_dir) . "&bidx=" . $bidx;
                     <strong><?php echo h($file_info['name']); ?></strong> <?php echo __h("office_legacy_format"); ?><br>
                     <?php echo __('office_legacy_convert', strtoupper(str_replace(['doc', 'xls', 'ppt'], ['docx', 'xlsx', 'pptx'], $ext))); ?>
                 </div>
-                <a href="<?php echo h($back_url); ?>" class="legacy-btn"><?php echo __h("js_go_back"); ?></a>
+                <a data-mc-back href="<?php echo h($back_url); ?>" class="legacy-btn"><?php echo __h("js_go_back"); ?></a>
             </div>
         </div>
         <?php elseif ($ext === 'docx'): ?>
         <div class="viewer docx-viewer">
             <div id="docx-container"></div>
         </div>
-        <?php elseif ($ext === 'xlsx'): ?>
+        <?php elseif ($is_sheet): ?>
         <div class="viewer xlsx-viewer" id="viewer"></div>
         <?php elseif ($ext === 'pptx'): ?>
         <div class="viewer pptx-viewer">
@@ -892,18 +924,24 @@ render_viewer_i18n([
 ]);
 ?>
 
+    <?php
+    // ★ (2026-10-30) 라이브러리를 사이트 안(js/)에 두고 씀 — 외부 CDN 이 막히거나 바뀌어도 그대로 동작
+    //   SheetJS 0.18.5 → 0.20.3(알려진 취약점 CVE-2023-30533·CVE-2024-22363 수정판, 공식 빌드와 해시 같음),
+    //   docx-preview 0.3.7 → 0.4.1, JSZip 3.10.1 → 3.10.2
+    $__jsv = function ($f) { return 'js/' . $f . '?v=' . (@filemtime(__DIR__ . '/js/' . $f) ?: '1'); };
+    ?>
     <?php if ($ext === 'docx'): ?>
     <!-- docx-preview: mammoth.js보다 서식 지원 훨씬 좋음 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/docx-preview@0.3.7/dist/docx-preview.min.js"></script>
+    <script src="<?php echo h($__jsv('jszip.min.js')); ?>"></script>
+    <script src="<?php echo h($__jsv('docx-preview.min.js')); ?>"></script>
     
-    <?php elseif ($ext === 'xlsx'): ?>
+    <?php elseif ($is_sheet): ?>
     <!-- SheetJS -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="<?php echo h($__jsv('xlsx.full.min.js')); ?>"></script>
     
     <?php elseif ($ext === 'pptx'): ?>
-    <!-- PPTX: JSZip으로 텍스트 추출 -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <!-- PPTX: JSZip으로 텍스트·그림 추출 -->
+    <script src="<?php echo h($__jsv('jszip.min.js')); ?>"></script>
     <?php endif; ?>
     
     <?php endif; ?>
@@ -912,7 +950,7 @@ render_viewer_i18n([
         document.documentElement.classList.add('ready');
         
         const fileUrl = '<?php echo $file_url; ?>';
-        const backUrl = '<?php echo h($back_url); ?>';
+        const backUrl = (window.mcBackUrl ? window.mcBackUrl(<?php echo js($back_url); ?>) : <?php echo js($back_url); ?>); // ★ (2026-11-05) 들어온 곳으로 // ★ (2026-11-02 09:03) h() 로 넣으면 &amp;bidx 가 되어 Esc 로 돌아갈 때 콘텐츠 폴더(bidx)가 빠졌음
         const fileExt = '<?php echo $ext; ?>';
         const isLegacy = <?php echo $is_legacy ? 'true' : 'false'; ?>;
         
@@ -925,10 +963,11 @@ render_viewer_i18n([
         let currentZoom = 100;
         
         // 모바일에서는 화면 너비에 맞게 줌 조정
-        if (isSmallMobile) {
+        // ★ (2026-11-02 19:21) 줄여 그리는 것은 DOCX 뿐 — 시트·PPT 는 100% 그대로인데 표시만 50~67% 라 '+' 를 누르면 오히려 작아졌음
+        if (<?php echo $ext === 'docx' ? 'true' : 'false'; ?> && isSmallMobile) {
             currentZoom = Math.floor((window.innerWidth - 20) / 900 * 100);
             currentZoom = Math.max(50, Math.min(100, currentZoom));
-        } else if (isMobile) {
+        } else if (<?php echo $ext === 'docx' ? 'true' : 'false'; ?> && isMobile) {
             currentZoom = Math.floor((window.innerWidth - 30) / 900 * 100);
             currentZoom = Math.max(50, Math.min(100, currentZoom));
         }
@@ -970,10 +1009,17 @@ render_viewer_i18n([
                     renderFooters: true,
                     renderFootnotes: true,
                     renderEndnotes: true,
+                    renderAltChunks: false, // ★ (2026-11-04 09:41) 문서 속 HTML 조각(altChunk)은 그리지 않음 — 켜면 샌드박스 없는 iframe(srcdoc)으로 들어가 사이트 권한으로 스크립트가 돌 수 있었음
                     debug: false
                 };
                 
                 await docx.renderAsync(blob, container, null, options);
+                // ★ (2026-10-30) 문서 안 링크가 javascript: 등이면 제거(사이트 화면에서 바로 그리므로 누르면 사이트 권한으로 실행될 수 있음)
+                container.querySelectorAll('a[href]').forEach(function (a) {
+                    var h = String(a.getAttribute('href') || '').replace(/[\s\u0000-\u001f]+/g, '').toLowerCase();
+                    if (!(h.indexOf('http:') === 0 || h.indexOf('https:') === 0 || h.indexOf('mailto:') === 0 || h.charAt(0) === '#')) a.removeAttribute('href');
+                    else if (h.charAt(0) !== '#') { a.setAttribute('target', '_blank'); a.setAttribute('rel', 'noopener noreferrer'); }
+                });
                 loadingOverlay.style.display = 'none';
                 
                 // 모바일에서 초기 줌 적용
@@ -988,7 +1034,7 @@ render_viewer_i18n([
             }
         }
         
-<?php elseif ($ext === 'xlsx'): ?>
+<?php elseif ($is_sheet): ?>
         // ======================================
         // XLSX 로드 (SheetJS 사용)
         // ======================================
@@ -1002,9 +1048,10 @@ render_viewer_i18n([
                 const arrayBuffer = await response.arrayBuffer();
                 const workbook = XLSX.read(arrayBuffer, { type: 'array' });
                 
+                // ★ (2026-10-30) 시트 원본을 들고 있다가 그릴 때 표시값(날짜·서식)·병합·실제 행/열 번호로 그림
                 sheets = workbook.SheetNames.map(name => ({
                     name: name,
-                    data: XLSX.utils.sheet_to_json(workbook.Sheets[name], { header: 1 })
+                    ws: workbook.Sheets[name]
                 }));
                 
                 // 시트 탭 렌더링
@@ -1032,28 +1079,73 @@ render_viewer_i18n([
             renderSheet(idx);
         }
         
+        // ★ (2026-10-30) 셀 표시값: 엑셀에 보이는 글자(날짜·통화·% 등 서식 적용) 그대로
+        function sheetCellText(cell) {
+            if (!cell) return '';
+            try {
+                const t = XLSX.utils.format_cell(cell);
+                if (t !== undefined && t !== null && t !== '') return String(t);
+            } catch (e) {}
+            return cell.v === undefined || cell.v === null ? '' : String(cell.v);
+        }
+        
         function renderSheet(idx) {
             const sheet = sheets[idx];
-            if (!sheet || !sheet.data || sheet.data.length === 0) {
+            const ws = sheet ? sheet.ws : null;
+            const noData = () => {
                 viewerEl.innerHTML = '<div class="error-container"><div class="error-icon">📊</div><div class="error-message">' + _vi18n.sheet_no_data + '</div></div>';
-                return;
-            }
+            };
+            if (!ws || !ws['!ref']) { noData(); return; }
             
-            const maxCols = Math.max(...sheet.data.map(row => row ? row.length : 0));
-            
-            let html = '<div style="overflow-x:auto;"><table class="excel-table"><tbody>';
-            sheet.data.forEach((row, rowIdx) => {
-                html += '<tr>';
-                html += `<td class="row-num">${rowIdx + 1}</td>`;
-                for (let col = 0; col < maxCols; col++) {
-                    const cell = row && row[col] !== undefined ? row[col] : '';
-                    html += `<td>${escapeHtml(String(cell))}</td>`;
-                }
-                html += '</tr>';
+            // 범위: !ref 시작점 기준(행/열 번호가 실제 엑셀과 같게), 끝은 실제 값 있는 셀·병합까지만
+            //   (가끔 !ref 가 A1:XFD1048576 처럼 과하게 잡힌 파일이 있어 빈 칸 수백만 개를 그리지 않게)
+            const ref = XLSX.utils.decode_range(ws['!ref']);
+            let maxR = -1, maxC = -1;
+            Object.keys(ws).forEach(k => {
+                if (k.charAt(0) === '!') return;
+                const cell = ws[k];
+                if (!cell || cell.t === 'z') return;
+                const a = XLSX.utils.decode_cell(k);
+                if (a.r > maxR) maxR = a.r;
+                if (a.c > maxC) maxC = a.c;
             });
-            html += '</tbody></table></div>';
+            const merges = Array.isArray(ws['!merges']) ? ws['!merges'] : [];
+            merges.forEach(m => { if (m.e.r > maxR) maxR = m.e.r; if (m.e.c > maxC) maxC = m.e.c; });
+            const r0 = ref.s.r, c0 = ref.s.c;
+            const r1 = Math.min(ref.e.r, maxR), c1 = Math.min(ref.e.c, maxC);
+            if (r1 < r0 || c1 < c0) { noData(); return; }
             
-            viewerEl.innerHTML = html;
+            // 병합: 시작 셀엔 rowspan/colspan, 가려지는 셀은 건너뜀
+            const mStart = {}, mCover = {};
+            merges.forEach(m => {
+                const sr = Math.max(m.s.r, r0), sc = Math.max(m.s.c, c0);
+                const er = Math.min(m.e.r, r1), ec = Math.min(m.e.c, c1);
+                if (er < sr || ec < sc) return;
+                mStart[sr + ',' + sc] = { rs: er - sr + 1, cs: ec - sc + 1, r: m.s.r, c: m.s.c };
+                for (let r = sr; r <= er; r++) for (let c = sc; c <= ec; c++) {
+                    if (r !== sr || c !== sc) mCover[r + ',' + c] = 1;
+                }
+            });
+            
+            const parts = ['<div style="overflow-x:auto;"><table class="excel-table"><thead><tr><th class="row-num"></th>'];
+            for (let c = c0; c <= c1; c++) parts.push('<th class="col-head">' + XLSX.utils.encode_col(c) + '</th>');
+            parts.push('</tr></thead><tbody>');
+            for (let r = r0; r <= r1; r++) {
+                parts.push('<tr><td class="row-num">' + (r + 1) + '</td>');
+                for (let c = c0; c <= c1; c++) {
+                    const key = r + ',' + c;
+                    if (mCover[key]) continue;
+                    const m = mStart[key];
+                    // 병합 영역 값은 원래 시작 셀(앞쪽이 잘려도 그 값)에 있음
+                    const cell = ws[XLSX.utils.encode_cell(m ? { r: m.r, c: m.c } : { r: r, c: c })];
+                    const span = m ? ((m.rs > 1 ? ' rowspan="' + m.rs + '"' : '') + (m.cs > 1 ? ' colspan="' + m.cs + '"' : '')) : '';
+                    parts.push('<td' + span + '>' + escapeHtml(sheetCellText(cell)) + '</td>');
+                }
+                parts.push('</tr>');
+            }
+            parts.push('</tbody></table></div>');
+            
+            viewerEl.innerHTML = parts.join('');
         }
         
 <?php elseif ($ext === 'pptx'): ?>
@@ -1069,37 +1161,39 @@ render_viewer_i18n([
                 if (!response.ok) throw new Error(_vi18n.http_error + ' ' + response.status + ')');
                 
                 const arrayBuffer = await response.arrayBuffer();
-                const zip = await JSZip.loadAsync(arrayBuffer);
+                pptZip = await JSZip.loadAsync(arrayBuffer);
+                const zip = pptZip;
                 
-                // 슬라이드 파일 찾기
-                const slideFiles = Object.keys(zip.files)
-                    .filter(name => name.match(/ppt\/slides\/slide\d+\.xml$/))
-                    .sort((a, b) => {
-                        const numA = parseInt(a.match(/slide(\d+)/)[1]);
-                        const numB = parseInt(b.match(/slide(\d+)/)[1]);
-                        return numA - numB;
-                    });
+                // ★ (2026-10-30) 슬라이드 순서는 presentation.xml 의 목록(sldIdLst) 순서 — 파일 이름 번호와 다를 수 있음
+                let slideFiles = [];
+                try {
+                    const pres = await pptReadXml('ppt/presentation.xml');
+                    const presRels = await pptReadRels('ppt/presentation.xml');
+                    if (pres) {
+                        pptEls(pres, 'sldId').forEach(el => {
+                            const rid = el.getAttributeNS(PPT_RNS, 'id') || el.getAttribute('r:id');
+                            const target = rid && presRels[rid];
+                            if (target && zip.file(target) && slideFiles.indexOf(target) < 0) slideFiles.push(target);
+                        });
+                    }
+                } catch (e) { slideFiles = []; }
+                if (slideFiles.length === 0) {
+                    // 목록을 못 읽으면 예전처럼 파일 이름 번호 순
+                    slideFiles = Object.keys(zip.files)
+                        .filter(name => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+                        .sort((a, b) => parseInt(a.match(/slide(\d+)\.xml$/)[1], 10) - parseInt(b.match(/slide(\d+)\.xml$/)[1], 10));
+                }
                 
                 slides = [];
                 
                 for (const slideFile of slideFiles) {
-                    const content = await zip.file(slideFile).async('string');
-                    const parser = new DOMParser();
-                    const xmlDoc = parser.parseFromString(content, 'text/xml');
-                    
-                    // 텍스트 추출
-                    const texts = [];
-                    const textElements = xmlDoc.getElementsByTagName('a:t');
-                    for (let i = 0; i < textElements.length; i++) {
-                        const text = textElements[i].textContent;
-                        if (text && text.trim()) {
-                            texts.push(text);
-                        }
-                    }
-                    
+                    const xmlDoc = await pptReadXml(slideFile);
+                    const rels = await pptReadRels(slideFile);
+                    const parsed = xmlDoc ? pptParseSlide(xmlDoc, rels) : { title: '', blocks: [] };
                     slides.push({
                         number: slides.length + 1,
-                        texts: texts
+                        title: parsed.title,
+                        blocks: parsed.blocks
                     });
                 }
                 
@@ -1126,6 +1220,144 @@ render_viewer_i18n([
             }
         }
         
+        // ★ (2026-10-30) PPTX 읽기 도우미 — 문단 단위로 글자 잇기, 제목 자리(placeholder) 인식, 표·그림 표시
+        let pptZip = null;
+        const pptImgCache = {};
+        const PPT_RNS = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+        const PPT_IMG_TYPES = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', bmp: 'image/bmp', webp: 'image/webp' };
+        
+        function pptEls(node, local) {
+            return Array.prototype.slice.call(node.getElementsByTagNameNS('*', local));
+        }
+        function pptChild(node, local) {
+            if (!node) return null;
+            for (let c = node.firstElementChild; c; c = c.nextElementSibling) if (c.localName === local) return c;
+            return null;
+        }
+        async function pptReadXml(path) {
+            const f = pptZip && pptZip.file(path);
+            if (!f) return null;
+            const doc = new DOMParser().parseFromString(await f.async('string'), 'application/xml');
+            return doc.getElementsByTagName('parsererror').length ? null : doc;
+        }
+        // 상대 경로(../media/a.png)를 zip 안 경로로
+        function pptResolve(baseFile, target) {
+            if (!target) return '';
+            let parts;
+            if (target.charAt(0) === '/') parts = target.slice(1).split('/');
+            else parts = baseFile.split('/').slice(0, -1).concat(target.split('/'));
+            const out = [];
+            parts.forEach(p => { if (p === '..') out.pop(); else if (p !== '.' && p !== '') out.push(p); });
+            return out.join('/');
+        }
+        async function pptReadRels(file) {
+            const dir = file.split('/').slice(0, -1).join('/');
+            const name = file.split('/').pop();
+            const doc = await pptReadXml((dir ? dir + '/' : '') + '_rels/' + name + '.rels');
+            const map = {};
+            if (!doc) return map;
+            pptEls(doc, 'Relationship').forEach(r => {
+                if ((r.getAttribute('TargetMode') || '') === 'External') return;
+                const id = r.getAttribute('Id'), t = r.getAttribute('Target');
+                if (id && t) map[id] = pptResolve(file, t);
+            });
+            return map;
+        }
+        // 문단 하나 = 그 안의 글자 조각(a:r·a:fld)을 이은 것, a:br 은 줄바꿈
+        function pptParaText(p) {
+            let t = '';
+            for (let c = p.firstElementChild; c; c = c.nextElementSibling) {
+                if (c.localName === 'r' || c.localName === 'fld') {
+                    const tt = pptChild(c, 't');
+                    if (tt) t += tt.textContent;
+                } else if (c.localName === 'br') {
+                    t += '\n';
+                }
+            }
+            return t;
+        }
+        function pptParas(txBody) {
+            const out = [];
+            if (!txBody) return out;
+            for (let p = txBody.firstElementChild; p; p = p.nextElementSibling) {
+                if (p.localName !== 'p') continue;
+                const text = pptParaText(p);
+                if (!text.trim()) continue;
+                const pPr = pptChild(p, 'pPr');
+                const lvl = pPr ? (parseInt(pPr.getAttribute('lvl') || '0', 10) || 0) : 0;
+                out.push({ text: text, lvl: Math.max(0, Math.min(8, lvl)) });
+            }
+            return out;
+        }
+        function pptUnderFallback(el) {
+            for (let a = el.parentElement; a; a = a.parentElement) if (a.localName === 'Fallback') return true;
+            return false;
+        }
+        function pptParseSlide(xmlDoc, rels) {
+            let title = '';
+            const blocks = [];
+            const all = xmlDoc.getElementsByTagNameNS('*', '*');
+            for (let i = 0; i < all.length; i++) {
+                const el = all[i];
+                const ln = el.localName;
+                if (ln !== 'sp' && ln !== 'pic' && ln !== 'tbl') continue;
+                if (pptUnderFallback(el)) continue;   // mc:AlternateContent 의 대체본은 중복이라 건너뜀
+                if (ln === 'sp') {
+                    const nv = pptChild(el, 'nvSpPr');
+                    const ph = pptChild(pptChild(nv, 'nvPr'), 'ph');
+                    const phType = ph ? (ph.getAttribute('type') || '') : '';
+                    const paras = pptParas(pptChild(el, 'txBody'));
+                    if (!paras.length) continue;
+                    if (!title && (phType === 'title' || phType === 'ctrTitle')) {
+                        title = paras.map(p => p.text).join('\n');
+                    } else {
+                        paras.forEach(p => blocks.push({ type: 'p', text: p.text, lvl: p.lvl }));
+                    }
+                } else if (ln === 'tbl') {
+                    const rows = [];
+                    pptEls(el, 'tr').forEach(tr => {
+                        const cells = [];
+                        for (let tc = tr.firstElementChild; tc; tc = tc.nextElementSibling) {
+                            if (tc.localName !== 'tc') continue;
+                            if (tc.getAttribute('hMerge') === '1' || tc.getAttribute('vMerge') === '1') continue;
+                            cells.push({
+                                text: pptParas(pptChild(tc, 'txBody')).map(p => p.text).join('\n'),
+                                cs: Math.min(100, parseInt(tc.getAttribute('gridSpan') || '1', 10) || 1),
+                                rs: Math.min(1000, parseInt(tc.getAttribute('rowSpan') || '1', 10) || 1)
+                            });
+                        }
+                        rows.push(cells);
+                    });
+                    if (rows.some(r => r.some(c => c.text.trim()))) blocks.push({ type: 'table', rows: rows });
+                } else if (ln === 'pic') {
+                    const blip = pptEls(el, 'blip')[0];
+                    const rid = blip ? (blip.getAttributeNS(PPT_RNS, 'embed') || blip.getAttribute('r:embed')) : '';
+                    const path = rid ? rels[rid] : '';
+                    const ext = path ? path.split('.').pop().toLowerCase() : '';
+                    // 브라우저가 바로 그릴 수 있는 그림만(svg·emf·wmf 는 제외 — svg 는 스크립트가 들어갈 수 있음)
+                    if (path && PPT_IMG_TYPES[ext]) blocks.push({ type: 'img', path: path, ext: ext });
+                }
+            }
+            // 제목 자리가 없으면 예전처럼 첫 문단을 제목으로
+            if (!title) {
+                const k = blocks.findIndex(b => b.type === 'p');
+                if (k === 0) { title = blocks[0].text; blocks.shift(); }
+            }
+            return { title: title, blocks: blocks };
+        }
+        function pptImageUrl(path, ext) {
+            if (!pptImgCache[path]) {
+                const f = pptZip && pptZip.file(path);
+                pptImgCache[path] = f
+                    ? f.async('arraybuffer').then(buf => URL.createObjectURL(new Blob([buf], { type: PPT_IMG_TYPES[ext] })))
+                    : Promise.resolve('');
+            }
+            return pptImgCache[path];
+        }
+        function pptText(t) {
+            return escapeHtml(t).replace(/\n/g, '<br>');
+        }
+        
         function renderThumbnails() {
             const thumbsEl = document.getElementById('slideThumbnails');
             thumbsEl.innerHTML = slides.map((s, idx) => 
@@ -1147,12 +1379,26 @@ render_viewer_i18n([
             
             // 슬라이드 내용
             let html = '<div class="slide-content">';
-            if (slide.texts.length > 0) {
-                html += `<div class="slide-title">${escapeHtml(slide.texts[0])}</div>`;
-                if (slide.texts.length > 1) {
+            if (slide.title || slide.blocks.length > 0) {
+                if (slide.title) html += `<div class="slide-title">${pptText(slide.title)}</div>`;
+                if (slide.blocks.length > 0) {
                     html += '<div class="slide-body">';
-                    slide.texts.slice(1).forEach(text => {
-                        html += `<p>${escapeHtml(text)}</p>`;
+                    slide.blocks.forEach((b, bi) => {
+                        if (b.type === 'p') {
+                            html += `<p${b.lvl ? ' style="padding-left:' + (b.lvl * 1.5) + 'em"' : ''}>${pptText(b.text)}</p>`;
+                        } else if (b.type === 'table') {
+                            html += '<table class="slide-table">';
+                            b.rows.forEach(r => {
+                                html += '<tr>';
+                                r.forEach(c => {
+                                    html += '<td' + (c.cs > 1 ? ' colspan="' + c.cs + '"' : '') + (c.rs > 1 ? ' rowspan="' + c.rs + '"' : '') + '>' + pptText(c.text) + '</td>';
+                                });
+                                html += '</tr>';
+                            });
+                            html += '</table>';
+                        } else if (b.type === 'img') {
+                            html += `<div class="slide-img"><img alt="" data-bi="${bi}"></div>`;
+                        }
                     });
                     html += '</div>';
                 }
@@ -1162,6 +1408,15 @@ render_viewer_i18n([
             html += '</div>';
             
             viewerEl.innerHTML = html;
+            // 그림은 보는 슬라이드 것만 그때 꺼내서 붙임(넘기는 사이 다른 슬라이드로 바뀌면 안 붙임)
+            viewerEl.querySelectorAll('img[data-bi]').forEach(img => {
+                const b = slide.blocks[parseInt(img.getAttribute('data-bi'), 10)];
+                if (!b) return;
+                pptImageUrl(b.path, b.ext).then(u => {
+                    if (u && currentSlide === idx && img.isConnected) img.src = u;
+                    else if (!u) img.parentNode && img.parentNode.remove();
+                }).catch(() => { img.parentNode && img.parentNode.remove(); });
+            });
         }
         
         function goToSlide(idx) {
@@ -1202,7 +1457,7 @@ render_viewer_i18n([
                 <div class="viewer">
                     <div class="error-container">
                         <div class="error-icon">📄</div>
-                        <div class="error-message">${message}</div>
+                        <div class="error-message">${escapeHtml(String(message || ''))}</div>
                         <a href="${backUrl}" class="error-btn">${_vi18n.go_back}</a>
                     </div>
                 </div>
@@ -1223,23 +1478,24 @@ render_viewer_i18n([
             }
         }
         
+        // ★ (2026-11-02 19:21) 100% 넘게 키우면 기준점을 왼쪽 위로 — 가운데 기준이면 왼쪽이 화면 밖(음수)으로 밀려 스크롤로도 볼 수 없었음
         function applyZoom() {
             <?php if ($ext === 'docx'): ?>
             const docxWrapper = document.querySelector('.docx-wrapper');
             if (docxWrapper) {
                 docxWrapper.style.transform = `scale(${currentZoom / 100})`;
-                docxWrapper.style.transformOrigin = 'top center';
+                docxWrapper.style.transformOrigin = (currentZoom > 100 ? 'top left' : 'top center');
             }
-            <?php elseif ($ext === 'xlsx'): ?>
+            <?php elseif ($is_sheet): ?>
             if (viewerEl) {
                 viewerEl.style.transform = `scale(${currentZoom / 100})`;
-                viewerEl.style.transformOrigin = 'top center';
+                viewerEl.style.transformOrigin = (currentZoom > 100 ? 'top left' : 'top center');
             }
             <?php elseif ($ext === 'pptx'): ?>
             const pptxContainer = document.getElementById('pptx-container');
             if (pptxContainer) {
                 pptxContainer.style.transform = `scale(${currentZoom / 100})`;
-                pptxContainer.style.transformOrigin = 'top center';
+                pptxContainer.style.transformOrigin = (currentZoom > 100 ? 'top left' : 'top center');
             }
             <?php endif; ?>
             
@@ -1259,6 +1515,7 @@ render_viewer_i18n([
             const next = current === 'dark' ? 'light' : 'dark';
             html.setAttribute('data-theme', next);
             document.cookie = `darkmode=${next};path=/;max-age=31536000`;
+            try { localStorage.setItem('mycomix_theme', next); } catch (e) {} // ★ (2026-11-02 09:04) 다른 화면은 이 값을 먼저 봄 — 여기서 바꾼 테마가 목록으로 돌아가면 되돌아가던 문제
         }
         
         // 키보드 단축키
@@ -1268,7 +1525,7 @@ render_viewer_i18n([
                 else if (e.key === '-') { e.preventDefault(); zoomOut(); }
                 else if (e.key === 'p') { e.preventDefault(); printDocument(); }
             }
-            if (e.key === 'Escape') window.location.href = backUrl;
+            if (e.key === 'Escape') (window.mcBackGo ? window.mcBackGo(backUrl, 'push') : (window.location.href = backUrl)); // ★ (2026-11-05 22:40) 바로 앞 기록이면 뒤로
             
             <?php if ($ext === 'pptx'): ?>
             // PPTX 슬라이드 네비게이션
@@ -1341,26 +1598,11 @@ render_viewer_i18n([
     </script>
 
 <?php
-// 자동 로그아웃 스크립트
-$timeout = $auto_logout_settings['timeout'] ?? 1800;
-$remaining = $timeout - (time() - ($_SESSION['last_activity'] ?? time()));
-if ($remaining < 0) $remaining = 0;
-
-$_current_page = basename($_SERVER['SCRIPT_FILENAME']);
-$_auto_logout_pages = $auto_logout_settings['pages'] ?? ['index.php', 'viewer.php', 'epub_viewer.php', 'txt_viewer.php', 'hwp_viewer.php', 'office_viewer.php', 'bookmark.php'];
-$_is_target = in_array($_current_page, $_auto_logout_pages);
-$_is_remember_me = isset($_SESSION['remember_me']) && $_SESSION['remember_me'] === true;
-
-global $base_path;
-if (($auto_logout_settings['enabled'] ?? true) && $_is_target && !$_is_remember_me): 
+// ★ (2026-10-30) 공통 함수 사용 — 전에는 없는 세션 키(last_activity)를 읽어 남은 시간이 늘 꽉 찬 값이었고, 영어 안내 문구도 빠졌음
+render_auto_logout_script();
 ?>
-<script>
-window.SESSION_TIMEOUT = <?php echo $timeout; ?>;
-window.SESSION_REMAINING = <?php echo $remaining; ?>;
-</script>
-<script src="<?php echo $base_path; ?>/js/auto-logout.js?v=<?php echo @filemtime(__DIR__ . '/js/auto-logout.js') ?: '1'; ?>"></script>
-<?php endif; ?>
 
 <?php require_once __DIR__ . '/privacy_shield.php'; ?>
+<?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 </body>
 </html>

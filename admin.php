@@ -4,6 +4,23 @@ define('THEME_0_PREVIEW_BG', '/9j/4AAQSkZJRgABAQEASABIAAD/4gJASUNDX1BST0ZJTEUAAQ
 
 // ✅ init.php 사용으로 통일 (자동 로그아웃 등 공통 기능 적용)
 require_once __DIR__ . "/bootstrap.php";
+// ★ (2026-11-02 10:05) 관리자 입력 모양 정리 — 목록 칸(아래 8개)은 배열만, 나머지 칸은 문자열만(배열·문자열이 바뀌어 오면 trim·explode·in_array 에서 500, base_dirs 가 글자면 콘텐츠 폴더가 모두 지워진 채 저장되던 것)
+foreach ([&$_POST, &$_GET] as &$__in) {
+    foreach ($__in as $__k => $__v) {
+        $__list = in_array($__k, ['base_dirs', 'ip_block_mode', 'types', 'selected_logs', 'files', 'auto_logout_pages', 'privacy_shield_pages', 'thumb_layout'], true);
+        if ($__list && !is_array($__v)) { if ($__k !== 'base_dirs') $__in[$__k] = []; } // base_dirs 는 아래 설정 저장에서 거절(빈 목록으로 저장되지 않게)
+        elseif (!$__list && is_array($__v)) $__in[$__k] = '';
+    }
+}
+unset($__in, $__k, $__v, $__list);
+
+// ★ (2026-10-30) 보안: 관리자가 아니면 아래의 모든 처리(AJAX·POST 포함)보다 먼저 막음
+//   (전에는 관리자 확인이 1270줄쯤에서야 시작돼, 앞쪽의 설정 저장·중복 파일 삭제·보안 로그 삭제 등을 일반 회원도 호출할 수 있었음)
+if (empty($_SESSION['user_id']) || !isset($_SESSION['user_group']) || trim((string)$_SESSION['user_group']) !== "admin") {
+    echo "<div class='container mt-5'><div class='alert alert-danger'>" . __("adm_not_admin_redirect") . "</div></div>";
+    echo "<meta http-equiv=\"refresh\" content=\"3; url=index.php?bidx=0\">";
+    exit;
+}
 
 // ✅ admin.php는 전체 $base_dirs 기준으로 동작 (bidx 무관)
 // 개별 bidx는 사용하지 않음
@@ -452,6 +469,40 @@ if (isset($_GET['ajax_security_logs']) && isset($_SESSION['user_id'])) {
     exit;
 }
 
+// ★ (2026-11-03 09:42) 회원 관리 → 금지 아이디 관리(추가·삭제) — 회원가입에서 쓸 수 없는 아이디. 위에서 관리자만 통과
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && ($_POST['ajax_blocked_ids'] ?? '') === '1') {
+    header('Content-Type: application/json; charset=utf-8');
+    header('Cache-Control: no-store');
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) { echo json_encode(['success' => false, 'error' => 'csrf']); exit; }
+    $_bf = __DIR__ . '/src/app_settings.json';
+    $_bs = load_app_settings($_bf);
+    if (!$_bs && is_file($_bf) && (int)@filesize($_bf) > 2) { echo json_encode(['success' => false, 'error' => 'read']); exit; } // 읽기 실패면 저장하지 않음(전체 설정이 지워지지 않게)
+    $_reg = is_array($_bs['registration'] ?? null) ? $_bs['registration'] : ['enabled' => false, 'require_approval' => true, 'find_id_enabled' => true, 'find_password_enabled' => true];
+    $_list = [];
+    foreach ((is_array($_reg['blocked_ids'] ?? null) ? $_reg['blocked_ids'] : []) as $_p) { if (is_int($_p)) $_p = (string)$_p; if (is_string($_p) && $_p !== '') $_list[strtolower($_p)] = true; }
+    $_op = is_string($_POST['op'] ?? null) ? $_POST['op'] : '';
+    $_added = 0; $_asked = 0;
+    if ($_op === 'add') {
+        foreach ((preg_split('/[\s,\x{00A0}\x{3000}]+/u', is_string($_POST['text'] ?? null) ? $_POST['text'] : '') ?: []) as $_w) { if (trim($_w) !== '') $_asked++; } // ★ (2026-11-03 20:58) 넣은 줄 수(일부만 들어갔을 때 알림용)
+        foreach (mc_parse_blocked_ids(is_string($_POST['text'] ?? null) ? $_POST['text'] : '') as $_p) {
+            if (count($_list) >= 500) break;
+            if (!isset($_list[$_p])) { $_list[$_p] = true; $_added++; }
+        }
+    } elseif ($_op === 'del') {
+        $_d = strtolower(is_string($_POST['id'] ?? null) ? $_POST['id'] : '');
+        unset($_list[$_d]);
+    } elseif ($_op !== 'list') { echo json_encode(['success' => false, 'error' => 'op']); exit; }
+    $_items = array_map('strval', array_keys($_list));
+    sort($_items, SORT_NATURAL | SORT_FLAG_CASE);
+    if ($_op !== 'list') {
+        $_reg['blocked_ids'] = $_items;
+        $_bs['registration'] = $_reg;
+        if (!save_app_settings($_bf, $_bs)) { echo json_encode(['success' => false, 'error' => 'write']); exit; }
+    }
+    echo json_encode(['success' => true, 'items' => $_items, 'added' => $_added, 'skipped' => max(0, $_asked - $_added), 'full' => count($_items) >= 500], JSON_UNESCAPED_UNICODE); // ★ (2026-11-03 11:33) 500개가 다 찼는지(추가 안 된 이유 알림용)
+    exit;
+}
+
 // ✅ 보안 로그 삭제 AJAX 핸들러
 if (isset($_POST['ajax_delete_logs']) && isset($_SESSION['user_id'])) {
     header('Content-Type: application/json');
@@ -661,7 +712,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'dupli
         try {
             $iterator = new RecursiveIteratorIterator(
                 new RecursiveDirectoryIterator($search_dir, RecursiveDirectoryIterator::SKIP_DOTS),
-                RecursiveIteratorIterator::SELF_FIRST
+                RecursiveIteratorIterator::SELF_FIRST,
+                RecursiveIteratorIterator::CATCH_GET_CHILD // ★ (2026-11-02 20:05) 읽을 수 없는 하위 폴더(System Volume Information 등) 하나에서 그 콘텐츠 폴더 전체 수집이 조용히 멈추던 것 — 그 폴더만 건너뜀
             );
             $iterator->setMaxDepth(20); // 깊이 제한
             
@@ -952,6 +1004,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'dupli
 // 검색 취소/정리
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'duplicate_cancel') {
     header('Content-Type: application/json');
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) { echo json_encode(['error' => __('api_csrf_invalid')]); exit; } // ★ (2026-11-02 10:04) 다른 요청들과 같게 토큰 확인(화면은 이미 보냄)
     @unlink(__DIR__ . '/src/.duplicate_data.json');
     @unlink(__DIR__ . '/src/.duplicate_progress.json');
     echo json_encode(['success' => true]);
@@ -967,17 +1020,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
         exit;
     }
     
-    $files_to_delete = $_POST['files'] ?? [];
+    $files_to_delete = is_array($_POST['files'] ?? null) ? $_POST['files'] : [];
     $deleted = 0;
     $affected_dirs = [];  // 캐시 무효화할 폴더들
     
     foreach ($files_to_delete as $file) {
+        if (!is_string($file) || $file === '') continue;
         // 경로 검증
         $valid = false;
         foreach ($base_dirs as $bd) {
             $real_base = realpath($bd);
             $real_file = realpath($file);
-            if ($real_file && $real_base && strpos($real_file, $real_base) === 0) {
+            // ★ (2026-10-30) 앞부분만 비교하면 E:/manga 설정일 때 E:/manga2/… 도 통과 — 구분자까지 붙여 비교
+            if ($real_file && $real_base && strpos($real_file, rtrim($real_base, '\\/') . DIRECTORY_SEPARATOR) === 0) {
                 $valid = true;
                 break;
             }
@@ -988,10 +1043,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
             if (@unlink($file)) {
                 $deleted++;
                 $affected_dirs[$dir] = true;  // 영향받은 폴더 기록
-                log_user_activity('중복파일삭제', basename($file));
+                // ★ (2026-11-02 14:34) 50개까지만 하나씩 기록 — 수천 개를 지우면 건마다 활동 로그 전체를 다시 써 느리고, 로그 상한에 걸려 다른 기록이 밀려 사라졌음
+                if ($deleted <= 50) log_user_activity('중복파일삭제', basename($file));
             }
         }
     }
+    if ($deleted > 50) log_user_activity('중복파일삭제', '+' . ($deleted - 50));
     
     // 영향받은 폴더의 캐시 무효화
     foreach (array_keys($affected_dirs) as $dir) {
@@ -1001,8 +1058,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
         }
     }
     
-    // zip_total 캐시도 무효화 (다음 접근 시 재계산)
-    foreach (array_keys($base_dirs) as $idx) {
+    // zip_total 캐시도 무효화 (다음 접근 시 재계산) — ★ (2026-11-04 09:37) 실제로 지운 게 있을 때만
+    if ($deleted > 0) foreach (array_keys($base_dirs) as $idx) {
         $total_file = __DIR__ . '/src/zip_total_' . $idx . '.json';
         if (is_file($total_file)) {
             @unlink($total_file);
@@ -1027,6 +1084,8 @@ function md5_file_partial($filepath) {
     if (!$fp) return null;
     
     $hash_data = '';
+    // ★ (2026-10-30) 0바이트 파일은 fread(…, 0) 가 ValueError(치명 오류) — 빈 내용 해시로 처리
+    if ((int)$size <= 0) { fclose($fp); return md5(''); }
     
     // 앞부분
     $hash_data .= fread($fp, min($chunk_size, $size));
@@ -1063,13 +1122,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     // 기존 설정 로드
     $settings = [];
     if (file_exists($settings_file)) {
-        $settings = json_decode(file_get_contents($settings_file), true) ?? [];
+        $settings = function_exists('load_app_settings') ? load_app_settings($settings_file) : (json_decode(file_get_contents($settings_file), true) ?? []); // ★ (2026-11-02 10:04) 공유 잠금 — 다른 저장 중에 읽으면 빈 설정으로 덮어쓸 수 있었음
+        if (!is_array($settings)) $settings = [];
+        // ★ (2026-11-04 09:36) 파일이 있는데 읽지 못했으면(깨짐 등) 저장하지 않음 — 빈 설정에 폼 칸만 채워 덮어써 SMTP·팝업·배너·약관·가입 금지 아이디가 사라졌음(금지 아이디 저장과 같은 가드)
+        if (!$settings && (int)@filesize($settings_file) > 2) {
+            $_SESSION['admin_message'] = "❌ " . __('adm_blk_fail');
+            header("Location: " . $_SERVER['PHP_SELF'] . "#config");
+            exit;
+        }
     }
     
     // 다중 폴더 처리
     $base_dirs_input = $_POST['base_dirs'] ?? [];
+    if (!is_array($base_dirs_input)) { $_SESSION['admin_message'] = "❌ " . __('adm_invalid_request'); header("Location: " . $_SERVER['PHP_SELF'] . "#config"); exit; } // ★ (2026-11-02 09:58) 배열이 아니면 콘텐츠 폴더가 모두 지워진 채 저장되던 것
     $base_dirs = [];
     foreach ($base_dirs_input as $dir) {
+        if (!is_string($dir)) continue; // ★ (2026-11-02 11:33) 겹친 배열이면 trim 500
         $dir = trim($dir);
         $dir = str_replace(['..', '<', '>', '"', "'"], '', $dir);
         if (!empty($dir)) {
@@ -1087,8 +1155,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     $settings['pages_per_group_mobile'] = (string)max(1, (int)($_POST['pages_per_group_mobile'] ?? 5));
     $settings['max_autosave'] = (string)max(1, (int)($_POST['max_autosave'] ?? 10));
     $settings['max_bookmark'] = (string)max(1, (int)($_POST['max_bookmark'] ?? 10));
+    // ★ (2026-11-03 00:07) 북마크 화면에 보일 전자책(EPUB·TXT) 책갈피 개수(0 = 숨김, 최대 500) — 입력칸이 없는 요청이면 기존 값 유지
+    $settings['max_ebook_bookmark'] = isset($_POST['max_ebook_bookmark']) ? (string)max(0, min(500, (int)$_POST['max_ebook_bookmark'])) : (string)($settings['max_ebook_bookmark'] ?? '30');
     $settings['max_favorites'] = (string)max(1, (int)($_POST['max_favorites'] ?? 50));
+    // ★ (2026-11-03 01:30) 북마크 화면 칸별 한 페이지 개수(0 = 나누지 않음, 최대 500) — 입력칸이 없는 요청이면 기존 값 유지
+    foreach (['bm_page_autosave', 'bm_page_bookmark', 'bm_page_ebook'] as $_bk) {
+        $settings[$_bk] = isset($_POST[$_bk]) ? (string)max(0, min(500, (int)$_POST[$_bk])) : (string)($settings[$_bk] ?? '12');
+    }
+    // ★ (2026-10-31) 즐겨찾기 책장 한 페이지 개수(0 = 나누지 않음, 최대 500) — 입력칸이 없는 요청이면 기존 값 유지
+    // ★ (2026-11-03 01:28) 서재 — 한 페이지 개수(6~500), 읽는 중·최근 추가 줄 개수(0 = 안 보임, 최대 60). 입력칸이 없는 요청이면 기존 값 유지
+    // ★ (2026-11-03 10:50) 배경 갱신 간격(분, 0 = 끔, 최대 1440) — 입력칸이 없는 요청이면 기존 값 유지
+    // ★ (2026-11-03 14:11) 속도 기록 남기기(src/perf) — 입력칸이 없는 요청이면 기존 값 유지(숨은 칸 0 + 체크 1)
+    $settings['perf_log'] = isset($_POST['perf_log']) ? (((string)(is_array($_POST['perf_log']) ? end($_POST['perf_log']) : $_POST['perf_log']) === '1') ? '1' : '0') : (string)($settings['perf_log'] ?? '1');
+    $settings['bg_refresh_minutes'] = isset($_POST['bg_refresh_minutes']) && $_POST['bg_refresh_minutes'] !== '' ? (string)max(0, min(1440, (int)$_POST['bg_refresh_minutes'])) : (string)($settings['bg_refresh_minutes'] ?? '10');
+    $settings['lib_per_page'] = isset($_POST['lib_per_page']) ? (string)max(6, min(500, (int)$_POST['lib_per_page'])) : (string)($settings['lib_per_page'] ?? '48');
+    $settings['lib_reading_count'] = isset($_POST['lib_reading_count']) ? (string)max(0, min(60, (int)$_POST['lib_reading_count'])) : (string)($settings['lib_reading_count'] ?? '12');
+    $settings['lib_recent_count'] = isset($_POST['lib_recent_count']) ? (string)max(0, min(60, (int)$_POST['lib_recent_count'])) : (string)($settings['lib_recent_count'] ?? '12');
+    $settings['fav_per_page'] = isset($_POST['fav_per_page']) ? (string)max(0, min(500, (int)$_POST['fav_per_page'])) : (string)($settings['fav_per_page'] ?? '30');
     $settings['new_badge_hours'] = (string)max(0, (int)($_POST['new_badge_hours'] ?? 24));
+    // ★ (2026-11-04 11:18) 파일 카드 N 기준 — file: 파일 자체 날짜(받은 날짜, 기본 — 예전 그대로) / added: 서재에 들어온 시각(올린 시각, 미디어 서버 일반 기준)
+    $settings['new_badge_basis'] = (($_POST['new_badge_basis'] ?? '') === 'added') ? 'added' : ((($_POST['new_badge_basis'] ?? '') === 'file') ? 'file' : (string)($settings['new_badge_basis'] ?? 'file'));
     $settings['viewed_mark_seconds'] = (string)max(0, min(60, (float)($_POST['viewed_mark_seconds'] ?? 2))); // 복귀 표시 유지 시간(초), 0=자동 해제 안 함
     $settings['use_cover'] = ($_POST['use_cover'] ?? 'n') === 'y' ? 'y' : 'n';
     $settings['use_listcover'] = ($_POST['use_listcover'] ?? 'n') === 'y' ? 'y' : 'n';
@@ -1116,7 +1202,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     
     // 자동 로그아웃 설정
     $auto_logout_enabled = isset($_POST['auto_logout_enabled']);
-    $allowed_pages = ['index.php', 'viewer.php', 'epub_viewer.php', 'txt_viewer.php', 'admin.php', 'admin_translations.php', 'bookmark.php', 'blank.php'];
+    $allowed_pages = ['index.php', 'viewer.php', 'epub_viewer.php', 'txt_viewer.php', 'admin.php', 'admin_translations.php', 'bookmark.php', 'blank.php', 'favorites.php', 'bookmarks.php', 'browse.php', 'series.php']; // ★ (2026-10-29) favorites.php · 라이브러리(browse/series) 추가 / ★ (2026-10-31) bookmarks.php
     $selected_pages = [];
     if (isset($_POST['auto_logout_pages']) && is_array($_POST['auto_logout_pages'])) {
         foreach ($_POST['auto_logout_pages'] as $page) {
@@ -1170,7 +1256,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     
     // Privacy shield settings
     $privacy_shield_enabled = isset($_POST['privacy_shield_enabled']);
-    $privacy_allowed_pages = ['index.php', 'viewer.php', 'epub_viewer.php', 'txt_viewer.php'];
+    $privacy_allowed_pages = ['index.php', 'viewer.php', 'epub_viewer.php', 'txt_viewer.php', 'favorites.php', 'bookmarks.php', 'browse.php', 'series.php']; // ★ (2026-10-31) bookmarks.php // ★ (2026-10-29) favorites.php · 라이브러리(browse/series) 추가
     $privacy_selected_pages = [];
     if (isset($_POST['privacy_shield_pages']) && is_array($_POST['privacy_shield_pages'])) {
         foreach ($_POST['privacy_shield_pages'] as $page) {
@@ -1203,12 +1289,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
         'font_size' => max(12, min(40, (int)($_POST['list_font_size'] ?? 22)))
     ];
     
+    // ★ (2026-10-29) 썸네일 크기 커스텀 (폴더/파일/책장 × 그리드/목록 × PC/모바일) — 정수 px만 저장, 0=기본값
+    if (function_exists('mc_thumb_layout_sanitize')) {
+        $settings['thumb_layout'] = mc_thumb_layout_sanitize($_POST['thumb_layout'] ?? []);
+    }
+
+    // ★ (2026-10-29) 작품 정보(라이브러리): 파일 카드 클릭 동작 (viewer=바로 보기 / detail=작품 상세)
+    $_lib_click_in = (string)($_POST['library_card_click'] ?? 'viewer');
+    $settings['library'] = array_merge(is_array($settings['library'] ?? null) ? $settings['library'] : [], [
+        'card_click' => in_array($_lib_click_in, ['viewer', 'detail'], true) ? $_lib_click_in : 'viewer',
+    ]);
+    
     // ✅ 회원 설정
     $settings['registration'] = [
         'enabled' => isset($_POST['registration_enabled']),
         'require_approval' => isset($_POST['registration_require_approval']),
         'find_id_enabled' => isset($_POST['find_id_enabled']),
-        'find_password_enabled' => isset($_POST['find_password_enabled'])
+        'find_password_enabled' => isset($_POST['find_password_enabled']),
+        'blocked_ids' => isset($_POST['registration_blocked_ids']) ? mc_parse_blocked_ids($_POST['registration_blocked_ids']) : (is_array($settings['registration']['blocked_ids'] ?? null) ? $settings['registration']['blocked_ids'] : []), // ★ (2026-11-02 16:16) 가입 금지 아이디 / ★ (2026-11-03 09:43) 회원 관리 탭에서 관리 — 설정 저장은 그대로 둠
     ];
     
     // src 폴더 생성
@@ -1217,11 +1315,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     }
     
     // JSON 파일로 저장 (파일 잠금 적용)
-    $fp = fopen($settings_file, 'c+');
+    $__settings_json = json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE); // ★ (2026-11-04 00:26) 못 만들면 파일을 비우지 않음
+    $fp = is_string($__settings_json) ? fopen($settings_file, 'c+') : false;
+    $__settings_ok = false; // ★ (2026-11-04 01:29) 못 썼으면 '저장됨' 대신 실패 알림
     if ($fp) {
         if (flock($fp, LOCK_EX)) {
             ftruncate($fp, 0);
-            fwrite($fp, json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+            $__settings_ok = fwrite($fp, $__settings_json) !== false;
             fflush($fp);
             flock($fp, LOCK_UN);
         }
@@ -1235,7 +1335,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     
     clearstatcache(true);
     
-    $_SESSION['admin_message'] = __('admin_settings_saved');
+    $_SESSION['admin_message'] = $__settings_ok ? __('admin_settings_saved') : '❌ ' . __('adm_blk_fail');
     header("Location: " . $_SERVER['PHP_SELF'] . "#config");
     exit;
 }
@@ -1298,12 +1398,21 @@ function sync_folder_permissions($base_dir, $permissions_file) {
     $actual_folders = [];
     $changed = false;
     
-    if (is_dir($base_dir)) {
-        foreach (new DirectoryIterator($base_dir) as $f) {
-            if ($f->isDot() || $f->getFilename() == "@eaDir" || !$f->isDir()) continue;
-            $actual_folders[] = $f->getFilename();
-        }
+    // ★ (2026-10-30) 콘텐츠 폴더가 여러 개면 전부 합쳐서 한 번에 비교 — 전에는 폴더마다 따로 돌려
+    //   "이 폴더에 없는 이름"을 지우는 바람에 마지막 폴더 말고는 권한 설정이 매번 사라졌음
+    // ★ (2026-11-02 08:54) 콘텐츠 폴더 하나라도 못 읽으면(NAS 꺼짐·드라이브 빠짐) 지우기는 건너뜀
+    //   — 전에는 그때 권한 설정이 전부 지워져 다시 연결되면 모든 그룹 허용으로 새로 만들어졌음(막아 둔 폴더가 열림)
+    $all_readable = true;
+    foreach ((array)$base_dir as $_bd) {
+        if (!is_dir($_bd)) { $all_readable = false; continue; }
+        try {
+            foreach (new DirectoryIterator($_bd) as $f) {
+                if ($f->isDot() || $f->getFilename() == "@eaDir" || !$f->isDir()) continue;
+                $actual_folders[] = $f->getFilename();
+            }
+        } catch (\Throwable $e) { $all_readable = false; }
     }
+    $actual_folders = array_values(array_unique($actual_folders));
     
     foreach ($actual_folders as $folder) {
         if (!isset($permissions[$folder])) {
@@ -1318,7 +1427,7 @@ function sync_folder_permissions($base_dir, $permissions_file) {
         }
     }
     
-    foreach (array_keys($permissions) as $folder) {
+    if ($all_readable) foreach (array_keys($permissions) as $folder) {
         if (!in_array($folder, $actual_folders)) {
             unset($permissions[$folder]);
             $changed = true;
@@ -1333,9 +1442,7 @@ function sync_folder_permissions($base_dir, $permissions_file) {
 }
 
 // ✅ 전체 base_dirs에 대해 폴더 권한 동기화
-foreach ($base_dirs as $bd) {
-    sync_folder_permissions($bd, $permissions_file);
-}
+sync_folder_permissions($base_dirs, $permissions_file);
 
 // ✅ 통계 함수 - 전체 base_dirs 기준
 function get_system_stats_fast($permissions_file, $base_dirs) {
@@ -1366,7 +1473,7 @@ function get_system_stats_fast($permissions_file, $base_dirs) {
     
     $trf = "./src/search_translations.json";
     if (file_exists($trf)) {
-        $stats['translation_count'] = count(json_decode(file_get_contents($trf), true) ?? []);
+        $__trd = json_decode((string)@file_get_contents($trf), true); $stats['translation_count'] = is_array($__trd) ? count($__trd) : 0; // ★ (2026-11-04 09:37) 배열이 아니면 count() 오류로 500
     }
     
     return $stats;
@@ -1391,6 +1498,15 @@ $default_backgrounds = [
     4 => 'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?w=1200',
     6 => 'https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?w=1200'
 ];
+
+// ★ (2026-11-09 14:44) 보낸 칸 수가 PHP max_input_vars 에 닿아 뒤쪽(mode 등)이 잘린 POST — 전에는 아무 알림 없이 화면만 다시 그려져(폴더 권한: 최상위 폴더 × 그룹 칸이 많을 때) 저장된 줄 알았음
+//   저장은 하지 않고(잘린 값으로 저장하면 빠진 폴더가 막힘) 실패 안내만 띄움
+if (($_SERVER['REQUEST_METHOD'] ?? '') === 'POST' && !isset($_POST['mode']) && !isset($_POST['action']) && ($__miv = (int)ini_get('max_input_vars')) > 0
+    && count($_POST, COUNT_RECURSIVE) >= $__miv && verify_csrf_token($_POST['csrf_token'] ?? '')) {
+    $_SESSION['admin_message'] = '❌ ' . __('adm_input_vars_exceeded', $__miv);
+    header('Location: ' . $_SERVER['PHP_SELF'] . (isset($_GET['bidx']) ? '?bidx=' . (int)$_GET['bidx'] : ''));
+    exit;
+}
 
 // 테마 변경 처리
 if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
@@ -1445,7 +1561,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         header("Location: " . $_SERVER['PHP_SELF'] . "#theme");
         exit;
     } elseif ($bg_theme >= 0 && empty($bg_url)) {
-        $message = __("adm_enter_url");
+        $message = "⚠️ " . __("adm_enter_url"); // ★ (2026-11-02 10:04) 실패·주의는 빨강·노랑 알림으로
     }
 
 // 배경 파일 업로드 처리
@@ -1466,7 +1582,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         finfo_close($finfo);
         
         if (!in_array($mime, $allowed_mimes)) {
-            $message = __("adm_invalid_image_file");
+            $message = "❌ " . __("adm_invalid_image_file"); // ★ (2026-11-02 10:04) 실패·주의는 빨강·노랑 알림으로
         } else {
             // MIME → 확장자 매핑
             $mime_to_ext = [
@@ -1480,23 +1596,21 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
             $filename = 'theme_' . $bg_theme . '_bg.' . $ext;
             $filepath = $upload_dir . $filename;
             
-            // 기존 파일 삭제
-            foreach (glob($upload_dir . 'theme_' . $bg_theme . '_bg.*') as $old) {
-                @unlink($old);
-            }
-            
+            // ★ (2026-11-04 00:28) 새 파일을 먼저 옮기고 성공한 뒤에 옛 파일(다른 확장자)을 지움 — 종전엔 옛 파일을 먼저 지워 옮기기에 실패하면 배경이 비었음
+            $__bg_old = glob($upload_dir . 'theme_' . $bg_theme . '_bg.*') ?: [];
             if (move_uploaded_file($_FILES['bg_file']['tmp_name'], $filepath)) {
+                foreach ($__bg_old as $old) { if (realpath($old) !== realpath($filepath)) @unlink($old); }
                 $theme_backgrounds[(string)$bg_theme] = $filepath;
                 save_theme($theme_file, $current_theme, $theme_backgrounds, $theme_filters);
                 $_SESSION['admin_message'] = __("adm_theme_bg_file_changed", $bg_theme);
                 header("Location: " . $_SERVER['PHP_SELF'] . "#theme");
                 exit;
             } else {
-                $message = __("adm_upload_failed");
+                $message = "❌ " . __("adm_upload_failed"); // ★ (2026-11-02 10:04) 실패·주의는 빨강·노랑 알림으로
             }
         }
     } else {
-        $message = __("adm_select_file");
+        $message = "⚠️ " . __("adm_select_file"); // ★ (2026-11-02 10:04) 실패·주의는 빨강·노랑 알림으로
     }
 
 // 배경 초기화 처리
@@ -1529,7 +1643,14 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     $target_base_dir = $base_dirs[$target_bidx];
     
     $permissions = load_permissions($permissions_file);
-    foreach (new DirectoryIterator($target_base_dir) as $fi) {
+    // ★ (2026-11-02 14:26) 콘텐츠 폴더를 못 열면(권한·NAS 끊김) 저장 요청이 500 이던 것 — 저장하지 않고 '폴더 없음' 알림
+    try { $__perm_it = new DirectoryIterator($target_base_dir); } catch (\Throwable $e) { $__perm_it = null; }
+    if ($__perm_it === null) {
+        $_SESSION['admin_message'] = "❌ " . __("adm_no_folders");
+        header("Location: " . $_SERVER['PHP_SELF'] . "#folder");
+        exit;
+    }
+    foreach ($__perm_it as $fi) {
         if ($fi->isDot() || $fi == "@eaDir" || !$fi->isDir()) continue;
         $fn = $fi->getFilename();
         $en = encode_url($fn);
@@ -1541,7 +1662,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
             'group4' => (int)($_POST[$en."_group4"] ?? 0) === 1 ? 1 : 0
         ];
         $old = $target_base_dir."/".$fn.".json";
-        if (file_exists($old)) unlink($old);
+        // ★ (2026-11-02 09:57) 옛 권한 파일(그룹 키가 있는 것)만 지움 — 같은 이름 zip 의 캐시(Foo.zip → Foo.json)·사용자 파일까지 지우던 것
+        if (is_file($old)) {
+            $__oj = json_decode((string)@file_get_contents($old), true);
+            if (!is_array($__oj) || isset($__oj['admin']) || isset($__oj['group1']) || isset($__oj['group2']) || isset($__oj['group3']) || isset($__oj['group4'])) @unlink($old); // 깨진 파일도 지움(권한 판단이 깨진 파일을 막음으로 보므로 전처럼 풀리게)
+        }
     }
     save_permissions($permissions_file, $permissions);
     $_SESSION['admin_message'] = __("adm_folder_perm_updated");
@@ -1563,14 +1688,17 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     $login_log_file = __DIR__ . '/src/login_log.json';
     if (file_exists($login_log_file)) {
         $all_login_logs = json_decode(file_get_contents($login_log_file), true) ?? [];
+        if (!is_array($all_login_logs)) $all_login_logs = []; // ★ (2026-11-02 22:37) 배열이 아니면 회원 삭제가 치명 오류(아래 is_array 처리들과 같게)
     }
     $all_activity_logs = [];
     $activity_log_file = __DIR__ . '/src/activity_log.json';
     if (file_exists($activity_log_file)) {
         $all_activity_logs = json_decode(file_get_contents($activity_log_file), true) ?? [];
+        if (!is_array($all_activity_logs)) $all_activity_logs = []; // ★ (2026-11-02 22:37) 위와 같음
     }
     
     foreach (array_keys($ua) as $uid) {
+        $uid = (string)$uid; // ★ (2026-11-02 11:33) 숫자만 된 아이디는 키가 정수 — 토큰 삭제·로그 백업의 === 비교가 실패하던 것
         $sid = preg_replace('/[^a-zA-Z0-9_]/', '', $uid);
         $gv = $_POST[$sid."_group"] ?? '';
         if ($gv === "delete") {
@@ -1589,10 +1717,14 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
                 "./src/".$sid."_recent.json",
                 "./src/".$sid."_epub_progress.json",
                 "./src/".$sid."_txt_progress.json",
+                "./src/".$sid."_notes.json", // ★ (2026-10-31) 책 노트
+                "./src/".$sid."_dims.json", // ★ (2026-11-02 08:49) 뷰어 이미지 크기 캐시도(탈퇴와 같게)
             ];
             foreach ($user_files as $file) {
                 @unlink($file);
             }
+            // ★ (2026-11-02 08:49) 서재 읽기 기록(library.db)도
+            if (is_file(__DIR__ . '/library.php')) { require_once __DIR__ . '/library.php'; if (function_exists('mc_lib_forget_user')) mc_lib_forget_user($sid); }
             
             // ✅ 자동 로그인 토큰 삭제 (모든 기기)
             if (function_exists('delete_user_remember_tokens')) {
@@ -1604,6 +1736,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
                 delete_user_totp($uid);
             }
         } elseif (in_array($gv, ['admin','group1','group2','group3','group4'])) {
+            // ★ (2026-11-02 22:16) 지금 로그인한 관리자 자신은 내리지 않음 — 관리자가 한 명뿐이면 웹으로 되돌릴 길이 없이 잠겼음(상태 변경의 '관리자 잠김 방지'와 같은 이유)
+            if ((string)$uid === (string)($_SESSION['user_id'] ?? '') && ($ua[$uid]['group'] ?? '') === 'admin' && $gv !== 'admin') continue;
             $ua[$uid]['group'] = $gv;
         }
     }
@@ -1611,10 +1745,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     // ✅ 삭제된 사용자들 정보 백업
     if (!empty($deleted_users)) {
         $deleted_file = __DIR__ . '/src/deleted_users.json';
-        $deleted_data = [];
-        if (file_exists($deleted_file)) {
-            $deleted_data = json_decode(file_get_contents($deleted_file), true) ?? [];
-        }
+        $deleted_data = []; // ★ (2026-11-04 10:10) 이번에 더할 기록만 모으고, 아래에서 잠금 하나 안에서 읽고-더하고-씀
         
         foreach ($deleted_users as $del_uid) {
             $user_info = $original_ua[$del_uid] ?? [];
@@ -1622,12 +1753,12 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
             
             // 해당 사용자의 로그인 기록
             $user_login_logs = array_values(array_filter($all_login_logs, function($log) use ($del_uid) {
-                return ($log['user_id'] ?? '') === $del_uid;
+                return (string)($log['user_id'] ?? '') === (string)$del_uid;
             }));
             
             // 해당 사용자의 활동 로그
             $user_activity_logs = array_values(array_filter($all_activity_logs, function($log) use ($del_uid) {
-                return ($log['user_id'] ?? '') === $del_uid;
+                return (string)($log['user_id'] ?? '') === (string)$del_uid;
             }));
             
             $deleted_data[] = [
@@ -1640,7 +1771,21 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
             ];
         }
         
-        file_put_contents($deleted_file, json_encode($deleted_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
+        // ★ (2026-11-04 10:10) 잠금 하나 안에서 읽고-더하고-쓰기, 깨진 파일이면 덮어쓰지 않음 — 전엔 잠금 없이 읽고 깨진 파일은 [] 로 바꿔 덮어써 기존 탈퇴·삭제 기록이 사라질 수 있었음
+        $_dfp = @fopen($deleted_file, 'c+');
+        if ($_dfp && @flock($_dfp, LOCK_EX)) {
+            $_draw = (string)stream_get_contents($_dfp);
+            $_dold = trim($_draw) === '' ? [] : json_decode($_draw, true);
+            if (is_array($_dold)) {
+                $_dj = json_encode(array_merge(array_values($_dold), $deleted_data), JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($_dj !== false) { ftruncate($_dfp, 0); rewind($_dfp); fwrite($_dfp, $_dj); fflush($_dfp); }
+            } else {
+                error_log('[mycomix] deleted_users.json 이 깨져 삭제 기록을 더하지 않음');
+                $_del_log_broken = true; // ★ (2026-11-04 12:41) 아래 알림에 한 줄(회원은 삭제됨)
+            }
+            @flock($_dfp, LOCK_UN);
+        }
+        if ($_dfp) fclose($_dfp);
     }
     
     save_users($ua);
@@ -1649,21 +1794,21 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     if (!empty($deleted_users)) {
         $log_file = __DIR__ . '/src/login_log.json';
         if (file_exists($log_file)) {
-            $fp = fopen($log_file, 'c+');
+            $fp = fopen($log_file, 'c+'); $__lk = false;
             if ($fp && flock($fp, LOCK_EX)) {
                 $content = stream_get_contents($fp);
-                $logs = json_decode($content, true) ?? [];
-                
+                $logs = json_decode($content, true);
+                if (is_array($logs)) $__lk = true; else { flock($fp, LOCK_UN); fclose($fp); } // ★ (2026-11-02 21:09) 깨진 기록이면 덮어쓰지 않음(탈퇴 쪽 index.php 와 같게) — 회원 한 명 지우면 전체 기록이 [] 가 됐음
+            }
+            if ($__lk) {
                 // 삭제된 사용자들의 로그 제거
                 $logs = array_filter($logs, function($log) use ($deleted_users) {
-                    return !in_array($log['user_id'] ?? '', $deleted_users);
+                    return !in_array((string)($log['user_id'] ?? ''), $deleted_users, true); // ★ (2026-11-02 14:27) 엄격 비교 — '123' 을 지우면 '0123' 기록까지 지워지던 것
                 });
                 $logs = array_values($logs);
                 
-                ftruncate($fp, 0);
-                rewind($fp);
-                fwrite($fp, json_encode($logs, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-                fflush($fp);
+                $__enc = json_encode($logs, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($__enc !== false) { ftruncate($fp, 0); rewind($fp); fwrite($fp, $__enc); fflush($fp); }
                 flock($fp, LOCK_UN);
                 fclose($fp);
             }
@@ -1672,27 +1817,27 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         // ✅ 삭제된 사용자들의 활동 로그 삭제
         $activity_file = __DIR__ . '/src/activity_log.json';
         if (file_exists($activity_file)) {
-            $fp = fopen($activity_file, 'c+');
+            $fp = fopen($activity_file, 'c+'); $__lk = false;
             if ($fp && flock($fp, LOCK_EX)) {
                 $content = stream_get_contents($fp);
-                $logs = json_decode($content, true) ?? [];
-                
+                $logs = json_decode($content, true);
+                if (is_array($logs)) $__lk = true; else { flock($fp, LOCK_UN); fclose($fp); } // ★ (2026-11-02 21:09) 깨진 기록이면 덮어쓰지 않음(위와 같은 이유)
+            }
+            if ($__lk) {
                 $logs = array_filter($logs, function($log) use ($deleted_users) {
-                    return !in_array($log['user_id'] ?? '', $deleted_users);
+                    return !in_array((string)($log['user_id'] ?? ''), $deleted_users, true); // ★ (2026-11-02 14:27) 엄격 비교 — '123' 을 지우면 '0123' 기록까지 지워지던 것
                 });
                 $logs = array_values($logs);
                 
-                ftruncate($fp, 0);
-                rewind($fp);
-                fwrite($fp, json_encode($logs, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-                fflush($fp);
+                $__enc = json_encode($logs, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($__enc !== false) { ftruncate($fp, 0); rewind($fp); fwrite($fp, $__enc); fflush($fp); }
                 flock($fp, LOCK_UN);
                 fclose($fp);
             }
         }
     }
     
-    $_SESSION['admin_message'] = __("adm_user_group_updated");
+    $_SESSION['admin_message'] = !empty($_del_log_broken) ? "⚠️ " . __("adm_user_group_updated") . ' / ' . __('adm_del_log_broken') : __("adm_user_group_updated"); // ★ (2026-11-04 12:41) 삭제 기록 파일이 깨져 기록을 못 더했으면 노랑 알림
     header("Location: " . $_SERVER['PHP_SELF'] . "#group");
     exit;
 
@@ -1708,8 +1853,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     $new_status = $_POST['new_status'] ?? '';
     
     // 관리자는 정지 불가
-    if (!empty($target_user) && isset($ua[$target_user]) && ($ua[$target_user]['group'] ?? '') === 'admin' && $new_status === 'suspended') {
-        $_SESSION['admin_message'] = __("adm_admin_no_suspend");
+    if (!empty($target_user) && isset($ua[$target_user]) && ($ua[$target_user]['group'] ?? '') === 'admin' && ($new_status === 'suspended' || $new_status === 'pending')) { // ★ (2026-11-02 14:57) 승인 대기로도 못 바꿈(이제 대기면 열린 세션도 끊기므로 관리자가 잠기지 않게)
+        $_SESSION['admin_message'] = "⚠️ " . __("adm_admin_no_suspend"); // ★ (2026-11-02 10:04) 실패·주의는 빨강·노랑 알림으로
         header("Location: " . $_SERVER['PHP_SELF'] . "#group");
         exit;
     }
@@ -1735,11 +1880,13 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         }
         
         save_users($ua);
+        // ★ (2026-10-30) 정지하면 그 사용자의 '로그인 유지' 토큰도 끊음(다음 접속부터 다시 로그인 → 정지 확인)
+        if ($new_status === 'suspended' && function_exists('delete_user_remember_tokens')) delete_user_remember_tokens($target_user);
         
         $status_names = ['active' => __('adm_status_active'), 'pending' => __('adm_status_pending'), 'suspended' => __('adm_status_suspended')];
-        $_SESSION['admin_message'] = __("adm_user_status_changed", h($target_user), $status_names[$new_status] ?? $new_status);
+        $_SESSION['admin_message'] = __("adm_user_status_changed", (string)$target_user, $status_names[$new_status] ?? $new_status);
     } else {
-        $_SESSION['admin_message'] = __("adm_status_change_failed");
+        $_SESSION['admin_message'] = "❌ " . __("adm_status_change_failed"); // ★ (2026-11-02 10:04) 실패·주의는 빨강·노랑 알림으로
     }
     
     header("Location: " . $_SERVER['PHP_SELF'] . "#group");
@@ -1768,6 +1915,9 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         $ua[$target_user]['password_changed_at'] = date('Y-m-d H:i:s');
         unset($ua[$target_user]['must_change_password']); // 변경 필요 플래그 제거
         save_users($ua);
+        if ($target_user === ($_SESSION['user_id'] ?? '')) $_SESSION['mc_pw_seen'] = $ua[$target_user]['password_changed_at']; // ★ (2026-11-02 08:51) 내 비밀번호면 이 세션은 그대로
+        // ★ (2026-10-30) 비밀번호를 바꾸면 그 사용자의 "로그인 유지" 토큰도 끊음(다른 기기에서 계속 로그인돼 있던 문제)
+        if (function_exists('delete_user_remember_tokens')) delete_user_remember_tokens($target_user);
         
         $_SESSION['admin_message'] = "✅ " . __("adm_pw_changed", $target_user);
     } else {
@@ -1798,7 +1948,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         // 이메일 중복 체크 (빈 값이 아닐 때만)
         if (!empty($new_email)) {
             foreach ($ua as $uid => $udata) {
-                if ($uid !== $target_user && isset($udata['email']) && strtolower($udata['email']) === strtolower($new_email)) {
+                if ((string)$uid !== (string)$target_user && isset($udata['email']) /* ★ (2026-11-02 09:55) 숫자만 된 아이디(정수 키)도 자기 자신으로 */ && strtolower($udata['email']) === strtolower($new_email)) {
                     $_SESSION['admin_message'] = "❌ " . __("adm_email_in_use", $uid);
                     header("Location: " . $_SERVER['PHP_SELF'] . "#group");
                     exit;
@@ -1828,7 +1978,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         csrf_fail_redirect('branding');
     }
     // ✅ 브랜딩 설정 변경 처리
-    $logo_type = ($_POST['logo_type'] ?? 'text') === 'image' ? 'image' : 'text';
+    $logo_type = 'text'; // ★ (2026-11-03 22:02) 고르기 칸 없앰 — 아래에서 이미지가 있으면 'image'
     $logo_text = trim($_POST['logo_text'] ?? 'myComix');
     $subtitle = trim($_POST['subtitle'] ?? __('adm_default_subtitle'));
     $login_button = trim($_POST['login_button'] ?? __('login_submit'));
@@ -1844,8 +1994,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     $admin_title = strip_tags($admin_title);
     
     $logo_image = $branding['logo_image'] ?? '';
+    $_logo_sent = !empty($_FILES['logo_image']['name']) && ($_FILES['logo_image']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE; // ★ (2026-11-03 23:34) 보냈는데 못 받으면 알림
+    $_logo_ok = false;
     if (!empty($_FILES['logo_image']['name']) && $_FILES['logo_image']['error'] === UPLOAD_ERR_OK) {
-        $allowed_types = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
+        // ★ (2026-11-03 23:34) SVG 뺌 — src/.htaccess 가 svg 를 막아 운영(Apache)에서 모든 화면 로고가 깨졌고, 열린다 해도 SVG 안 스크립트 위험
+        $allowed_types = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
         $finfo = finfo_open(FILEINFO_MIME_TYPE);
         $mime = finfo_file($finfo, $_FILES['logo_image']['tmp_name']);
         finfo_close($finfo);
@@ -1853,18 +2006,16 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         if (in_array($mime, $allowed_types)) {
             $ext = pathinfo($_FILES['logo_image']['name'], PATHINFO_EXTENSION);
             $ext = strtolower(preg_replace('/[^a-zA-Z0-9]/', '', $ext));
-            if (!in_array($ext, ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'])) $ext = 'png';
+            if (!in_array($ext, ['png', 'jpg', 'jpeg', 'gif', 'webp'])) $ext = 'png';
             
             $upload_dir = './src/';
             $new_filename = 'logo_' . time() . '.' . $ext;
             $upload_path = $upload_dir . $new_filename;
             
-            if (!empty($branding['logo_image']) && file_exists($branding['logo_image'])) {
-                @unlink($branding['logo_image']);
-            }
-            
-            if (move_uploaded_file($_FILES['logo_image']['tmp_name'], $upload_path)) {
+            if (move_uploaded_file($_FILES['logo_image']['tmp_name'], $upload_path)) { // ★ (2026-11-04 00:28) 옮기기에 성공한 뒤에 옛 로고를 지움(종전엔 먼저 지워 실패하면 원래 로고도 잃었음)
+                if (!empty($branding['logo_image']) && file_exists($branding['logo_image']) && realpath($branding['logo_image']) !== realpath($upload_path)) @unlink($branding['logo_image']);
                 $logo_image = $upload_path;
+                $_logo_ok = true;
             }
         }
     }
@@ -1877,6 +2028,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
         $logo_type = 'text';
     }
     
+    $logo_type = ($logo_image !== '' && file_exists($logo_image)) ? 'image' : 'text';
     $new_branding = [
         'logo_type' => $logo_type,
         'logo_text' => $logo_text,
@@ -1889,7 +2041,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     ];
     
     save_branding($new_branding);
-    $_SESSION['admin_message'] = __("adm_branding_saved");
+    $_SESSION['admin_message'] = ($_logo_sent && !$_logo_ok) ? '❌ ' . __("adm_branding_img_fail") : __("adm_branding_saved");
     header("Location: " . $_SERVER['PHP_SELF'] . "#branding");
     exit;
 
@@ -1963,7 +2115,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
     if ($result === true) {
         $_SESSION['admin_message'] = "✅ " . __("adm_smtp_test_sent", $test_email);
     } else {
-        $_SESSION['admin_message'] = "❌ " . __("adm_smtp_send_failed") . ": " . h($result);
+        $_SESSION['admin_message'] = "❌ " . __("adm_smtp_send_failed") . ": " . (string)$result; // ★ (2026-11-02 09:10) 출력할 때 h() 하므로 여기선 안 함(&amp; 처럼 두 번 바뀌던 것)
     }
     header("Location: " . $_SERVER['PHP_SELF'] . "#smtp");
     exit;
@@ -1978,6 +2130,14 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_popup') {
     
     $popup_idx = (int)($_POST['popup_idx'] ?? -1);
     $popups = get_app_settings('popups', []);
+    // ★ (2026-10-30) 화면 목록은 order 로 정렬한 순번을 보내므로 같은 기준으로 정렬한 뒤 찾음
+    //   (전에는 저장된 순서로 찾아서, 순서가 다르면 다른 팝업이 수정·삭제됐음)
+    if (is_array($popups)) {
+        $popups = array_values($popups);
+        usort($popups, function($a, $b) { return ($a['order'] ?? 0) - ($b['order'] ?? 0); });
+    } else {
+        $popups = [];
+    }
     
     // 기존 팝업 수정 시 이미지 파일명 유지
     $image_file = '';
@@ -1987,27 +2147,20 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_popup') {
     
     // 이미지 삭제 체크
     if (isset($_POST['popup_delete_image']) && !empty($image_file)) {
-        $old_image_path = __DIR__ . '/src/' . $image_file;
-        if (file_exists($old_image_path)) {
-            @unlink($old_image_path);
-        }
+        if (basename($image_file) === $image_file) $_popup_old_img = __DIR__ . '/src/' . $image_file; // ★ (2026-11-04 10:10) 저장이 성공한 뒤에 지움(아래)
         $image_file = '';
     }
     
     // 이미지 업로드 처리
+    // ★ (2026-11-04 00:33) 받지 못한 이미지(형식·크기)는 알림 / 새 파일을 옮긴 뒤에만 옛 이미지 지움 — 전엔 조용히 빠지고, 옮기기 실패 때 옛 이미지도 사라졌음
+    $_popup_img_fail = !empty($_FILES['popup_image_file']['name']) && ($_FILES['popup_image_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK;
     if (!empty($_FILES['popup_image_file']['name']) && $_FILES['popup_image_file']['error'] === UPLOAD_ERR_OK) {
         $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
         $file_type = $_FILES['popup_image_file']['type'];
+        // ★ (2026-11-02 09:58) 브라우저가 보낸 종류 말고 파일 내용으로 판단(배경 업로드와 같게)
+        if (function_exists('finfo_open')) { $__fi = finfo_open(FILEINFO_MIME_TYPE); $file_type = $__fi ? (string)finfo_file($__fi, $_FILES['popup_image_file']['tmp_name']) : ''; if ($__fi) finfo_close($__fi); }
         
         if (in_array($file_type, $allowed_types)) {
-            // 기존 이미지 삭제
-            if (!empty($image_file)) {
-                $old_image_path = __DIR__ . '/src/' . $image_file;
-                if (file_exists($old_image_path)) {
-                    @unlink($old_image_path);
-                }
-            }
-            
             // 확장자 추출
             $ext_map = ['image/jpeg' => 'jpg', 'image/png' => 'png', 'image/gif' => 'gif', 'image/webp' => 'webp'];
             $ext = $ext_map[$file_type] ?? 'jpg';
@@ -2015,8 +2168,15 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_popup') {
             $upload_path = __DIR__ . '/src/' . $new_filename;
             
             if (move_uploaded_file($_FILES['popup_image_file']['tmp_name'], $upload_path)) {
+                // 기존 이미지 삭제 — ★ (2026-11-04 09:36) 설정 저장이 성공한 뒤에(아래) — 저장이 실패하면 남은 기록이 지워진 옛 이미지를 가리켰음
+                if (!empty($image_file) && basename($image_file) === $image_file) $_popup_old_img = __DIR__ . '/src/' . $image_file;
+                $_popup_new_img = $upload_path;
                 $image_file = $new_filename;
+            } else {
+                $_popup_img_fail = true;
             }
+        } else {
+            $_popup_img_fail = true;
         }
     }
     
@@ -2046,8 +2206,14 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_popup') {
         }
     }
     
-    set_app_settings('popups', $popups);
-    $_SESSION['admin_message'] = "✅ " . __("adm_popup_saved");
+    if (set_app_settings('popups', $popups) === false) { // ★ (2026-11-04 09:36) 저장 실패면 실패 알림·새 이미지 지움(옛 이미지는 그대로)
+        if (!empty($_popup_new_img) && is_file($_popup_new_img)) @unlink($_popup_new_img);
+        $_SESSION['admin_message'] = "❌ " . __('adm_blk_fail');
+        header("Location: " . $_SERVER['PHP_SELF'] . "#notice");
+        exit;
+    }
+    if (!empty($_popup_old_img) && is_file($_popup_old_img)) @unlink($_popup_old_img);
+    $_SESSION['admin_message'] = (!empty($_popup_img_fail) ? "⚠️ " : "✅ ") . __("adm_popup_saved") . (!empty($_popup_img_fail) ? ' / ' . __("adm_popup_img_fail") : ''); // ★ (2026-11-04 01:29) 이미지를 못 받았으면 노랑 알림
     header("Location: " . $_SERVER['PHP_SELF'] . "#notice");
     exit;
 }
@@ -2060,19 +2226,23 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'delete_popup') {
     
     $popup_idx = (int)($_POST['popup_idx'] ?? -1);
     $popups = get_app_settings('popups', []);
+    // ★ (2026-10-30) 화면 목록은 order 로 정렬한 순번을 보내므로 같은 기준으로 정렬한 뒤 찾음
+    //   (전에는 저장된 순서로 찾아서, 순서가 다르면 다른 팝업이 수정·삭제됐음)
+    if (is_array($popups)) {
+        $popups = array_values($popups);
+        usort($popups, function($a, $b) { return ($a['order'] ?? 0) - ($b['order'] ?? 0); });
+    } else {
+        $popups = [];
+    }
     
     if ($popup_idx >= 0 && isset($popups[$popup_idx])) {
-        // 이미지 파일 삭제
-        if (!empty($popups[$popup_idx]['image_file'])) {
-            $image_path = __DIR__ . '/src/' . $popups[$popup_idx]['image_file'];
-            if (file_exists($image_path)) {
-                @unlink($image_path);
-            }
-        }
+        // 이미지 파일 삭제 — ★ (2026-11-04 10:10) 저장이 성공한 뒤에(실패하면 기록이 지워진 그림을 가리켰음)
+        $_del_img = (!empty($popups[$popup_idx]['image_file']) && basename((string)$popups[$popup_idx]['image_file']) === (string)$popups[$popup_idx]['image_file']) ? __DIR__ . '/src/' . $popups[$popup_idx]['image_file'] : '';
         
         array_splice($popups, $popup_idx, 1);
-        set_app_settings('popups', $popups);
-        $_SESSION['admin_message'] = "✅ " . __("adm_popup_deleted");
+        $_del_ok = set_app_settings('popups', $popups) !== false;
+        if ($_del_ok && $_del_img !== '' && is_file($_del_img)) @unlink($_del_img);
+        $_SESSION['admin_message'] = !$_del_ok ? "❌ " . __('adm_blk_fail') : "✅ " . __("adm_popup_deleted"); // ★ (2026-11-04 09:36) 저장 실패 알림
     }
     
     header("Location: " . $_SERVER['PHP_SELF'] . "#notice");
@@ -2100,9 +2270,9 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_popup_settings') {
     
     // 간격
     $gap = max(0, min(50, (int)($_POST['popup_gap'] ?? 20)));
-    set_app_settings('popup_gap', $gap);
+    $_ps_ok = set_app_settings('popup_gap', $gap);
     
-    $_SESSION['admin_message'] = "✅ " . __("adm_popup_settings_saved");
+    $_SESSION['admin_message'] = ($_ps_ok === false) ? "❌ " . __('adm_blk_fail') : "✅ " . __("adm_popup_settings_saved"); // ★ (2026-11-04 09:36) 저장 실패 알림
     header("Location: " . $_SERVER['PHP_SELF'] . "#notice");
     exit;
 }
@@ -2122,9 +2292,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_banner') {
         'start_date' => $_POST['banner_start_date'] ?? '',
         'end_date' => $_POST['banner_end_date'] ?? ''
     ];
-    set_app_settings('banner', $banner_settings);
-    
-    $_SESSION['admin_message'] = "✅ " . __("adm_banner_saved");
+    $_SESSION['admin_message'] = (set_app_settings('banner', $banner_settings) === false) ? "❌ " . __('adm_blk_fail') : "✅ " . __("adm_banner_saved"); // ★ (2026-11-04 09:36) 저장 실패 알림
     header("Location: " . $_SERVER['PHP_SELF'] . "#notice");
     exit;
 }
@@ -2141,10 +2309,12 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_language') {
         $new_lang = 'ko';
     }
     
-    set_app_settings('language', $new_lang);
-    $_SESSION['lang'] = $new_lang; // 즉시 반영
-    init_language(); // 언어 재초기화
-    $_SESSION['admin_message'] = __('language_saved');
+    $_lang_ok = set_app_settings('language', $new_lang);
+    if ($_lang_ok !== false) { // ★ (2026-11-04 10:10) 저장이 된 때만 화면 언어도 바꿈
+        $_SESSION['lang'] = $new_lang; // 즉시 반영
+        init_language(); // 언어 재초기화
+    }
+    $_SESSION['admin_message'] = ($_lang_ok === false) ? "❌ " . __('adm_blk_fail') : __('language_saved'); // ★ (2026-11-04 09:36) 저장 실패 알림
     header("Location: " . $_SERVER['PHP_SELF'] . "#language");
     exit;
 }
@@ -2160,8 +2330,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'save_terms') {
         'content' => $_POST['terms_content'] ?? ''
     ];
     
-    set_app_settings('terms', $terms_settings);
-    $_SESSION['admin_message'] = "✅ " . __("adm_terms_saved");
+    $_SESSION['admin_message'] = (set_app_settings('terms', $terms_settings) === false) ? "❌ " . __('adm_blk_fail') : "✅ " . __("adm_terms_saved"); // ★ (2026-11-04 09:36) 저장 실패 알림
     header("Location: " . $_SERVER['PHP_SELF'] . "#terms");
     exit;
 }
@@ -2175,17 +2344,36 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'purge_deleted_user') {
     $purge_index = (int)($_POST['purge_index'] ?? -1);
     $deleted_file = __DIR__ . '/src/deleted_users.json';
     
-    if (file_exists($deleted_file)) {
-        $deleted_data = json_decode(file_get_contents($deleted_file), true) ?? [];
-        $deleted_data = array_reverse($deleted_data); // 최신순으로 정렬된 상태
-        
-        if (isset($deleted_data[$purge_index])) {
-            array_splice($deleted_data, $purge_index, 1);
-            $deleted_data = array_reverse($deleted_data); // 다시 원래 순서로
-            file_put_contents($deleted_file, json_encode($deleted_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-            $_SESSION['admin_message'] = "✅ " . __("adm_deleted_user_purged");
+    // ★ (2026-11-04 09:38) 잠금 하나 안에서 읽고-지우고-쓰기 — 전엔 쓸 때만 잠가, 그사이 탈퇴한 회원 기록이 덮여 사라질 수 있었음
+    $_dfp = file_exists($deleted_file) ? @fopen($deleted_file, 'c+') : false;
+    if ($_dfp && @flock($_dfp, LOCK_EX)) {
+        $deleted_data = json_decode((string)stream_get_contents($_dfp), true);
+        if (!is_array($deleted_data)) { // ★ (2026-11-04 00:28) 깨진 파일이면 아무것도 안 함(종전엔 TypeError 500)
+            $_SESSION['admin_message'] = '❌ ' . __('adm_log_file_broken');
+        } else {
+            $deleted_data = array_reverse($deleted_data); // 최신순으로 정렬된 상태
+            // ★ (2026-11-09 11:39) 화면 순번만 믿지 않고 아이디·삭제 시각까지 맞는 기록을 지움 — 화면을 연 뒤 누가 탈퇴하면 순번이 밀려 다른 사람 기록이 지워졌음
+            //   (예전 화면처럼 아이디가 안 오면 순번 그대로 — 아이디가 왔는데 맞는 기록이 없으면 아무것도 안 지움)
+            if (isset($_POST['purge_uid'])) {
+                $_pu = (string)$_POST['purge_uid']; $_pa = (string)($_POST['purge_at'] ?? '');
+                $_match = function ($r) use ($_pu, $_pa) { return is_array($r) && (string)($r['user_id'] ?? '') === $_pu && (string)($r['deleted_at'] ?? '') === $_pa; };
+                if (!(isset($deleted_data[$purge_index]) && $_match($deleted_data[$purge_index]))) {
+                    $purge_index = -1;
+                    foreach ($deleted_data as $_k => $_r) { if ($_match($_r)) { $purge_index = $_k; break; } }
+                }
+                if ($purge_index < 0) $_SESSION['admin_message'] = '⚠️ ' . __('adm_deleted_user_gone');
+            }
+            if ($purge_index >= 0 && isset($deleted_data[$purge_index])) {
+                array_splice($deleted_data, $purge_index, 1);
+                $deleted_data = array_reverse($deleted_data); // 다시 원래 순서로
+                $_dj = json_encode($deleted_data, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($_dj !== false) { ftruncate($_dfp, 0); rewind($_dfp); fwrite($_dfp, $_dj); fflush($_dfp); }
+                $_SESSION['admin_message'] = "✅ " . __("adm_deleted_user_purged");
+            }
         }
+        @flock($_dfp, LOCK_UN);
     }
+    if ($_dfp) fclose($_dfp);
     
     header("Location: " . $_SERVER['PHP_SELF'] . "#deleted_users");
     exit;
@@ -2199,7 +2387,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'purge_all_deleted_users') {
     
     $deleted_file = __DIR__ . '/src/deleted_users.json';
     if (file_exists($deleted_file)) {
-        file_put_contents($deleted_file, '[]');
+        file_put_contents($deleted_file, '[]', LOCK_EX); // ★ (2026-11-04 09:38) 잠금
     }
     
     $_SESSION['admin_message'] = "✅ " . __("adm_all_deleted_users_purged");
@@ -2342,7 +2530,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'delete_login_log') {
             if ($fp) {
                 if (flock($fp, LOCK_EX)) {
                     $content = stream_get_contents($fp);
-                    $logs = json_decode($content, true) ?? [];
+                    $logs = json_decode($content, true);
+                    if (!is_array($logs)) { // ★ (2026-11-04 00:28) 깨진 로그 파일이면 덮어쓰지 않음(종전엔 '30일 지난 것만'도 전체를 지웠음)
+                        if (trim((string)$content) !== '') { flock($fp, LOCK_UN); fclose($fp); $_SESSION['admin_message'] = '❌ ' . __('adm_log_file_broken'); header('Location: ' . $_SERVER['PHP_SELF'] . '#logs'); exit; }
+                        $logs = [];
+                    }
                     $logs = array_values(array_filter($logs, function($k) use ($selected) {
                         return !in_array($k, $selected);
                     }, ARRAY_FILTER_USE_KEY));
@@ -2365,7 +2557,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'delete_login_log') {
             if ($fp) {
                 if (flock($fp, LOCK_EX)) {
                     $content = stream_get_contents($fp);
-                    $logs = json_decode($content, true) ?? [];
+                    $logs = json_decode($content, true);
+                    if (!is_array($logs)) { // ★ (2026-11-04 00:28) 깨진 로그 파일이면 덮어쓰지 않음(종전엔 '30일 지난 것만'도 전체를 지웠음)
+                        if (trim((string)$content) !== '') { flock($fp, LOCK_UN); fclose($fp); $_SESSION['admin_message'] = '❌ ' . __('adm_log_file_broken'); header('Location: ' . $_SERVER['PHP_SELF'] . '#logs'); exit; }
+                        $logs = [];
+                    }
                     $original_count = count($logs);
                     $logs = array_values(array_filter($logs, function($log) use ($cutoff) {
                         return ($log['datetime'] ?? '') >= $cutoff;
@@ -2420,7 +2616,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'delete_activity_log') {
             if ($fp) {
                 if (flock($fp, LOCK_EX)) {
                     $content = stream_get_contents($fp);
-                    $logs = json_decode($content, true) ?? [];
+                    $logs = json_decode($content, true);
+                    if (!is_array($logs)) { // ★ (2026-11-04 00:28) 깨진 로그 파일이면 덮어쓰지 않음(종전엔 '30일 지난 것만'도 전체를 지웠음)
+                        if (trim((string)$content) !== '') { flock($fp, LOCK_UN); fclose($fp); $_SESSION['admin_message'] = '❌ ' . __('adm_log_file_broken'); header('Location: ' . $_SERVER['PHP_SELF'] . '#logs'); exit; }
+                        $logs = [];
+                    }
                     $original_count = count($logs);
                     $logs = array_values(array_filter($logs, function($log) use ($cutoff) {
                         return ($log['datetime'] ?? '') >= $cutoff;
@@ -2514,12 +2714,13 @@ body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,san
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="./css/bootstrap.min.css">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Gugi&family=Nanum+Gothic:wght@400;700&family=VT323&family=Orbitron:wght@400;700&family=Creepster&family=Press+Start+2P&family=Roboto+Mono:wght@400;700&family=Share+Tech+Mono&family=Cinzel:wght@400;700&family=Playfair+Display:wght@400;700&family=Jua&display=swap">
-<link rel="shortcut icon" href="./favicon.ico">
+<?php echo function_exists('mc_favicon_tags') ? mc_favicon_tags() : '<link rel="shortcut icon" href="./favicon.ico">'; // ★ (2026-11-03 23:50) 탭 아이콘 = 로고 ?>
 <script src="./js/jquery-3.5.1.min.js"></script>
 <script src="./js/popper.min.js"></script>
 <script src="./js/bootstrap.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 <style>
+#system canvas { max-width: 100%; } /* ★ (2026-11-02 19:12) 그래프 라이브러리를 못 받으면 캔버스가 기본 300px 로 남아 휴대폰에서 화면이 옆으로 밀리던 것 */
 body{font-family:'Nanum Gothic',sans-serif;font-size:smaller;background:#f8f9fa}
 a:link,a:visited,a:active,a:hover{text-decoration:none}
 .stat-card{border-radius:15px;padding:20px;color:#fff;margin-bottom:15px;box-shadow:0 4px 15px rgba(0,0,0,.1);transition:transform .2s}
@@ -2550,6 +2751,32 @@ table.config-table{border-collapse:collapse;border-spacing:0}
 @media(max-width:576px){
   table.config-table td.text-right{width:70px !important}
 }
+/* ★ (2026-10-30) 설정 탭 — 종류별 묶음 제목·소제목을 눈에 띄게, 화면 크기별 칸 정리(다른 탭의 config-table 은 그대로)
+   - 묶음 제목(cfg-cat): 진한 띠 / 소제목(bg-light 줄): 왼쪽 색 막대 + 위 여백
+   - 768px 이상: 항목 이름 칸 150px(이름이 3줄로 쪼개지지 않게) / 577~767px: 110px
+   - 576px 이하(휴대폰 세로): 항목 이름을 위, 입력칸을 아래로(이름 칸이 65px 로 좁아 글자가 부서지고 표가 화면 밖으로 넘치던 것) */
+#config .cfg-jump{position:sticky;top:0;z-index:20;display:flex;flex-wrap:wrap;align-items:center;gap:5px;padding:7px 10px;background:#f8f9fa;border-bottom:1px solid #e3e6ea;text-align:left}
+#config .cfg-jump-label{font-size:.75rem;font-weight:700;color:#6c757d;margin-right:2px}
+#config .cfg-jump-btn{font-size:.8rem;line-height:1.3;padding:4px 10px;border:1px solid #cfd8e3;border-radius:14px;background:#fff;color:#0062cc;cursor:pointer}
+#config .cfg-jump-btn:hover{background:#e7f1ff}
+#config table.config-table{width:100%}
+#config table.config-table > tbody > tr > td{overflow-wrap:anywhere}
+#config table.config-table > tbody > tr.cfg-cat > td{background:#343a40;color:#fff;font-weight:700;font-size:1rem;text-align:left;padding:9px 12px;border-radius:6px 6px 0 0}
+#config table.config-table > tbody > tr.cfg-cat:not(:first-child) > td{border-top:18px solid #fff}
+#config table.config-table > tbody > tr > td.bg-light[colspan="2"]{text-align:left;padding:8px 10px;border-left:4px solid #28a745;background:#eef7f0 !important}
+#config table.config-table > tbody > tr > td.bg-light[colspan="2"] strong{font-size:.95rem}
+#config table.config-table > tbody > tr > td.bg-light[colspan="2"] small{display:block;margin-top:2px}
+#config table.config-table > tbody > tr.cfg-cat + tr > td.bg-light[colspan="2"]{border-top:0}
+@media(min-width:768px){#config table.config-table > tbody > tr > td:first-child:not([colspan]){width:150px !important;max-width:150px;font-size:.88em}}
+@media(min-width:577px) and (max-width:767px){#config table.config-table > tbody > tr > td:first-child:not([colspan]){width:110px !important;max-width:110px}}
+@media(max-width:576px){
+  #config table.config-table, #config table.config-table > tbody, #config table.config-table > tbody > tr{display:block;width:100%}
+  #config table.config-table > tbody > tr > td{display:block;width:auto !important;max-width:none !important}
+  #config table.config-table > tbody > tr > td:first-child:not([colspan]){text-align:left !important;font-weight:600;font-size:.85em;padding:8px 4px 2px;color:#495057}
+  #config table.config-table > tbody > tr > td:last-child:not([colspan]){padding:0 4px 8px}
+  #config .cfg-jump{padding:6px 8px}
+  #config .cfg-jump-btn{font-size:.76rem;padding:3px 8px}
+}
 .theme-card{border:2px solid #dee2e6;border-radius:12px;padding:12px 8px;margin-bottom:8px;cursor:pointer;transition:all .2s;text-align:center;min-height:95px}
 .theme-card:hover{border-color:#667eea;background:#f8f9ff;transform:translateY(-2px)}
 .theme-card.active{border-color:#667eea;background:#e8ecff;box-shadow:0 0 0 3px rgba(102,126,234,.2)}
@@ -2558,15 +2785,144 @@ table.config-table{border-collapse:collapse;border-spacing:0}
 .theme-card .theme-desc{font-size:0.65em;color:#888}
 .theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(95px,1fr));gap:8px}
 .theme-card .theme-desc{font-size:0.8em;color:#666}
-/* 탭 네비게이션 가로 스크롤 */
-.nav-tabs-wrapper{overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;margin-bottom:15px}
-.nav-tabs-wrapper::-webkit-scrollbar{height:4px}
-.nav-tabs-wrapper::-webkit-scrollbar-track{background:#f1f1f1;border-radius:2px}
-.nav-tabs-wrapper::-webkit-scrollbar-thumb{background:#888;border-radius:2px}
-.nav-tabs-wrapper::-webkit-scrollbar-thumb:hover{background:#555}
-.nav-tabs-wrapper .nav-tabs{display:flex;flex-wrap:nowrap;border-bottom:1px solid #dee2e6;min-width:max-content}
-.nav-tabs-wrapper .nav-item{flex-shrink:0}
-.nav-tabs-wrapper .nav-link{white-space:nowrap;padding:8px 15px}
+/* ★ (2026-10-30) 관리자 메뉴: 한 줄 가로 스크롤(16개) → 종류별 묶음(현황·사이트·콘텐츠·회원·보안) 상자
+   PC 5칸 / 1200px 미만 3칸 / 768px 미만 2칸 / 576px 미만 한 칸(묶음 이름 왼쪽 + 메뉴 오른쪽) */
+.admin-menu{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin:0 10px 15px;text-align:left}
+.admin-menu .am-group{background:#fff;border:1px solid #e3e6ea;border-radius:10px;padding:7px 8px 8px;min-width:0}
+.admin-menu .am-title{font-size:.74rem;font-weight:700;color:#6c757d;margin:0 2px 5px;white-space:nowrap}
+.admin-menu .am-list{display:flex;flex-wrap:wrap;gap:4px;margin:0;padding:0}
+.admin-menu .nav-item{min-width:0}
+.admin-menu .nav-link{display:block;padding:5px 9px;font-size:.86rem;line-height:1.35;border-radius:6px;white-space:nowrap;color:#0062cc;background:#f4f6f9;border:1px solid transparent}
+.admin-menu .nav-link:hover{background:#e7edf5}
+.admin-menu .nav-link.active{background:#007bff;color:#fff;border-color:#007bff}
+@media(max-width:1199px){.admin-menu{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:767px){.admin-menu{grid-template-columns:repeat(2,minmax(0,1fr));margin:0 8px 12px;gap:6px}}
+@media(max-width:575px){
+  .admin-menu{grid-template-columns:1fr}
+  .admin-menu .am-group{display:flex;align-items:flex-start;gap:6px;padding:6px}
+  .admin-menu .am-title{flex:0 0 64px;margin:5px 0 0;white-space:normal;word-break:keep-all;line-height:1.25}
+  .admin-menu .am-list{flex:1 1 auto;min-width:0}
+  .admin-menu .nav-link{padding:5px 8px;font-size:.82rem}
+}
+/* ★ (2026-11-06 09:30) 펜닐 결정: 메뉴 화면 시안 B(설정 목록형) 공통 틀 — 화면마다 class="ab-page" 를 붙인 칸만 이 모양(안 붙인 화면은 예전 그대로)
+   줄 = 왼쪽 이름·설명 / 오른쪽 칸 · 묶음 제목은 작게 위에 · 저장은 바꿨을 때만 아래 '저장 막대'(원래 저장 단추를 그대로 누름) */
+.ab-page{--abc:#378ADD;max-width:1000px;margin:0 auto;padding:4px 12px 96px;text-align:left}
+.ab-page[data-ab-g="site"]{--abc:#7F77DD}.ab-page[data-ab-g="content"]{--abc:#1D9E75}.ab-page[data-ab-g="member"]{--abc:#BA7517}.ab-page[data-ab-g="security"]{--abc:#D85A30}
+.ab-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:6px 2px 2px}
+.ab-head h3{font-size:1.2rem;font-weight:700;margin:0;display:flex;align-items:center;gap:8px;color:#1f2328}
+.ab-head h3 .ab-ico,.ab-head h3 .emoji-icon,.ab-sec .emoji-icon{color:var(--abc)}
+.ab-lead{color:#5f6672;font-size:.9rem;line-height:1.55;margin:4px 2px 4px}
+.ab-sec{display:flex;align-items:center;gap:6px;font-size:.82rem;font-weight:700;color:#6b7280;margin:20px 6px 7px}
+.ab-sec .ab-ico{color:var(--abc)}
+.ab-list{background:#fff;border:1px solid #e3e6ea;border-radius:12px;overflow:hidden}
+.ab-row{display:flex;align-items:center;gap:16px;padding:12px 16px;border-top:1px solid #eef0f3}
+.ab-row:first-child{border-top:0}
+.ab-t{flex:1 1 auto;min-width:0}
+.ab-name{display:block;font-weight:600;font-size:.95rem;color:#1f2328;line-height:1.35}
+.ab-desc{display:block;font-size:.82rem;color:#6b7280;margin-top:3px;line-height:1.5;word-break:keep-all;overflow-wrap:anywhere}
+.ab-c{flex:0 0 48%;max-width:480px;display:flex;justify-content:flex-end;align-items:center;gap:8px;flex-wrap:wrap;min-width:0}
+.ab-c > .form-control,.ab-c > .input-group{flex:1 1 160px;min-width:0}
+.ab-c .ab-num{flex:0 0 96px}
+.ab-row.ab-wide{display:block}
+.ab-row.ab-wide .ab-c{max-width:none;margin-top:10px;justify-content:flex-start}
+.ab-row.ab-wide .ab-c > *{flex:1 1 100%}
+.ab-row .custom-switch{padding-left:2.4rem;min-height:1.5rem}
+.ab-row .custom-switch .custom-control-label{display:block;min-width:1px;min-height:1.5rem;cursor:pointer}
+.ab-row .custom-switch .custom-control-label:empty,.ab-row .custom-switch .custom-control-label:has(> .sr-only:only-child){width:.1px}
+.ab-row .custom-switch .custom-control-label::before{left:-2.4rem;width:2.1rem;height:1.2rem;border-radius:1rem;top:.15rem}
+.ab-row .custom-switch .custom-control-label::after{left:calc(-2.4rem + 2px);top:calc(.15rem + 2px);width:calc(1.2rem - 4px);height:calc(1.2rem - 4px);border-radius:1rem}
+.ab-row .custom-switch .custom-control-input:checked~.custom-control-label::after{transform:translateX(.9rem)}
+.ab-note{background:#f6f8fb;border:1px solid #e3e6ea;border-left:3px solid var(--abc);border-radius:10px;padding:10px 14px;font-size:.86rem;color:#454b54;line-height:1.6;margin:10px 0 0}
+.ab-note.ab-warn{border-left-color:#BA7517;background:#fffbeb;border-color:#f6e3b4}
+.ab-note.ab-danger{border-left-color:#A32D2D;background:#fdf2f2;border-color:#f5c2c2}
+.ab-foot{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;padding:10px 16px;border-top:1px solid #eef0f3;background:#fafbfc}
+.ab-page .btn-group-toggle .btn{min-width:64px}
+.ab-opt{display:inline-flex;align-items:center;gap:8px;margin:0;padding:7px 12px;border:1px solid #d5d9e0;border-radius:10px;cursor:pointer;background:#fff;font-size:.9rem}
+.ab-opt:has(input:checked){border-color:var(--abc);background:#f3f6ff;box-shadow:0 0 0 1px var(--abc) inset}
+.ab-opt input{width:16px;height:16px;margin:0}
+.ab-page .table{margin-bottom:0}
+.ab-js .ab-orig-submit,.ab-js .ab-orig-foot,.ab-js .ab-orig-li{display:none !important}
+.ab-savebar{position:fixed;left:50%;bottom:16px;z-index:1045;width:min(640px,calc(100% - 24px));transform:translate(-50%,calc(100% + 40px));transition:transform .2s ease;display:flex;align-items:center;gap:10px;padding:10px 12px 10px 16px;border-radius:12px;background:#1f2937;color:#fff;box-shadow:0 8px 24px rgba(0,0,0,.25);text-align:left}
+.ab-savebar.show{transform:translate(-50%,0)}
+.ab-savebar{visibility:hidden;transition:transform .2s ease,visibility 0s linear .2s}.ab-savebar.show{visibility:visible;transition:transform .2s ease,visibility 0s}
+.ab-savebar .ab-sb-t{flex:1 1 auto;min-width:0;font-size:.92rem;line-height:1.35}
+.ab-savebar .ab-sb-t small{display:block;color:#c3c8d1;font-size:.78rem}
+.ab-savebar .ab-sb-t a{color:#9cc7ff;text-decoration:underline;cursor:pointer}
+.ab-savebar .btn{white-space:nowrap}
+.ab-row.ab-dirty,#config .ab-cfg table.config-table > tbody > tr.ab-dirty > td:first-child{box-shadow:inset 3px 0 0 var(--abc,#378ADD)} /* ★ fix25 바꾼 줄 표시 */
+.ab-row.ab-dirty{background:#f7f9ff}
+#config .ab-cfg table.config-table > tbody > tr.ab-dirty > td{background:#f7f9ff !important}
+@media(max-width:640px){
+  .ab-page{padding:2px 8px 96px}
+  .ab-row{flex-wrap:wrap;gap:8px;padding:11px 12px}
+  .ab-c{flex:1 1 100%;max-width:none;justify-content:flex-start}
+  .ab-savebar{left:0;bottom:0;width:100%;border-radius:12px 12px 0 0;transform:translate(0,calc(100% + 10px));padding-bottom:calc(10px + env(safe-area-inset-bottom))}
+  .ab-savebar.show{transform:translate(0,0)}
+}
+/* ★ (2026-11-06 10:30) 설정 화면 — 표 그대로 목록형으로 보이게(칸·값은 그대로) */
+#config .ab-cfg > form > .list-group{border:0;background:transparent}
+#config .ab-cfg > form > .list-group > .list-group-item{border:0;padding:0;background:transparent}
+#config .ab-cfg .cfg-jump{position:sticky;top:0;z-index:20;background:#f8f9fb;border:0;padding:8px 2px;margin:6px 0 0}
+#config .ab-cfg table.config-table{border-collapse:separate;border-spacing:0}
+#config .ab-cfg table.config-table > tbody > tr.cfg-cat > td{background:transparent;color:#1f2328;font-size:1.05rem;padding:26px 4px 2px;border:0 !important;border-radius:0}
+#config .ab-cfg table.config-table > tbody > tr.cfg-cat:first-child > td{padding-top:8px}
+#config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"]{background:transparent !important;border:0 !important;padding:16px 6px 7px;font-size:.82rem;color:#6b7280}
+#config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"] strong{font-size:.82rem;color:#6b7280}
+#config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"] small{display:inline;margin-left:4px;font-weight:400}
+#config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td{background:#fff;border-top:1px solid #eef0f3;padding:12px 16px;vertical-align:middle}
+#config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{border-left:1px solid #e3e6ea;text-align:left !important;font-weight:600;font-size:.92rem;color:#1f2328;width:38% !important;max-width:none !important;padding-right:10px}
+#config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:last-child{border-right:1px solid #e3e6ea}
+#config .ab-cfg table.config-table > tbody > tr:has(> td.bg-light[colspan]) + tr > td{border-top:1px solid #e3e6ea !important}
+#config .ab-cfg table.config-table > tbody > tr:has(> td.bg-light[colspan]) + tr > td:first-child{border-top-left-radius:6px}
+#config .ab-cfg table.config-table > tbody > tr:has(> td.bg-light[colspan]) + tr > td:last-child{border-top-right-radius:6px}
+#config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-child,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td{border-bottom:1px solid #e3e6ea}
+#config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-child,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td:first-child{border-bottom-left-radius:6px}
+#config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-child,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td:last-child{border-bottom-right-radius:6px}
+#config .ab-cfg table.config-table td small.text-muted{font-size:.8rem;line-height:1.45}
+#config .ab-cfg .input-group > .form-control{width:1%}
+#config .ab-cfg .base-dir-row{flex-wrap:nowrap}
+@media(max-width:576px){
+  #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td{border-left:1px solid #e3e6ea;border-right:1px solid #e3e6ea;width:auto !important}
+  #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{padding:11px 12px 2px;border-bottom:0 !important;border-bottom-left-radius:0 !important;width:auto !important;border-right:1px solid #e3e6ea}
+  #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:last-child{border-top:0 !important;padding:4px 12px 11px;border-top-right-radius:0 !important}
+  #config .ab-cfg table.config-table > tbody > tr:has(> td.bg-light[colspan]) + tr > td:first-child{border-top-right-radius:12px}
+  #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-child,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td:last-child{border-bottom-left-radius:12px}
+}
+/* ★ (2026-11-06 10:50) 시안 B — 배치가 복잡한 화면(보안·캐시·테마·공지·사용자·폴더·로그·중복·시스템·대시보드)은 칸을 옮기지 않고 같은 카드 모양만
+   (흰 머리 + 묶음 색 아이콘 · 왼쪽 정렬 · 폭 전체 굵은 단추 → 보통 단추 · 작은 글자 한 단계) — 화면 스크립트가 찾는 칸·id 는 그대로 */
+.tab-pane.ab-gen{--abc:#378ADD;padding:2px 6px 90px;text-align:left}
+.tab-pane.ab-gen[data-ab-g="site"]{--abc:#7F77DD}.tab-pane.ab-gen[data-ab-g="content"]{--abc:#1D9E75}.tab-pane.ab-gen[data-ab-g="member"]{--abc:#BA7517}.tab-pane.ab-gen[data-ab-g="security"]{--abc:#D85A30}
+.ab-gen .card,.ab-gen .info-card{border:1px solid #e3e6ea !important;border-radius:12px !important;overflow:hidden;box-shadow:none !important;background:#fff}
+.ab-gen .card > .card-header,.ab-gen .card > form > .card-header,.ab-gen .info-card > .card-header{background:#fff !important;color:#1f2328 !important;border-bottom:1px solid #eef0f3 !important;font-weight:700;font-size:1rem;text-align:left !important;padding:12px 16px;justify-content:flex-start;gap:8px}
+.ab-gen .card > .card-header.d-flex,.ab-gen .info-card > .card-header.d-flex{justify-content:space-between}
+.ab-gen .card-header .emoji-icon,.ab-gen .card-header > svg{color:var(--abc)}
+.ab-gen .card-header .badge-light{background:#eef0f3;color:#454b54}
+.ab-gen .card-body{text-align:left}
+.ab-gen .card-body.text-center,.ab-gen .text-center{text-align:center}
+.ab-gen .btn-block{display:inline-block;width:auto;min-width:180px}
+.ab-gen .card-body > form > .btn-block:last-child,.ab-gen .card-body > .btn-block:last-child{display:block;margin-left:auto}
+.ab-gen small,.ab-gen .small{font-size:.82rem}
+.ab-gen .form-text{font-size:.82rem}
+.ab-gen .alert{border-radius:10px}
+.ab-gen .list-group-item.p-0:has(> .ab-orig-submit:only-of-type){padding:0 !important;border:0}
+/* ★ (2026-11-06 11:05) 대시보드 숫자 카드·바로가기 · 캐시 단추 색 · 폴더 권한 도구 — 같은 모양으로 */
+#dashboard.ab-gen .stat-card{background:#fff !important;color:#1f2328;border:1px solid #e3e6ea;border-radius:12px;box-shadow:none;text-align:left;padding:16px 18px}
+#dashboard.ab-gen .stat-card:hover{transform:none;border-color:#cfd6df}
+#dashboard.ab-gen .stat-card .stat-number{color:var(--sc,#185FA5)}
+#dashboard.ab-gen .stat-card .stat-label{color:#5f6672;opacity:1}
+#dashboard.ab-gen .stat-card.bg-gradient-purple{--sc:#534AB7}#dashboard.ab-gen .stat-card.bg-gradient-pink{--sc:#993556}#dashboard.ab-gen .stat-card.bg-gradient-blue{--sc:#185FA5}#dashboard.ab-gen .stat-card.bg-gradient-orange{--sc:#854F0B}
+#dashboard.ab-gen .quick-link{background:#fff !important;color:#1f2328 !important;border:1px solid #e3e6ea;border-radius:12px;padding:14px;box-shadow:none}
+#dashboard.ab-gen .quick-link:hover{transform:none;border-color:#9cb8e0;background:#f6f9ff !important}
+#dashboard.ab-gen .quick-link .emoji-icon,#dashboard.ab-gen .quick-link svg{color:var(--mc-acc,#185FA5)}
+#dashboard.ab-gen .quick-link.bg-danger{color:#A32D2D !important}#dashboard.ab-gen .quick-link.bg-danger .emoji-icon,#dashboard.ab-gen .quick-link.bg-danger svg{color:#A32D2D}
+#dashboard.ab-gen .info-card .card-header{background:#fff !important}
+#cache.ab-gen .card-header[style]{background:var(--mc-head,#fff) !important;color:#1f2328 !important;font-size:inherit !important} /* ★ fix27 다른 카드 머리와 같게 */
+#cache.ab-gen [id^="btn-"][id$="-quick"]{border:1px solid var(--mc-acc,#185FA5) !important;color:var(--mc-acc,#185FA5) !important;background:#fff !important}
+#cache.ab-gen [id^="btn-"][id$="-force"],#cache.ab-gen #btn-search-index,#cache.ab-gen #btn-zip-total{background:var(--mc-acc,#185FA5) !important;border:1px solid var(--mc-acc,#185FA5) !important;color:#fff !important}
+#cache.ab-gen [id^="btn-"]:disabled{opacity:.55}
+#folder.ab-gen .card-header .ab-fp-tools{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+#folder.ab-gen .card-header .ab-fp-tools select{width:auto}
+/* ★ (2026-11-06 fix27) fix26 의 색 머리띠·회색 바탕은 걷어냄 → css/admin-shell.css(관리자 공통 틀·통일 색/크기) */
 /* Bootstrap 탭 안전장치 */
 .tab-content > .tab-pane:not(.active){display:none !important;height:0 !important;overflow:hidden !important;visibility:hidden !important;opacity:0 !important;position:absolute !important;pointer-events:none !important}
 .tab-content > .tab-pane.active{display:block !important;position:relative !important;opacity:1 !important;visibility:visible !important;height:auto !important}
@@ -2602,48 +2958,47 @@ $_i18n_adm_data = array_map(function($v) {
 echo json_encode($_i18n_adm_data, JSON_UNESCAPED_UNICODE);
 ?>;
 </script>
+<?php require_once __DIR__ . '/admin_shell.php'; mc_admin_shell_css(); /* ★ (2026-11-06 fix27) 관리자 공통 틀(위 막대·왼쪽 메뉴)·통일 색/크기 — 맨 뒤에 읽어 앞 스타일보다 우선 */ ?>
+<?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-11-07 fix36) 아이콘 변환을 본문보다 먼저 시작 — 새로고침 때 예전 이모지가 잠깐 보였다가 바뀌던 것(펜닐 제보) / 페이지 끝의 같은 스크립트는 다시 실행되지 않음 */ ?>
 </head>
-<body class="text-center">
-<?php if($message): ?>
-<div class="alert alert-success alert-dismissible fade show alert-floating" role="alert">✅ <?php echo h($message); ?><button type="button" class="close" data-dismiss="alert"><span>&times;</span></button></div>
+<body class="text-center mc-adm">
+<?php if($message):
+    // ★ (2026-11-02 09:10) 실패(❌)·주의(⚠️) 알림은 빨강·노랑으로, 앞 이모지는 한 번만 — 전에는 모두 초록에 '✅ ❌ …'처럼 겹쳐 나왔음
+    $_am_cls = 'success'; $_am_ico = '✅'; $_am_txt = (string)$message;
+    if (strpos($_am_txt, '❌') === 0) { $_am_cls = 'danger'; $_am_ico = '❌'; }
+    elseif (strpos($_am_txt, '⚠️') === 0 || strpos($_am_txt, '⚠') === 0) { $_am_cls = 'warning'; $_am_ico = '⚠️'; }
+    $_am_txt = preg_replace('/^(?:✅|❌|⚠️|⚠)\s*/u', '', $_am_txt);
+?>
+<div class="alert alert-<?php echo $_am_cls; ?> alert-dismissible fade show alert-floating" role="alert"><?php echo $_am_ico; ?> <?php echo h($_am_txt); ?><button type="button" class="close" data-dismiss="alert"><span>&times;</span></button></div>
 <script>setTimeout(function(){$('.alert-floating').fadeOut();},3000);</script>
 <?php endif; ?>
 
-<br>
-<?php if(($branding['logo_type'] ?? 'text') === 'image' && !empty($branding['logo_image']) && file_exists($branding['logo_image'])): ?>
-<div><a href="admin.php" style="display:inline-block;"><img src="<?php echo h($branding['logo_image']); ?>" alt="<?php echo h($branding['logo_text']); ?>" style="max-height:2.5em; max-width:200px;"></a><span style="font-size:10px; color:#999; margin-left:4px; position:relative; top:-20px;"><?php echo MYCOMIX_VERSION; ?></span></div>
-<?php else: ?>
-<div style="font-family:'Gugi';font-size:2.5em;"><a href="admin.php" style="color:#000; text-decoration:none;"><?php echo h($branding['logo_text'] ?? 'myComix'); ?></a><span style="font-size:10px; color:#999; margin-left:4px; position:relative; top:-20px;"><?php echo MYCOMIX_VERSION; ?></span></div>
-<?php endif; ?>
-<small class="text-muted"><?php echo __h('admin_return_admin'); ?></small>
-<?php render_lang_badge('md'); ?>
-<br><br>
+<?php // ★ (2026-11-06 fix27) 머리(로고·관리자·언어) → 위 막대(admin_shell.php) — 같은 로고·언어 단추 + 메인·로그아웃 ?>
+<?php mc_admin_topbar($branding); ?>
 
-<div class="nav-tabs-wrapper">
-<ul class="nav nav-tabs flex-nowrap">
-<li class="nav-item"><a class="nav-link active" data-toggle="tab" href="#dashboard"><?php echo __('admin_tab_dashboard'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#config"><?php echo __('admin_tab_config'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#cache"><?php echo __('admin_tab_cache'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#theme"><?php echo __('admin_tab_theme'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#branding"><?php echo __('admin_tab_branding'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#notice"><?php echo __('admin_tab_notice'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#group"><?php echo __('admin_tab_users'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#folder"><?php echo __('admin_tab_folder'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#logs" onclick="resetLogPage()"><?php echo __('admin_tab_logs'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#deleted_users"><?php echo __('admin_tab_deleted_users'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#terms"><?php echo __('admin_tab_terms'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#security"><?php echo __('admin_tab_security'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#smtp"><?php echo __('admin_tab_smtp'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#duplicates"><?php echo __('admin_tab_duplicates'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#system"><?php echo __('admin_tab_system'); ?></a></li>
-<li class="nav-item"><a class="nav-link" data-toggle="tab" href="#language"><?php echo __('admin_tab_language'); ?></a></li>
-</ul>
-</div>
+<?php // ★ (2026-11-06 fix27) 메뉴 = admin_shell.php 의 mc_admin_menu('tabs') — 링크·이름·순서·data-toggle·onclick 은 예전 그대로 + '한영 검색어 연결'(대시보드 바로가기에서 옮김) · PC 왼쪽 고정 / 모바일 밀어 나오는 메뉴 ?>
+<?php mc_admin_menu('tabs'); ?>
+<script>
+// ★ (2026-10-30) 메뉴가 묶음(ul)마다 나뉘어 Bootstrap 은 같은 묶음 안에서만 이전 메뉴의 '선택' 표시를 끔 → 다른 묶음의 이전 메뉴도 끄고 hidden.bs.tab 을 보내 줌
+//   (시스템 탭의 실시간 모니터가 다른 탭으로 옮길 때 멈추는 동작 등이 예전과 같게)
+$(document).on('show.bs.tab', '.admin-menu a[data-toggle="tab"]', function () {
+    var cur = this, curList = $(cur).closest('ul')[0];
+    $('.admin-menu a[data-toggle="tab"].active').each(function () {
+        if (this === cur || $(this).closest('ul')[0] === curList) return; // 같은 묶음은 Bootstrap 이 처리
+        $(this).removeClass('active').attr('aria-selected', 'false');
+        $(this).trigger($.Event('hidden.bs.tab', { relatedTarget: cur }));
+    });
+});
+</script>
 
-<div class="tab-content">
+<h2 class="mc-adm-title" id="mcAdmTitle"><?php echo __('admin_tab_dashboard'); ?></h2>
+<?php mc_admin_shell_js(); ?>
+<div class="tab-content mc-adm-main">
+<?php // ★ (2026-11-06 fix34) 한영 검색어 연결 — 메뉴 탭으로(처음 열 때 admin_translations.php 를 이 칸에 불러 옴 · 같은 사이트만 허용(X-Frame-Options SAMEORIGIN)) ?>
+<div class="tab-pane fade" id="translations" role="tabpanel"><iframe class="mc-embed-frame" data-src="admin_translations.php?embed=1" title="<?php echo __h('admin_tab_translations'); ?>"></iframe></div>
 
 <!-- Dashboard -->
-<div class="tab-pane fade show active" id="dashboard">
+<div class="tab-pane fade show active ab-gen" data-ab-g="overview" id="dashboard">
 <div class="container-fluid">
 
 <?php
@@ -2684,10 +3039,10 @@ if (count($pending_users_list) > 0): ?>
 </div>
 
 <div class="row mt-3">
-<div class="col-6 col-md-3"><a href="index.php?bidx=0" class="quick-link bg-primary">🏠<br><?php echo __h('admin_return_index'); ?></a></div>
-<div class="col-6 col-md-3"><a href="login.php?mode=adduser" class="quick-link bg-success"><?php echo __("adm_quick_add_user"); ?></a></div>
-<div class="col-6 col-md-3"><a href="admin_translations.php" class="quick-link bg-info"><?php echo __("adm_quick_translations"); ?></a></div>
-<div class="col-6 col-md-3"><a href="login.php?mode=logout" class="quick-link bg-danger">🚪<br><?php echo __h('admin_logout'); ?></a></div>
+<?php // ★ (2026-11-06 fix27) '한영 검색어 연결'은 메뉴(콘텐츠 묶음)로 옮김 — 대시보드에 있으면 메뉴가 아닌 줄 알기 쉬워서 · 남은 3개는 한 줄에 셋 ?>
+<div class="col-4"><a href="index.php?bidx=0" class="quick-link bg-primary">🏠<br><?php echo __h('admin_return_index'); ?></a></div>
+<div class="col-4"><a href="login.php?mode=adduser" class="quick-link bg-success"><?php echo __("adm_quick_add_user"); ?></a></div>
+<div class="col-4"><a href="login.php?mode=logout" class="quick-link bg-danger">🚪<br><?php echo __h('admin_logout'); ?></a></div>
 </div>
 
 <!-- 📊 Access Statistics -->
@@ -2722,6 +3077,7 @@ function is_bot_user_agent($ua) {
 
 if (file_exists($login_log_file)) {
     $all_logs = json_decode(file_get_contents($login_log_file), true) ?? [];
+    if (!is_array($all_logs)) $all_logs = []; // ★ (2026-11-04 09:37) 배열이 아니면 foreach 경고
     
     // 로그인 사용자만 카운트 (봇 제외)
     foreach ($all_logs as $log) {
@@ -2970,7 +3326,7 @@ foreach ($monthly_stats as $month => $stat):
 <?php 
 foreach ($yearly_stats as $year => $stat): 
     $unique_count = count($stat['unique']);
-    $is_this_year = ($year === $this_year);
+    $is_this_year = ((string)$year === (string)$this_year); // ★ (2026-11-02 09:58) 연도 키는 정수로 바뀌어 '올해' 강조가 안 나왔음
 ?>
 <tr<?php echo $is_this_year ? ' class="table-primary"' : ''; ?>>
     <td><?php echo h($year); ?><?php if ($is_this_year): ?> <span class="badge badge-primary"><?php echo __('adm_badge_this_year'); ?></span><?php endif; ?></td>
@@ -2994,13 +3350,15 @@ foreach ($yearly_stats as $year => $stat):
 <!-- 📋 README.md -->
 <div class="info-card mt-4">
 <div class="card-header">📋 README.md</div>
-<div class="card-body p-3 text-left" style="max-height:250px;overflow-y:auto">
+<div class="card-body p-3 text-left mc-noico" style="max-height:250px;overflow-y:auto"><?php /* ★ (2026-10-31) mc-noico: README 본문 이모지는 선 아이콘으로 안 바꿈(문서 내용 그대로) */ ?>
 <?php
 if(file_exists("README.md")){
     $rm = file_get_contents("README.md");
-    $sp = strpos($rm, "<h2 id=\"-1\">Updates</h2>");
-    $allowed_tags = '<h1><h2><h3><h4><p><ul><ol><li><a><strong><em><code><pre>';
-    echo $sp !== false ? strip_tags(substr($rm, $sp), $allowed_tags) : "...";
+    // ★ (2026-11-02 10:04) README 는 Markdown 이라 HTML 표시(<h2 id="-1">)가 없어 늘 '...' 만 나왔음 → 현재 버전 기록 앞부분을 글자 그대로
+    $sp = strpos($rm, '현재 버전');
+    if ($sp !== false) { $ls = strrpos(substr($rm, 0, $sp), "\n"); $sp = ($ls === false) ? 0 : $ls + 1; }
+    $part = ($sp !== false) ? mb_strcut($rm, $sp, 4000, 'UTF-8') : '';
+    echo $part !== '' ? '<div style="white-space:pre-wrap;font-size:12px">' . h($part) . ' …</div>' : "...";
 }else echo "<p class='text-muted'>README.md not found.</p>";
 ?>
 </div></div>
@@ -3010,15 +3368,17 @@ if(file_exists("README.md")){
 
 <!-- Config -->
 <div class="tab-pane fade" id="config">
-<div class="card m-2 p-0">
-<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
+<?php // ★ (2026-11-06 10:30) 시안 B — 설정 표(칸 이름·값·순서)는 그대로, 보이는 모양만 목록형(아래 .ab-cfg 스타일) · 저장은 아래 저장 막대(원래 단추를 누름) ?>
+<div class="ab-page ab-cfg" data-ab-g="site">
+<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post" data-ab-save>
 <?php echo csrf_field(); ?>
-<div class="card-header bg-success text-white"><?php echo __('admin_settings_title'); ?></div>
+<div class="ab-head"><h3><?php echo __('admin_settings_title'); ?></h3></div>
 <?php
 // app_settings.json에서 직접 설정 로드
 $_settings_file = __DIR__ . '/src/app_settings.json';
 if (file_exists($_settings_file)) {
     $_loaded_settings = json_decode(file_get_contents($_settings_file), true) ?? [];
+    if (!is_array($_loaded_settings)) $_loaded_settings = []; // ★ (2026-11-04 09:37)
     if (isset($_loaded_settings['auto_logout'])) $auto_logout_settings = $_loaded_settings['auto_logout'];
     if (isset($_loaded_settings['darkmode'])) $darkmode_settings = $_loaded_settings['darkmode'];
     if (isset($_loaded_settings['txt_viewer'])) $txt_viewer_settings = $_loaded_settings['txt_viewer'];
@@ -3034,12 +3394,15 @@ if (file_exists($_settings_file)) {
     if (isset($_loaded_settings['viewed_mark_seconds'])) $viewed_mark_seconds = $_loaded_settings['viewed_mark_seconds'];
     if (isset($_loaded_settings['max_bookmark'])) $max_bookmark = $_loaded_settings['max_bookmark'];
     if (isset($_loaded_settings['max_autosave'])) $max_autosave = $_loaded_settings['max_autosave'];
+    if (isset($_loaded_settings['max_ebook_bookmark'])) $max_ebook_bookmark = $_loaded_settings['max_ebook_bookmark'];
     if (isset($_loaded_settings['max_favorites'])) $max_favorites = $_loaded_settings['max_favorites'];
+    if (isset($_loaded_settings['fav_per_page'])) $fav_per_page = $_loaded_settings['fav_per_page'];
+    foreach (['lib_per_page', 'lib_reading_count', 'lib_recent_count', 'bm_page_autosave', 'bm_page_bookmark', 'bm_page_ebook', 'bg_refresh_minutes', 'perf_log'] as $_lk) if (isset($_loaded_settings[$_lk])) $$_lk = $_loaded_settings[$_lk];
     if (isset($_loaded_settings['pages_per_group'])) $pages_per_group = $_loaded_settings['pages_per_group'];
     if (isset($_loaded_settings['pages_per_group_mobile'])) $pages_per_group_mobile = $_loaded_settings['pages_per_group_mobile'];
 }
-if(!isset($max_bookmark))$max_bookmark=10;if(!isset($max_autosave))$max_autosave=3;
-if(!isset($max_favorites))$max_favorites=50;if(!isset($new_badge_hours))$new_badge_hours=24;if(!isset($viewed_mark_seconds))$viewed_mark_seconds=2;
+if(!isset($max_bookmark))$max_bookmark=10;if(!isset($max_autosave))$max_autosave=3;if(!isset($max_ebook_bookmark))$max_ebook_bookmark=30;
+if(!isset($max_favorites))$max_favorites=50;if(!isset($fav_per_page))$fav_per_page=30;if(!isset($lib_per_page))$lib_per_page=48;if(!isset($lib_reading_count))$lib_reading_count=12;if(!isset($lib_recent_count))$lib_recent_count=12;foreach(['bm_page_autosave','bm_page_bookmark','bm_page_ebook'] as $_bk){if(!isset($$_bk))$$_bk=12;}if(!isset($bg_refresh_minutes))$bg_refresh_minutes=10;if(!isset($perf_log))$perf_log='1';if(!isset($new_badge_hours))$new_badge_hours=24;if(!isset($viewed_mark_seconds))$viewed_mark_seconds=2;
 if(!isset($maxview_folder))$maxview_folder=50;if(!isset($maxview_file))$maxview_file=100;if(!isset($maxview_folder_mobile))$maxview_folder_mobile=30;if(!isset($maxview_file_mobile))$maxview_file_mobile=30;
 if(!isset($pages_per_group))$pages_per_group=5;if(!isset($pages_per_group_mobile))$pages_per_group_mobile=3;
 if(!isset($use_cover))$use_cover='n';if(!isset($use_listcover))$use_listcover='n';
@@ -3061,13 +3424,33 @@ $vips_ok = !empty($vips_path) && is_file($vips_path);
 $unrar_ok = !empty($unrar_path) && is_file($unrar_path);
 $sevenzip_ok = !empty($sevenzip_path) && is_file($sevenzip_path);
 ?>
+<?php // ★ (2026-10-30) 설정 묶음 바로가기(누르면 그 묶음으로 스크롤 — 주소의 #은 바꾸지 않음, 탭 복원과 겹치지 않게) ?>
+<div class="cfg-jump" role="navigation" aria-label="<?php echo __h('adm_cfg_jump'); ?>">
+  <span class="cfg-jump-label"><?php echo __h('adm_cfg_jump'); ?></span>
+  <?php foreach (['content' => 'adm_cfg_cat_content', 'viewer' => 'adm_cfg_cat_viewer', 'display' => 'adm_cfg_cat_display', 'member' => 'adm_cfg_cat_member', 'tools' => 'adm_cfg_cat_tools'] as $_cj => $_ck): ?>
+  <button type="button" class="cfg-jump-btn" data-target="cfg-cat-<?php echo $_cj; ?>"><?php echo __h($_ck); ?></button>
+  <?php endforeach; ?>
+</div>
+<script>
+document.addEventListener('click', function (e) {
+    var b = e.target.closest ? e.target.closest('.cfg-jump-btn') : null;
+    if (!b) return;
+    var t = document.getElementById(b.getAttribute('data-target'));
+    if (!t) return;
+    var bar = document.querySelector('.cfg-jump');
+    var y = t.getBoundingClientRect().top + window.pageYOffset - ((bar ? bar.offsetHeight : 0) + 8);
+    window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
+});
+</script>
 <ul class="list-group list-group-flush">
 <li class="list-group-item">
 <table class="config-table" width="100%">
 
 <!-- Multi-folder settings -->
+<!-- ★ (2026-10-30) 설정을 종류별로 묶음(콘텐츠·목록 / 뷰어 / 화면·보안 / 회원 / 외부 프로그램) — 각 칸(입력 이름·값)은 그대로, 순서와 묶음 제목만 바뀜 -->
+<tr class="cfg-cat" id="cfg-cat-content"><td colspan="2"><?php echo __h("adm_cfg_cat_content"); ?></td></tr>
 <tr class="border-bottom"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_content_folders"); ?></strong> <small class="text-muted"><?php echo __("adm_help_multi_folders"); ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right align-top" style="width:80px;max-width:80px;">base_dirs</td><td class="">
+<tr class="border-bottom"><td class="text-right align-top" style="width:80px;max-width:80px;"><?php echo __h('ab_cfg_base_dirs'); /* ★ (2026-11-06) 설정 키 'base_dirs' 대신 이름 */ ?></td><td class="">
 <div id="base-dirs-container">
 <?php 
 $dirs = !empty($base_dirs) ? $base_dirs : [''];
@@ -3089,17 +3472,38 @@ foreach ($dirs as $idx => $dir): ?>
 <small class="text-muted d-block mt-1"><?php echo __("adm_first_folder_default"); ?></small>
 </td></tr>
 
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_list"); ?></td><td class=""><input type="number" name="maxview_folder" class="form-control" value="<?php echo h($maxview_folder); ?>" min="1" required><small class="text-muted">Folders per page in folder-only directories</small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_file_list"); ?></td><td class=""><input type="number" name="maxview_file" class="form-control" value="<?php echo h($maxview_file); ?>" min="1" required><small class="text-muted">Items per page in directories with files (99999999 = infinite scroll)</small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_list_mobile"); ?></td><td class=""><input type="number" name="maxview_folder_mobile" class="form-control" value="<?php echo h($maxview_folder_mobile); ?>" min="1" required><small class="text-muted">Folders per page on mobile (folder-only)</small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_file_list_mobile"); ?></td><td class=""><input type="number" name="maxview_file_mobile" class="form-control" value="<?php echo h($maxview_file_mobile); ?>" min="1" required><small class="text-muted">Items per page on mobile (with files) (smaller value recommended)</small></td></tr>
+<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __h("adm_section_list_display"); ?></strong></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_list"); ?></td><td class=""><input type="number" name="maxview_folder" class="form-control" value="<?php echo h($maxview_folder); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_folder_list_help'); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_file_list"); ?></td><td class=""><input type="number" name="maxview_file" class="form-control" value="<?php echo h($maxview_file); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_file_list_help'); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_list_mobile"); ?></td><td class=""><input type="number" name="maxview_folder_mobile" class="form-control" value="<?php echo h($maxview_folder_mobile); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_folder_list_mobile_help'); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_file_list_mobile"); ?></td><td class=""><input type="number" name="maxview_file_mobile" class="form-control" value="<?php echo h($maxview_file_mobile); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_file_list_mobile_help'); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_pc"); ?></td><td class=""><input type="number" name="pages_per_group" class="form-control" value="<?php echo h($pages_per_group); ?>" min="1" required></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_mobile"); ?></td><td class=""><input type="number" name="pages_per_group_mobile" class="form-control" value="<?php echo h($pages_per_group_mobile); ?>" min="1" required></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_autosave"); ?></td><td class=""><input type="number" name="max_autosave" class="form-control" value="<?php echo h($max_autosave); ?>" min="1" required></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_bookmark"); ?></td><td class=""><input type="number" name="max_bookmark" class="form-control" value="<?php echo h($max_bookmark); ?>" min="1" required></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_favorites"); ?></td><td class=""><input type="number" name="max_favorites" class="form-control" value="<?php echo h($max_favorites); ?>" min="1" required><small class="text-muted">Max bookmarks for folders/files</small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_new_badge_hours"); ?></td><td class=""><input type="number" name="new_badge_hours" class="form-control" value="<?php echo h($new_badge_hours); ?>" min="0" max="8760" required><small class="text-muted">Files added within N hours get <span class="badge badge-danger">N</span> badge (0 = disabled, default: 24h)</small></td></tr>
-<tr class="border-bottom"><td class="text-right">최근 본 항목 강조 시간(초)</td><td class=""><input type="number" name="viewed_mark_seconds" class="form-control" value="<?php echo h($viewed_mark_seconds); ?>" min="0" max="60" step="0.5" required><small class="text-muted">만화·폴더를 열었다가 뒤로가기로 목록에 돌아오면 방금 본 항목이 테두리로 강조됩니다(즐겨찾기·북마크·자동저장 목록도 동일). 이 강조를 몇 초 동안 유지할지 정합니다. 0 = 계속 유지 (기본: 2초)</small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_ebook_bookmark"); ?></td><td class=""><input type="number" name="max_ebook_bookmark" class="form-control" value="<?php echo h($max_ebook_bookmark); ?>" min="0" max="500" required><small class="text-muted"><?php echo __h('adm_cfg_max_ebook_bookmark_help'); ?></small></td></tr><?php // ★ (2026-11-03 00:07) ?>
+<?php foreach (['bm_page_autosave', 'bm_page_bookmark', 'bm_page_ebook'] as $_bk): // ★ (2026-11-03 01:30) 북마크 화면 칸별 한 페이지 개수 ?>
+<tr class="border-bottom"><td class="text-right"><?php echo __h('adm_cfg_' . $_bk); ?></td><td class=""><input type="number" name="<?php echo $_bk; ?>" class="form-control" value="<?php echo (int)$$_bk; ?>" min="0" max="500" step="1" required><?php // ★ (2026-11-03 08:31) 빈칸 저장 → 0(나누지 않음)으로 바뀌던 것 — 옆 칸들처럼 필수 ?><small class="text-muted"><?php echo __h('adm_cfg_bm_page_help'); ?></small></td></tr>
+<?php endforeach; ?>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_favorites"); ?></td><td class=""><input type="number" name="max_favorites" class="form-control" value="<?php echo h($max_favorites); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_max_favorites_help'); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_fav_per_page"); ?></td><td class=""><input type="number" name="fav_per_page" class="form-control" value="<?php echo (int)$fav_per_page; ?>" min="0" max="500" step="1" required><?php // ★ (2026-11-03 09:15) 빈칸 저장 → 0 막기(옆 칸들과 같게) ?><small class="text-muted"><?php echo __h("adm_cfg_fav_per_page_help"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_per_page"); ?></td><td class=""><input type="number" name="lib_per_page" class="form-control" value="<?php echo (int)$lib_per_page; ?>" required min="6" max="500" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_per_page_help"); ?></small></td></tr><?php // ★ (2026-11-03 01:28) 서재 개수 설정 ?>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_reading_count"); ?></td><td class=""><input type="number" name="lib_reading_count" class="form-control" value="<?php echo (int)$lib_reading_count; ?>" required min="0" max="60" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_row_help"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_recent_count"); ?></td><td class=""><input type="number" name="lib_recent_count" class="form-control" value="<?php echo (int)$lib_recent_count; ?>" required min="0" max="60" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_row_help"); ?></small></td></tr>
+<?php // ★ (2026-11-03 10:51) 배경 갱신 간격 + 마지막 결과(src/bg_refresh.json)
+$_bgs = is_file(__DIR__ . '/src/bg_refresh.json') ? @json_decode((string)@file_get_contents(__DIR__ . '/src/bg_refresh.json'), true) : null;
+$_bg_last = '';
+if (is_array($_bgs) && !empty($_bgs['last_end'])) {
+    $_bg_made = 0; foreach ((is_array($_bgs['stats'] ?? null) ? $_bgs['stats'] : []) as $_bx) $_bg_made += (int)($_bx['created'] ?? 0);
+    $_bg_last = __('adm_cfg_bg_last', date('Y-m-d H:i', (int)$_bgs['last_end']), (string)($_bgs['seconds'] ?? 0), $_bg_made);
+}
+?>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_bg_refresh"); ?></td><td class=""><input type="number" name="bg_refresh_minutes" class="form-control" value="<?php echo (int)$bg_refresh_minutes; ?>" min="0" max="1440" step="1" required><small class="text-muted"><?php echo __h("adm_cfg_bg_refresh_help"); ?><?php if ($_bg_last !== ''): ?><br><?php echo h($_bg_last); ?><?php endif; ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_perf_log"); ?></td><td class=""><input type="hidden" name="perf_log" value="0"><div class="custom-control custom-switch"><input type="checkbox" class="custom-control-input" id="perf_log" name="perf_log" value="1"<?php echo ((string)$perf_log !== '0') ? ' checked' : ''; ?>><label class="custom-control-label" for="perf_log"><?php echo __h("adm_cfg_perf_log_on"); ?></label></div><small class="text-muted"><?php echo __h("adm_cfg_perf_log_help"); ?></small></td></tr><?php // ★ (2026-11-03 14:11) ?>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_new_badge_hours"); ?></td><td class=""><input type="number" name="new_badge_hours" class="form-control" value="<?php echo h($new_badge_hours); ?>" min="0" max="8760" required><small class="text-muted"><?php echo sprintf(__h('adm_cfg_new_badge_help'), '<span class="badge badge-danger">N</span>'); ?></small>
+<?php $_nbb = (string)get_app_settings('new_badge_basis', 'file'); // ★ (2026-11-04 11:18) 파일 카드 N 기준 ?>
+<select name="new_badge_basis" class="form-control form-control-sm mt-1" style="max-width:100%;"><option value="file"<?php echo $_nbb !== 'added' ? ' selected' : ''; ?>><?php echo __h('adm_cfg_new_basis_file'); ?></option><option value="added"<?php echo $_nbb === 'added' ? ' selected' : ''; ?>><?php echo __h('adm_cfg_new_basis_added'); ?></option></select><small class="text-muted"><?php echo __h('adm_cfg_new_basis_help'); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_viewed_mark"); /* ★ (2026-11-02 09:11) 언어 키로 */ ?></td><td class=""><input type="number" name="viewed_mark_seconds" class="form-control" value="<?php echo h($viewed_mark_seconds); ?>" min="0" max="60" step="0.5" required><small class="text-muted"><?php echo __h("adm_cfg_viewed_mark_help"); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_cover"); ?></td><td class="">
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_cover" value="y" <?php if($use_cover=="y")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_enable"); ?></label></div>
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_cover" value="n" <?php if($use_cover=="n")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_disable"); ?></label></div>
@@ -3107,54 +3511,6 @@ foreach ($dirs as $idx => $dir): ?>
 <tr><td class="text-right"><?php echo __("adm_cfg_list_cover"); ?></td><td class="">
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_listcover" value="y" <?php if($use_listcover=="y")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_enable"); ?></label></div>
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_listcover" value="n" <?php if($use_listcover=="n")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_disable"); ?></label></div>
-</td></tr>
-
-<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_ffmpeg"); ?></strong> <small class="text-muted"><?php echo __("adm_help_ffmpeg"); ?></small></td></tr>
-<?php
-$ffmpeg_ok_check = !empty($ffmpeg_path) && file_exists($ffmpeg_path);
-$ffprobe_ok_check = !empty($ffprobe_path) && file_exists($ffprobe_path);
-?>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_ffmpeg_path"); ?></td><td class="">
-<input type="text" name="ffmpeg_path" class="form-control" value="<?php echo h($ffmpeg_path); ?>" placeholder="<?php echo __('adm_ph_ffmpeg'); ?>">
-<small class="text-muted">
-    <?php if($ffmpeg_ok_check): ?>
-        <span class="text-success">✅ <?php echo __("adm_tool_available"); ?></span> - <?php echo __("adm_ffmpeg_available_desc"); ?>
-    <?php elseif(!empty($ffmpeg_path)): ?>
-        <span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span>
-    <?php else: ?>
-        <?php echo __("adm_ffmpeg_not_set"); ?>
-    <?php endif; ?>
-</small>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_ffprobe_path"); ?></td><td class="">
-<input type="text" name="ffprobe_path" class="form-control" value="<?php echo h($ffprobe_path); ?>" placeholder="<?php echo __('adm_ph_ffprobe'); ?>">
-<small class="text-muted">
-    <?php if($ffprobe_ok_check): ?>
-        <span class="text-success">✅ <?php echo __("adm_tool_available"); ?></span> - <?php echo __("adm_ffprobe_detail"); ?>
-    <?php elseif(!empty($ffprobe_path)): ?>
-        <span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span>
-    <?php else: ?>
-        <?php echo __("adm_ffprobe_not_set"); ?>
-    <?php endif; ?>
-</small>
-</td></tr>
-
-<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_vips"); ?></strong> <small class="text-muted"><?php echo __("adm_help_vips"); ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_vips_path"); ?></td><td class="">
-<input type="text" name="vips_path" class="form-control" value="<?php echo h($vips_path); ?>" placeholder="<?php echo __('adm_ph_vips'); ?>">
-<small class="text-muted"><?php if($vips_ok): ?><span class="text-success"><?php echo __("adm_vips_available"); ?></span><?php elseif(!empty($vips_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php else: ?>Falls back to GD library if not set<?php endif; ?></small>
-</td></tr>
-
-<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_archive_tools"); ?></strong> <small class="text-muted"><?php echo __("adm_help_archive"); ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_unrar_path"); ?></td><td class="">
-<input type="text" name="unrar_path" class="form-control" value="<?php echo h($unrar_path); ?>" placeholder="<?php echo __('adm_ph_unrar'); ?>">
-<small class="text-muted"><?php if($unrar_ok): ?><span class="text-success"><?php echo __("adm_unrar_enabled"); ?></span><?php elseif(!empty($unrar_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php else: ?>RAR/CBR unsupported if not set<?php endif; ?></small>
-<div class="alert alert-warning py-1 px-2 mt-1 mb-0" style="font-size:0.85em;"><?php echo __("adm_unrar_filehint"); ?></div>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_7zip_path"); ?></td><td class="">
-<input type="text" name="sevenzip_path" class="form-control" value="<?php echo h($sevenzip_path); ?>" placeholder="<?php echo __('adm_ph_7zip'); ?>">
-<small class="text-muted"><?php if($sevenzip_ok): ?><span class="text-success"><?php echo __("adm_7zip_enabled"); ?></span><?php elseif(!empty($sevenzip_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php else: ?>7Z/CB7 unsupported if not set<?php endif; ?></small>
-<div class="alert alert-info py-1 px-2 mt-1 mb-0" style="font-size:0.85em;"><?php echo __("adm_7zip_filehint"); ?></div>
 </td></tr>
 
 <tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_folder_display"); ?></strong></td></tr>
@@ -3170,6 +3526,157 @@ $ffprobe_ok_check = !empty($ffprobe_path) && file_exists($ffprobe_path);
 <small class="text-muted"><?php echo __("adm_help_video_folder"); ?></small>
 </td></tr>
 
+<?php
+// ★ (2026-10-29) 썸네일 크기 커스텀
+$_tl = function_exists('mc_thumb_layout_sanitize') ? mc_thumb_layout_sanitize($_loaded_settings['thumb_layout'] ?? []) : [];
+$_tl_rows = [
+    'folder' => [__('adm_thumb_row_folder'), ['grid' => [120, 120], 'list' => [54, 54]], __('adm_thumb_grid_folder_hint')],
+    'file'   => [__('adm_thumb_row_file'),   ['grid' => [300, 176], 'list' => [54, 54]], __('adm_thumb_grid_file_hint')],
+    'shelf'  => [__('adm_thumb_row_shelf'),  ['grid' => [135, 115], 'list' => [72, 60]], __('adm_thumb_grid_shelf_hint')],
+    'lib'    => [__('adm_thumb_row_lib'),    ['grid' => [130, 115], 'list' => [60, 60]], __('adm_thumb_grid_lib_hint')], // ★ (2026-10-31) 작품 탐색·작품 상세
+    'bm'     => [__('adm_thumb_row_bm'),     ['grid' => [120, 115], 'list' => [60, 60]], __('adm_thumb_grid_bm_hint')],  // ★ (2026-10-31) 북마크 화면
+];
+$_tl_ranges = function_exists('mc_thumb_layout_fields') ? mc_thumb_layout_fields() : [];
+?>
+<tr class="border-top"><td colspan="2" class="bg-light"><strong>📐 <?php echo __h("adm_section_thumb"); ?></strong> <small class="text-muted"><?php echo __h("adm_thumb_desc"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_thumb_breakpoint"); ?></td><td class="">
+<input type="number" name="thumb_layout[breakpoint]" class="form-control" value="<?php echo (int)($_tl['breakpoint'] ?? 768); ?>" min="360" max="2560" step="1" style="width:110px;display:inline-block;"> px
+<small class="text-muted d-block"><?php echo __h("adm_thumb_breakpoint_help"); ?></small>
+</td></tr>
+<tr class="border-bottom"><td class="text-right align-top"><?php echo __h("adm_thumb_sizes"); ?></td><td class="">
+<div style="overflow-x:auto; width:0; min-width:100%;"><?php /* ★ (2026-11-02 19:11) 폭 0·최소 100% — 넓은 표가 설정 표 오른쪽 칸을 밀어 577~850px 화면에서 항목 이름이 한 글자씩 세로로 나오고 가로로 넘쳤음 */ ?>
+<table class="table table-sm table-bordered mb-1" style="min-width:520px; font-size:0.9em;">
+<thead class="thead-light"><tr>
+  <th></th>
+  <th class="text-center"><?php echo __h("adm_thumb_grid"); ?> · PC</th>
+  <th class="text-center"><?php echo __h("adm_thumb_grid"); ?> · <?php echo __h("adm_thumb_mobile"); ?></th>
+  <th class="text-center"><?php echo __h("adm_thumb_list"); ?> · PC</th>
+  <th class="text-center"><?php echo __h("adm_thumb_list"); ?> · <?php echo __h("adm_thumb_mobile"); ?></th>
+</tr></thead>
+<tbody>
+<?php foreach ($_tl_rows as $_place => $_row): ?>
+<tr>
+  <th class="align-middle" style="white-space:nowrap;"><?php echo h($_row[0]); ?><br><small class="text-muted font-weight-normal"><?php echo h($_row[2]); ?></small></th>
+<?php foreach (['grid', 'list'] as $_view): foreach (['pc' => 0, 'mo' => 1] as $_env => $_di):
+    $_key = $_place . '_' . $_view . '_' . $_env;
+    $_val = (int)($_tl[$_key] ?? 0);
+    $_rg = $_tl_ranges[$_key] ?? [30, 600];
+?>
+  <td class="text-center align-middle">
+    <input type="number" name="thumb_layout[<?php echo h($_key); ?>]" class="form-control form-control-sm d-inline-block text-center"
+           value="<?php echo $_val > 0 ? $_val : ''; ?>" min="0" max="<?php echo (int)$_rg[1]; ?>" step="1"
+           placeholder="<?php echo (int)$_row[1][$_view][$_di]; ?>" style="width:80px;">
+  </td>
+<?php endforeach; endforeach; ?>
+</tr>
+<?php endforeach; ?>
+</tbody>
+</table>
+</div>
+<small class="text-muted d-block"><?php echo __h("adm_thumb_sizes_help"); ?></small>
+</td></tr>
+
+<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_list_font"); ?></strong> <small class="text-muted"><?php echo __("adm_list_font_desc"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_font_size"); ?></td><td class="">
+<input type="number" name="list_font_size" class="form-control" value="<?php echo h($list_font_settings['font_size'] ?? 22); ?>" min="12" max="40" style="width:100px;display:inline-block;"> px
+<small class="text-muted d-block"><?php echo __("adm_cfg_font_size_help"); ?></small>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_custom_font"); ?></td><td class="">
+<div class="mb-2">
+    <label class="small text-muted"><?php echo __("adm_cfg_font_name"); ?></label>
+    <input type="text" name="list_font_name" class="form-control form-control-sm" value="<?php echo h($list_font_settings['font_name'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> Nanum Gothic, Dongle">
+</div>
+<div class="mb-2">
+    <label class="small text-muted"><?php echo __("adm_cfg_font_url"); ?></label>
+    <input type="text" name="list_font_url" class="form-control form-control-sm" value="<?php echo h($list_font_settings['font_url'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> https://fonts.googleapis.com/css2?family=Nanum+Gothic">
+</div>
+<div class="mb-1">
+    <label class="small text-muted"><?php echo __("adm_label_font_path"); ?></label>
+    <input type="text" name="list_font_local" class="form-control form-control-sm" value="<?php echo h($list_font_settings['font_local'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> ./fonts/custom.woff2">
+</div>
+<small class="text-muted"><?php echo __("adm_cfg_font_default"); ?></small>
+</td></tr>
+
+
+<?php $_lib_click_cur = (string)($_loaded_settings['library']['card_click'] ?? 'viewer'); // ★ (2026-10-29) ?>
+<tr class="border-top"><td colspan="2" class="bg-light"><strong>📚 <?php echo __h("adm_section_library"); ?></strong></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_lib_card_click"); ?></td><td class="">
+<select name="library_card_click" class="form-control form-control-sm" style="width:auto;display:inline-block;">
+  <option value="viewer"<?php echo $_lib_click_cur !== 'detail' ? ' selected' : ''; ?>><?php echo __h("adm_lib_click_viewer"); ?></option>
+  <option value="detail"<?php echo $_lib_click_cur === 'detail' ? ' selected' : ''; ?>><?php echo __h("adm_lib_click_detail"); ?></option>
+</select>
+<small class="text-muted d-block"><?php echo __h("adm_lib_click_help"); ?></small>
+<?php if (!class_exists('PDO') || !in_array('sqlite', PDO::getAvailableDrivers(), true)): ?><small class="text-danger d-block"><?php echo __h("lib_no_sqlite"); ?></small><?php endif; ?>
+</td></tr>
+
+<tr class="cfg-cat" id="cfg-cat-viewer"><td colspan="2"><?php echo __h("adm_cfg_cat_viewer"); ?></td></tr>
+<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_txt_viewer"); ?></strong> <small class="text-muted"><?php echo __("adm_txt_desc"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_txt_viewer"); ?></td><td class="">
+<div class="custom-control custom-switch">
+    <input type="checkbox" class="custom-control-input" id="txt_viewer_enabled" name="txt_viewer_enabled" <?php echo ($txt_viewer_settings['enabled'] ?? true) ? 'checked' : ''; ?>>
+    <label class="custom-control-label" for="txt_viewer_enabled"><?php echo __("adm_label_txt_viewer"); ?></label>
+</div>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_chunk_size"); ?></td><td class="">
+<input type="number" name="txt_chunk_size" class="form-control" value="<?php echo h($txt_viewer_settings['chunk_size'] ?? 102400); ?>" min="10240" style="width:150px;display:inline-block;"> bytes
+<small class="text-muted d-block"><?php echo __("adm_txt_chunk_help"); ?></small>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_font_size"); ?></td><td class="">
+<input type="number" name="txt_font_size" class="form-control" value="<?php echo h($txt_viewer_settings['default_font_size'] ?? 18); ?>" min="10" max="40" style="width:100px;display:inline-block;"> px
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_line_height"); ?></td><td class="">
+<input type="number" name="txt_line_height" class="form-control" value="<?php echo h($txt_viewer_settings['default_line_height'] ?? 1.8); ?>" min="1.0" max="3.0" step="0.1" style="width:100px;display:inline-block;">
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_custom_font"); ?></td><td class="">
+<div class="mb-2">
+    <label class="small text-muted"><?php echo __("adm_cfg_font_name"); ?></label>
+    <input type="text" name="txt_font_name" class="form-control form-control-sm" value="<?php echo h($txt_viewer_settings['font_name'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> Nanum Myeongjo, KoPub Batang">
+</div>
+<div class="mb-2">
+    <label class="small text-muted"><?php echo __("adm_cfg_font_url"); ?></label>
+    <input type="text" name="txt_font_url" class="form-control form-control-sm" value="<?php echo h($txt_viewer_settings['font_url'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> https://fonts.googleapis.com/css2?family=...">
+</div>
+<div class="mb-1">
+    <label class="small text-muted"><?php echo __("adm_label_font_path"); ?></label>
+    <input type="text" name="txt_font_local" class="form-control form-control-sm" value="<?php echo h($txt_viewer_settings['font_local'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> ./fonts/custom.woff2">
+</div>
+<small class="text-muted"><?php echo __("adm_cfg_font_help"); ?></small>
+</td></tr>
+
+<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_epub_viewer"); ?></strong></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_epub_viewer"); ?></td><td class="">
+<div class="custom-control custom-switch">
+    <input type="checkbox" class="custom-control-input" id="epub_viewer_enabled" name="epub_viewer_enabled" <?php echo ($epub_viewer_settings['enabled'] ?? true) ? 'checked' : ''; ?>>
+    <label class="custom-control-label" for="epub_viewer_enabled"><?php echo __("adm_label_epub_viewer"); ?></label>
+</div>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_font_size"); ?></td><td class="">
+<input type="number" name="epub_font_size" class="form-control" value="<?php echo h($epub_viewer_settings['default_font_size'] ?? 100); ?>" min="50" max="200" style="width:100px;display:inline-block;"> %
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_default_theme"); ?></td><td class="">
+<select name="epub_theme" class="form-control" style="width:150px;">
+    <option value="light" <?php if(($epub_viewer_settings['default_theme']??'light')==='light')echo'selected';?>><?php echo __('adm_opt_light'); ?></option>
+    <option value="sepia" <?php if(($epub_viewer_settings['default_theme']??'')==='sepia')echo'selected';?>><?php echo __("adm_filter_sepia"); ?></option>
+    <option value="dark" <?php if(($epub_viewer_settings['default_theme']??'')==='dark')echo'selected';?>><?php echo __('adm_opt_dark'); ?></option>
+</select>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_custom_font"); ?></td><td class="">
+<div class="mb-2">
+    <label class="small text-muted"><?php echo __("adm_cfg_font_name"); ?></label>
+    <input type="text" name="epub_font_name" class="form-control form-control-sm" value="<?php echo h($epub_viewer_settings['font_name'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> Nanum Myeongjo, KoPub Batang">
+</div>
+<div class="mb-2">
+    <label class="small text-muted"><?php echo __("adm_cfg_font_url"); ?></label>
+    <input type="text" name="epub_font_url" class="form-control form-control-sm" value="<?php echo h($epub_viewer_settings['font_url'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> https://fonts.googleapis.com/css2?family=...">
+</div>
+<div class="mb-1">
+    <label class="small text-muted"><?php echo __("adm_label_font_path"); ?></label>
+    <input type="text" name="epub_font_local" class="form-control form-control-sm" value="<?php echo h($epub_viewer_settings['font_local'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> ./fonts/custom.woff2">
+</div>
+<small class="text-muted"><?php echo __("adm_cfg_font_help"); ?></small>
+</td></tr>
+
+<tr class="cfg-cat" id="cfg-cat-display"><td colspan="2"><?php echo __h("adm_cfg_cat_display"); ?></td></tr>
 <tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_darkmode"); ?></strong></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_darkmode"); ?></td><td class="">
 <div class="custom-control custom-switch">
@@ -3226,7 +3733,11 @@ $page_labels = [
     'admin.php' => __('adm_cfg_page_admin'),
     'admin_translations.php' => __('adm_cfg_page_translations'),
     'bookmark.php' => __('adm_cfg_page_bookmark'),
-    'blank.php' => __('adm_cfg_page_blank')
+    'blank.php' => __('adm_cfg_page_blank'),
+    'favorites.php' => __('fav_shelf_title'), // ★ (2026-10-29)
+    'bookmarks.php' => __('index_bookmarks'), // ★ (2026-10-31) 북마크 화면
+    'browse.php' => __('adm_page_lib_browse'), // ★ (2026-10-29) 라이브러리
+    'series.php' => __('adm_page_lib_series')
 ];
 ?>
 <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:2px; text-align:left;">
@@ -3280,7 +3791,11 @@ $privacy_page_labels = [
     'index.php' => __('adm_page_index'),
     'viewer.php' => __('adm_page_viewer'),
     'epub_viewer.php' => __('adm_page_epub'),
-    'txt_viewer.php' => __('adm_page_txt')
+    'txt_viewer.php' => __('adm_page_txt'),
+    'favorites.php' => __('fav_shelf_title'), // ★ (2026-10-29)
+    'bookmarks.php' => __('index_bookmarks'), // ★ (2026-10-31) 북마크 화면
+    'browse.php' => __('adm_page_lib_browse'), // ★ (2026-10-29) 라이브러리
+    'series.php' => __('adm_page_lib_series')
 ];
 ?>
 <div style="display:grid; grid-template-columns: repeat(2, 1fr); gap:2px; text-align:left;">
@@ -3298,93 +3813,7 @@ $privacy_page_labels = [
 <small class="text-muted"><?php echo __("adm_cfg_privacy_pages_help"); ?></small>
 </td></tr>
 
-<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_txt_viewer"); ?></strong> <small class="text-muted"><?php echo __("adm_txt_desc"); ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_txt_viewer"); ?></td><td class="">
-<div class="custom-control custom-switch">
-    <input type="checkbox" class="custom-control-input" id="txt_viewer_enabled" name="txt_viewer_enabled" <?php echo ($txt_viewer_settings['enabled'] ?? true) ? 'checked' : ''; ?>>
-    <label class="custom-control-label" for="txt_viewer_enabled"><?php echo __("adm_label_txt_viewer"); ?></label>
-</div>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_chunk_size"); ?></td><td class="">
-<input type="number" name="txt_chunk_size" class="form-control" value="<?php echo h($txt_viewer_settings['chunk_size'] ?? 102400); ?>" min="10240" style="width:150px;display:inline-block;"> bytes
-<small class="text-muted d-block"><?php echo __("adm_txt_chunk_help"); ?></small>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_font_size"); ?></td><td class="">
-<input type="number" name="txt_font_size" class="form-control" value="<?php echo h($txt_viewer_settings['default_font_size'] ?? 18); ?>" min="10" max="40" style="width:100px;display:inline-block;"> px
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_line_height"); ?></td><td class="">
-<input type="number" name="txt_line_height" class="form-control" value="<?php echo h($txt_viewer_settings['default_line_height'] ?? 1.8); ?>" min="1.0" max="3.0" step="0.1" style="width:100px;display:inline-block;">
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_custom_font"); ?></td><td class="">
-<div class="mb-2">
-    <label class="small text-muted"><?php echo __("adm_cfg_font_name"); ?></label>
-    <input type="text" name="txt_font_name" class="form-control form-control-sm" value="<?php echo h($txt_viewer_settings['font_name'] ?? ''); ?>" placeholder="e.g. Nanum Myeongjo, KoPub Batang">
-</div>
-<div class="mb-2">
-    <label class="small text-muted"><?php echo __("adm_cfg_font_url"); ?></label>
-    <input type="text" name="txt_font_url" class="form-control form-control-sm" value="<?php echo h($txt_viewer_settings['font_url'] ?? ''); ?>" placeholder="e.g. https://fonts.googleapis.com/css2?family=...">
-</div>
-<div class="mb-1">
-    <label class="small text-muted"><?php echo __("adm_label_font_path"); ?></label>
-    <input type="text" name="txt_font_local" class="form-control form-control-sm" value="<?php echo h($txt_viewer_settings['font_local'] ?? ''); ?>" placeholder="e.g. ./fonts/custom.woff2">
-</div>
-<small class="text-muted"><?php echo __("adm_cfg_font_help"); ?></small>
-</td></tr>
-
-<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_epub_viewer"); ?></strong></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_epub_viewer"); ?></td><td class="">
-<div class="custom-control custom-switch">
-    <input type="checkbox" class="custom-control-input" id="epub_viewer_enabled" name="epub_viewer_enabled" <?php echo ($epub_viewer_settings['enabled'] ?? true) ? 'checked' : ''; ?>>
-    <label class="custom-control-label" for="epub_viewer_enabled"><?php echo __("adm_label_epub_viewer"); ?></label>
-</div>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_font_size"); ?></td><td class="">
-<input type="number" name="epub_font_size" class="form-control" value="<?php echo h($epub_viewer_settings['default_font_size'] ?? 100); ?>" min="50" max="200" style="width:100px;display:inline-block;"> %
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_default_theme"); ?></td><td class="">
-<select name="epub_theme" class="form-control" style="width:150px;">
-    <option value="light" <?php if(($epub_viewer_settings['default_theme']??'light')==='light')echo'selected';?>><?php echo __('adm_opt_light'); ?></option>
-    <option value="sepia" <?php if(($epub_viewer_settings['default_theme']??'')==='sepia')echo'selected';?>><?php echo __("adm_filter_sepia"); ?></option>
-    <option value="dark" <?php if(($epub_viewer_settings['default_theme']??'')==='dark')echo'selected';?>><?php echo __('adm_opt_dark'); ?></option>
-</select>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_custom_font"); ?></td><td class="">
-<div class="mb-2">
-    <label class="small text-muted"><?php echo __("adm_cfg_font_name"); ?></label>
-    <input type="text" name="epub_font_name" class="form-control form-control-sm" value="<?php echo h($epub_viewer_settings['font_name'] ?? ''); ?>" placeholder="e.g. Nanum Myeongjo, KoPub Batang">
-</div>
-<div class="mb-2">
-    <label class="small text-muted"><?php echo __("adm_cfg_font_url"); ?></label>
-    <input type="text" name="epub_font_url" class="form-control form-control-sm" value="<?php echo h($epub_viewer_settings['font_url'] ?? ''); ?>" placeholder="e.g. https://fonts.googleapis.com/css2?family=...">
-</div>
-<div class="mb-1">
-    <label class="small text-muted"><?php echo __("adm_label_font_path"); ?></label>
-    <input type="text" name="epub_font_local" class="form-control form-control-sm" value="<?php echo h($epub_viewer_settings['font_local'] ?? ''); ?>" placeholder="e.g. ./fonts/custom.woff2">
-</div>
-<small class="text-muted"><?php echo __("adm_cfg_font_help"); ?></small>
-</td></tr>
-
-<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_list_font"); ?></strong> <small class="text-muted"><?php echo __("adm_list_font_desc"); ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_font_size"); ?></td><td class="">
-<input type="number" name="list_font_size" class="form-control" value="<?php echo h($list_font_settings['font_size'] ?? 22); ?>" min="12" max="40" style="width:100px;display:inline-block;"> px
-<small class="text-muted d-block"><?php echo __("adm_cfg_font_size_help"); ?></small>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_custom_font"); ?></td><td class="">
-<div class="mb-2">
-    <label class="small text-muted"><?php echo __("adm_cfg_font_name"); ?></label>
-    <input type="text" name="list_font_name" class="form-control form-control-sm" value="<?php echo h($list_font_settings['font_name'] ?? ''); ?>" placeholder="e.g. Nanum Gothic, Dongle">
-</div>
-<div class="mb-2">
-    <label class="small text-muted"><?php echo __("adm_cfg_font_url"); ?></label>
-    <input type="text" name="list_font_url" class="form-control form-control-sm" value="<?php echo h($list_font_settings['font_url'] ?? ''); ?>" placeholder="e.g. https://fonts.googleapis.com/css2?family=Nanum+Gothic">
-</div>
-<div class="mb-1">
-    <label class="small text-muted"><?php echo __("adm_label_font_path"); ?></label>
-    <input type="text" name="list_font_local" class="form-control form-control-sm" value="<?php echo h($list_font_settings['font_local'] ?? ''); ?>" placeholder="e.g. ./fonts/custom.woff2">
-</div>
-<small class="text-muted"><?php echo __("adm_cfg_font_default"); ?></small>
-</td></tr>
-
+<tr class="cfg-cat" id="cfg-cat-member"><td colspan="2"><?php echo __h("adm_cfg_cat_member"); ?></td></tr>
 <tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_member"); ?></strong></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_allow_register"); ?></td><td class="">
 <div class="custom-control custom-switch">
@@ -3401,7 +3830,7 @@ $privacy_page_labels = [
     <input type="checkbox" class="custom-control-input" id="registration_require_approval" name="registration_require_approval" <?php 
         echo ($reg_settings['require_approval'] ?? true) ? 'checked' : ''; 
     ?>>
-    <label class="custom-control-label" for="registration_require_approval"><?php echo __("adm_cfg_require_approval"); ?></label>
+    <label class="custom-control-label" for="registration_require_approval"><?php echo __("adm_cfg_require_approval_desc"); /* ★ (2026-11-02 19:11) 같은 키가 두 번 정의돼 왼쪽 이름칸도 긴 문장이던 것 — 설명용 키를 나눔 */ ?></label>
 </div>
 <small class="text-muted"><?php echo __("adm_cfg_approval_help"); ?></small>
 </td></tr>
@@ -3423,6 +3852,100 @@ $privacy_page_labels = [
 </div>
 <small class="text-muted"><?php echo __("adm_cfg_find_pw_help"); ?></small>
 </td></tr>
+<?php // ★ (2026-11-02 16:16) 가입 금지 아이디(관리자가 관리) ?>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_blocked_ids"); ?></td><td class="">
+<?php // ★ (2026-11-03 09:43) 회원 관리 탭 '금지 아이디 관리'로 옮김(목록에서 하나씩 지우기·여러 줄 추가) ?><span id="blkCfgCount"><?php echo __h('adm_blk_count', count(is_array($reg_settings['blocked_ids'] ?? null) ? $reg_settings['blocked_ids'] : [])); ?></span> <a href="#group" class="btn btn-sm btn-outline-secondary ml-1" onclick="var a=document.querySelector('a[href=\'#group\']'); if(a){a.click(); setTimeout(function(){var c=document.getElementById('blkCard'); if(c) c.scrollIntoView({block:'start'});},200);} return false;"><?php echo __h('adm_blk_go'); ?></a>
+<small class="text-muted d-block"><?php echo __h('adm_blk_moved'); ?></small>
+</td></tr>
+
+<tr class="cfg-cat" id="cfg-cat-tools"><td colspan="2"><?php echo __h("adm_cfg_cat_tools"); ?></td></tr>
+<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_ffmpeg"); ?></strong> <small class="text-muted"><?php echo __("adm_help_ffmpeg"); ?></small></td></tr>
+<?php
+$ffmpeg_ok_check = !empty($ffmpeg_path) && file_exists($ffmpeg_path);
+$ffprobe_ok_check = !empty($ffprobe_path) && file_exists($ffprobe_path);
+?>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_ffmpeg_path"); ?></td><td class="">
+<input type="text" name="ffmpeg_path" class="form-control" value="<?php echo h($ffmpeg_path); ?>" placeholder="<?php echo __('adm_ph_ffmpeg'); ?>">
+<small class="text-muted">
+    <?php if($ffmpeg_ok_check): ?>
+        <span class="text-success">✅ <?php echo __("adm_tool_available"); ?></span> - <?php echo __("adm_ffmpeg_available_desc"); ?>
+    <?php elseif(!empty($ffmpeg_path)): ?>
+        <span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span>
+    <?php else: ?>
+        <?php echo __("adm_ffmpeg_not_set"); ?>
+    <?php endif; ?>
+</small>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_ffprobe_path"); ?></td><td class="">
+<input type="text" name="ffprobe_path" class="form-control" value="<?php echo h($ffprobe_path); ?>" placeholder="<?php echo __('adm_ph_ffprobe'); ?>">
+<small class="text-muted">
+    <?php if($ffprobe_ok_check): ?>
+        <span class="text-success">✅ <?php echo __("adm_tool_available"); ?></span> - <?php echo __("adm_ffprobe_detail"); ?>
+    <?php elseif(!empty($ffprobe_path)): ?>
+        <span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span>
+    <?php else: ?>
+        <?php echo __("adm_ffprobe_not_set"); ?>
+    <?php endif; ?>
+</small>
+</td></tr>
+
+<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_vips"); ?></strong> <small class="text-muted"><?php echo __("adm_help_vips"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_vips_path"); ?></td><td class="">
+<input type="text" name="vips_path" class="form-control" value="<?php echo h($vips_path); ?>" placeholder="<?php echo __('adm_ph_vips'); ?>">
+<small class="text-muted"><?php if($vips_ok): ?><span class="text-success"><?php echo __("adm_vips_available"); ?></span><?php elseif(!empty($vips_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php else: ?><?php echo __h('adm_vips_unset'); ?><?php endif; ?></small>
+</td></tr>
+
+<tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_archive_tools"); ?></strong> <small class="text-muted"><?php echo __("adm_help_archive"); ?></small></td></tr>
+<?php // ★ (2026-11-03 15:23) FileStation 5.8.12.1 '압축파일 미리보기 설정'처럼 — 지금 쓰는 도구(버전·경로)·형식별 지원·설치 방법을 한눈에
+$_arc_7z = class_exists('ArchiveHandler') ? ArchiveHandler::getToolPath('7z') : '';
+$_arc_ur = class_exists('ArchiveHandler') ? ArchiveHandler::getToolPath('unrar') : '';
+$_arc_7zv = $_arc_7z !== '' ? ArchiveHandler::toolVersion('7z') : '';
+$_arc_urv = $_arc_ur !== '' ? ArchiveHandler::toolVersion('unrar') : '';
+$_arc_box = function ($ok, $warn, $html) {
+    $bg = $ok ? 'rgba(76,175,80,0.08)' : ($warn ? 'rgba(255,152,0,0.08)' : 'rgba(158,158,158,0.08)');
+    $bd = $ok ? 'rgba(76,175,80,0.25)' : ($warn ? 'rgba(255,152,0,0.3)' : 'rgba(158,158,158,0.25)');
+    return '<div class="arc-tool-st" style="text-align:left;padding:8px 12px;border-radius:6px;margin-bottom:6px;font-size:13px;background:' . $bg . ';border:1px solid ' . $bd . '">' . $html . '</div>';
+};
+$_arc_yes = '<span class="text-success">✅</span>'; $_arc_no = '<span class="text-danger">❌</span>';
+?>
+<tr class="border-bottom"><td class="text-right"><?php echo __h('adm_arc_status'); ?></td><td class="">
+<?php
+echo $_arc_box($_arc_7z !== '', true, $_arc_7z !== ''
+    ? '✅ <b>7-Zip' . ($_arc_7zv !== '' ? ' ' . h($_arc_7zv) : '') . '</b> ' . __h('adm_arc_in_use') . ' <small class="text-muted">(' . h($_arc_7z) . ')</small>'
+    : '⚠️ <b>7-Zip</b> ' . __h('adm_arc_missing') . '<br><small>' . __h('adm_arc_7z_missing_desc') . '</small>');
+echo $_arc_box($_arc_ur !== '', ($_arc_ur === '' && $_arc_7z === ''), $_arc_ur !== ''
+    ? '✅ <b>UnRAR' . ($_arc_urv !== '' ? ' ' . h($_arc_urv) : '') . '</b> ' . __h('adm_arc_in_use') . ' <small class="text-muted">(' . h($_arc_ur) . ')</small>'
+    : ($_arc_7z !== '' ? '<b>UnRAR</b> ' . __h('adm_arc_missing') . ' <small class="text-muted">(' . __h('adm_arc_optional') . ')</small><br><small>' . __h('adm_arc_ur_missing_desc') . '</small>'
+                       : '⚠️ <b>UnRAR</b> ' . __h('adm_arc_missing') . '<br><small>' . __h('adm_arc_rar_none_desc') . '</small>'));
+?>
+<div class="arc-fmt-table" style="font-size:12px;margin-top:6px;text-align:left;display:grid;grid-template-columns:max-content max-content 1fr;gap:3px 12px;align-items:center;">
+<b>ZIP · CBZ</b><span><?php echo $_arc_yes; ?></span><span class="text-muted"><?php echo __h('adm_arc_fmt_zip'); ?></span>
+<b>RAR · CBR</b><span><?php echo ($_arc_ur !== '' || $_arc_7z !== '') ? $_arc_yes : $_arc_no; ?></span><span class="text-muted"><?php echo __h('adm_arc_fmt_rar'); ?></span>
+<b>7Z · CB7</b><span><?php echo $_arc_7z !== '' ? $_arc_yes : $_arc_no; ?></span><span class="text-muted"><?php echo __h('adm_arc_fmt_7z'); ?></span>
+</div>
+<details class="mt-2" style="font-size:12px;text-align:left;"<?php echo ($_arc_7z === '') ? ' open' : ''; ?>><summary style="cursor:pointer;">💡 <?php echo __h('adm_arc_install'); ?></summary>
+<div style="margin-top:6px;padding:8px 12px;background:rgba(33,150,243,0.06);border:1px solid rgba(33,150,243,0.15);border-radius:6px;">
+<b>7-Zip</b> — Windows: <a href="https://www.7-zip.org/download.html" target="_blank" rel="noopener noreferrer">7-zip.org</a> <?php echo __h('adm_arc_inst_7z_win'); ?><br>
+Linux: <code>apt install 7zip</code> <?php echo __h('adm_arc_or'); ?> <code>yum install p7zip-full</code><br>
+<b>UnRAR</b> (<?php echo __h('adm_arc_optional'); ?>) — Windows: <a href="https://www.win-rar.com/download.html" target="_blank" rel="noopener noreferrer">win-rar.com</a> <?php echo __h('adm_arc_inst_ur_win'); ?><br>
+Linux: <code>apt install unrar</code> <?php echo __h('adm_arc_or'); ?> <code>yum install unrar</code><br>
+<span class="text-muted"><?php echo __h('adm_arc_inst_note'); ?></span>
+</div></details>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_unrar_path"); ?></td><td class="">
+<input type="text" name="unrar_path" class="form-control" value="<?php echo h($unrar_path); ?>" placeholder="<?php echo __('adm_ph_unrar'); ?>">
+<?php // ★ (2026-10-31) 설정 경로가 비었거나 틀려도 자동으로 찾은 도구가 있으면 표시(RAR 은 7-Zip 만 있어도 열림)
+$_ad_unrar = (class_exists('ArchiveHandler') && ArchiveHandler::isToolAutoDetected('unrar')) ? ArchiveHandler::getToolPath('unrar') : '';
+$_ad_7z = (class_exists('ArchiveHandler') && ArchiveHandler::isToolAutoDetected('7z')) ? ArchiveHandler::getToolPath('7z') : '';
+$_any_7z = $sevenzip_ok || $_ad_7z !== ''; ?>
+<small class="text-muted"><?php if($unrar_ok): ?><span class="text-success"><?php echo __("adm_unrar_enabled"); ?></span><?php elseif(!empty($unrar_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php elseif($_ad_unrar === '' && !$_any_7z): ?><?php echo __h('adm_arc_rar_unset'); ?><?php endif; ?><?php if(!$unrar_ok && $_ad_unrar !== ''): ?> <span class="text-success"><?php echo h(sprintf(__('adm_tool_autodetected'), $_ad_unrar)); ?></span><?php endif; ?></small>
+<div class="alert alert-warning py-1 px-2 mt-1 mb-0" style="font-size:0.85em;"><?php echo __("adm_unrar_filehint"); ?></div>
+</td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_7zip_path"); ?></td><td class="">
+<input type="text" name="sevenzip_path" class="form-control" value="<?php echo h($sevenzip_path); ?>" placeholder="<?php echo __('adm_ph_7zip'); ?>">
+<small class="text-muted"><?php if($sevenzip_ok): ?><span class="text-success"><?php echo __("adm_7zip_enabled"); ?></span><?php elseif(!empty($sevenzip_path)): ?><span class="text-danger">❌ <?php echo __("adm_tool_check_path"); ?></span><?php elseif($_ad_7z === ''): ?><?php echo __h('adm_arc_7z_unset'); ?><?php endif; ?><?php if(!$sevenzip_ok && $_ad_7z !== ''): ?> <span class="text-success"><?php echo h(sprintf(__('adm_tool_autodetected'), $_ad_7z)); ?></span><?php endif; ?></small>
+<div class="alert alert-info py-1 px-2 mt-1 mb-0" style="font-size:0.85em;"><?php echo __("adm_7zip_filehint"); ?></div>
+</td></tr>
 
 <script>
 function toggleRegistrationOptions() {
@@ -3434,7 +3957,7 @@ document.addEventListener('DOMContentLoaded', toggleRegistrationOptions);
 
 </table>
 </li>
-<li class="list-group-item p-0"><input type="hidden" name="mode" value="config_change"><button class="btn btn-success btn-block btn-sm" type="submit"><?php echo __("adm_btn_change_settings"); ?></button></li>
+<li class="list-group-item p-0 ab-orig-li"><input type="hidden" name="mode" value="config_change"><button class="btn btn-primary btn-block btn-sm ab-orig-submit" type="submit"><?php echo __("adm_btn_change_settings"); ?></button></li>
 </ul>
 
 <script>
@@ -3447,7 +3970,7 @@ function addBaseDirRow() {
         <div class="input-group-prepend">
             <span class="input-group-text">${count}</span>
         </div>
-        <input type="text" name="base_dirs[]" class="form-control" placeholder="e.g. f:/manga">
+        <input type="text" name="base_dirs[]" class="form-control" placeholder="<?php echo __h('adm_eg'); ?> f:/manga">
         <div class="input-group-append">
             <button type="button" class="btn btn-outline-danger btn-remove-dir" onclick="this.closest('.base-dir-row').remove()">✕</button>
         </div>
@@ -3460,7 +3983,7 @@ function addBaseDirRow() {
 
 
 <!-- Cache management -->
-<div class="tab-pane fade" id="cache">
+<div class="tab-pane fade ab-gen" data-ab-g="content" id="cache">
 <div class="container-fluid">
 
 <!-- 1. Thumbnail cache (filename.json) -->
@@ -3780,18 +4303,19 @@ function addBaseDirRow() {
 <!-- Cache descriptions -->
 <div class="info-card mt-3">
 <div class="card-header"><?php echo __("adm_card_cache_desc"); ?></div>
-<div class="card-body p-0">
-<table class="table table-sm table-striped mb-0">
+<div class="card-body p-0 table-responsive"><?php // ★ (2026-11-04 00:28) 좁은 화면 넘침 ?>
+<style>.mc-cdesc code{word-break:break-all}.mc-cdesc td{word-break:keep-all}</style><?php // ★ (2026-11-04 01:31) 휴대폰에서 긴 파일 이름 칸이 넓게 차지해 다른 열이 '썸/네일'처럼 한 글자씩 끊기던 것 — 파일 이름이 줄바꿈되게 ?>
+<table class="table table-sm table-striped mb-0 mc-cdesc">
 <thead><tr><th><?php echo __("adm_th_filename"); ?></th><th><?php echo __("adm_th_description"); ?></th><th><?php echo __("adm_th_create_btn"); ?></th></tr></thead>
 <tbody>
-<tr style="background:#cce5ff;"><td><code>filename.json</code></td><td><?php echo __("adm_cachedesc_thumb"); ?></td><td>🖼️ Thumbnail Cache</td></tr>
-<tr style="background:#d4edda;"><td><code>[cover].jpg</code></td><td><?php echo __("adm_cachedesc_cover"); ?></td><td>🎨 Cover Image</td></tr>
-<tr style="background:#bee5eb;"><td><code>search_index_{bidx}.json</code></td><td><?php echo __("adm_cachedesc_search"); ?></td><td>🔍 Search Index</td></tr>
+<tr style="background:#cce5ff;"><td><code>filename.json</code></td><td><?php echo __("adm_cachedesc_thumb"); ?></td><td><?php echo __h('adm_cache_chk_thumb'); ?></td></tr>
+<tr style="background:#d4edda;"><td><code>[cover].jpg</code></td><td><?php echo __("adm_cachedesc_cover"); ?></td><td><?php echo __h('adm_cache_chk_cover'); ?></td></tr>
+<tr style="background:#bee5eb;"><td><code>search_index_{bidx}.json</code></td><td><?php echo __("adm_cachedesc_search"); ?></td><td><?php echo __h('adm_cache_chk_search_full'); ?></td></tr>
 <tr style="background:#c3f5e8;"><td><code>zip_total.json</code></td><td><?php echo __("adm_cachedesc_stats"); ?></td><td><?php echo __("adm_cache_chk_stats"); ?></td></tr>
-<tr style="background:#fdebd0;"><td><code>.filelist_cache.json</code></td><td><?php echo __("adm_cachedesc_filelist"); ?></td><td>📋 File List</td></tr>
-<tr style="background:#d6d8db;"><td><code>.folder_cache.json</code></td><td><?php echo __("adm_cachedesc_folder"); ?></td><td>📁 Folder Cache</td></tr>
-<tr style="background:#e2d5f1;"><td><code>filename.zip.image_files.json</code></td><td><?php echo __("adm_cachedesc_zip_img"); ?></td><td>🗂️ ZIP Images</td></tr>
-<tr style="background:#f8d7e3;"><td><code>filename.zip.video_files.json</code></td><td><?php echo __("adm_cachedesc_zip_vid"); ?></td><td>🎬 ZIP Videos</td></tr>
+<tr style="background:#fdebd0;"><td><code>.filelist_cache.json</code></td><td><?php echo __("adm_cachedesc_filelist"); ?></td><td><?php echo __h('adm_cache_chk_filelist_full'); ?></td></tr>
+<tr style="background:#d6d8db;"><td><code>.folder_cache.json</code></td><td><?php echo __("adm_cachedesc_folder"); ?></td><td><?php echo __h('adm_cache_chk_folder_full'); ?></td></tr>
+<tr style="background:#e2d5f1;"><td><code>filename.zip.image_files.json</code></td><td><?php echo __("adm_cachedesc_zip_img"); ?></td><td><?php echo __h('adm_cache_chk_zip_img'); ?></td></tr>
+<tr style="background:#f8d7e3;"><td><code>filename.zip.video_files.json</code></td><td><?php echo __("adm_cachedesc_zip_vid"); ?></td><td><?php echo __h('adm_cache_chk_zip_vid'); ?></td></tr>
 </tbody>
 </table>
 </div>
@@ -3858,7 +4382,7 @@ function runThumbnailCache(force) {
     statusDiv.textContent = '<?php echo __("adm_loading"); ?>';
     currentDiv.innerHTML = '';
     
-    const modeText = force ? 'Regenerate' : 'Quick';
+    const modeText = force ? <?php echo json_encode(__('adm_js_mode_regen')); ?> : <?php echo json_encode(__('adm_js_mode_quick')); ?>; // ★ 2026-11-04 00:28 번역
     const startTime = Date.now();
     
     let currentBidxIndex = 0;
@@ -3874,7 +4398,7 @@ function runThumbnailCache(force) {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Created: <strong>' + totalCreated + '</strong>, Skip: ' + totalSkipped + ', Total: ' + totalFiles;
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_created')); ?> + ' <strong>' + totalCreated + '</strong>, ' + <?php echo json_encode(__h('adm_js_skipped')); ?> + ' ' + totalSkipped + ', ' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalFiles;
             document.getElementById('btn-thumb-quick').disabled = false;
             document.getElementById('btn-thumb-force').disabled = false;
             return;
@@ -3896,8 +4420,8 @@ function runThumbnailCache(force) {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (Created: ' + data.created + ', Skip: ' + data.skipped + ')';
-                currentDiv.innerHTML = '📄 ' + data.file;
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (' + <?php echo json_encode(__('adm_js_created')); ?> + ' ' + data.created + ', ' + <?php echo json_encode(__('adm_js_skipped')); ?> + ' ' + data.skipped + ')';
+                currentDiv.textContent = '📄 ' + data.file; // ★ (2026-11-04 09:37) 이름은 글자로
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalCreated += data.created;
@@ -3936,7 +4460,7 @@ function runCoverCache(force) {
     statusDiv.textContent = '<?php echo __("adm_loading"); ?>';
     currentDiv.innerHTML = '';
     
-    const modeText = force ? 'Regenerate' : 'Quick';
+    const modeText = force ? <?php echo json_encode(__('adm_js_mode_regen')); ?> : <?php echo json_encode(__('adm_js_mode_quick')); ?>; // ★ 2026-11-04 00:28 번역
     const startTime = Date.now();
     
     let currentBidxIndex = 0;
@@ -3951,7 +4475,7 @@ function runCoverCache(force) {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Created: <strong>' + totalCreated + '</strong>, Skip: ' + totalSkipped + ', Total: ' + totalFolders;
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_created')); ?> + ' <strong>' + totalCreated + '</strong>, ' + <?php echo json_encode(__h('adm_js_skipped')); ?> + ' ' + totalSkipped + ', ' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalFolders;
             document.getElementById('btn-cover-quick').disabled = false;
             document.getElementById('btn-cover-force').disabled = false;
             return;
@@ -3973,8 +4497,8 @@ function runCoverCache(force) {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (Created: ' + data.created + ', Skip: ' + data.skipped + ')';
-                currentDiv.innerHTML = '📁 ' + data.folder;
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (' + <?php echo json_encode(__('adm_js_created')); ?> + ' ' + data.created + ', ' + <?php echo json_encode(__('adm_js_skipped')); ?> + ' ' + data.skipped + ')';
+                currentDiv.textContent = '📁 ' + data.folder; // ★ (2026-11-04 09:37) 이름은 글자로
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalCreated += data.created;
@@ -4003,42 +4527,42 @@ function runSelectedCache(force) {
     
     if (document.getElementById('chk-thumb').checked) {
         tasks.push({url: 'make_thumbnail_cache', key: 'file'});
-        taskNames.push('Thumbnail');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_thumb')))); ?>);
         taskIcons.push('🖼️');
     }
     if (document.getElementById('chk-cover').checked) {
         tasks.push({url: 'make_cover_cache', key: 'folder'});
-        taskNames.push('Cover');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_cover')))); ?>);
         taskIcons.push('🎨');
     }
     if (document.getElementById('chk-search').checked) {
         tasks.push({url: 'make_search_index', key: 'path', isSearch: true});
-        taskNames.push('Search Index');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_search_full')))); ?>);
         taskIcons.push('🔍');
     }
     if (document.getElementById('chk-ziptotal').checked) {
         tasks.push({url: 'make_zip_total', key: 'path', isZipTotal: true});
-        taskNames.push('Stats');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_stats')))); ?>);
         taskIcons.push('📊');
     }
     if (document.getElementById('chk-filelist').checked) {
         tasks.push({url: 'make_filelist_cache', key: 'folder'});
-        taskNames.push('File List');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_filelist_full')))); ?>);
         taskIcons.push('📋');
     }
     if (document.getElementById('chk-folder').checked) {
         tasks.push({url: 'make_folder_cache', key: 'folder'});
-        taskNames.push('Folder');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_folder_full')))); ?>);
         taskIcons.push('📁');
     }
     if (document.getElementById('chk-imgfiles').checked) {
         tasks.push({url: 'make_image_files_cache', key: 'file'});
-        taskNames.push('ZIP Images');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_zip_img')))); ?>);
         taskIcons.push('🗂️');
     }
     if (document.getElementById('chk-vidfiles').checked) {
         tasks.push({url: 'make_video_files_cache', key: 'file'});
-        taskNames.push('ZIP Videos');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_zip_vid')))); ?>);
         taskIcons.push('🎬');
     }
     
@@ -4053,7 +4577,8 @@ function runSelectedCache(force) {
 // 폴더 지정 실행
 function runFolderTargetCache(force) {
     const folder = document.getElementById('target-folder').value.trim();
-    const bidx = parseInt(document.getElementById('target-bidx').value) || -1;
+    const _bv = parseInt(document.getElementById('target-bidx').value, 10);
+    const bidx = isNaN(_bv) ? -1 : _bv; // ★ (2026-10-30) 0번 폴더를 고르면 0 이 거짓으로 취급돼 전체(-1)로 돌던 문제
     
     if (!folder) {
         alert(i18n_adm.enter_folder_path);
@@ -4067,32 +4592,32 @@ function runFolderTargetCache(force) {
     
     if (document.getElementById('folder-chk-thumb').checked) {
         tasks.push({url: 'make_thumbnail_cache', key: 'file'});
-        taskNames.push('Thumbnail');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_thumb')))); ?>);
         taskIcons.push('🖼️');
     }
     if (document.getElementById('folder-chk-cover').checked) {
         tasks.push({url: 'make_cover_cache', key: 'folder'});
-        taskNames.push('Cover');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_cover')))); ?>);
         taskIcons.push('🎨');
     }
     if (document.getElementById('folder-chk-filelist').checked) {
         tasks.push({url: 'make_filelist_cache', key: 'folder'});
-        taskNames.push('File List');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_filelist_full')))); ?>);
         taskIcons.push('📋');
     }
     if (document.getElementById('folder-chk-folder').checked) {
         tasks.push({url: 'make_folder_cache', key: 'folder'});
-        taskNames.push('Folder');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_folder_full')))); ?>);
         taskIcons.push('📁');
     }
     if (document.getElementById('folder-chk-imgfiles').checked) {
         tasks.push({url: 'make_image_files_cache', key: 'file'});
-        taskNames.push('ZIP Images');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_zip_img')))); ?>);
         taskIcons.push('🗂️');
     }
     if (document.getElementById('folder-chk-vidfiles').checked) {
         tasks.push({url: 'make_video_files_cache', key: 'file'});
-        taskNames.push('ZIP Videos');
+        taskNames.push(<?php echo json_encode(trim(preg_replace('/^[^\p{L}\p{N}]+/u', '', __('adm_cache_chk_zip_vid')))); ?>);
         taskIcons.push('🎬');
     }
     
@@ -4154,7 +4679,7 @@ function runTasksSequentially(tasks, taskNames, taskIcons, force, prefix, folder
         
         const task = tasks[currentTask];
         const bidx = bidxList[currentBidxIndex];
-        const folderName = baseDirNames[bidx] || ('Folder ' + bidx);
+        const folderName = baseDirNames[bidx] || (<?php echo json_encode(__('adm_js_folder')); ?> + ' ' + bidx);
         
         phaseDiv.textContent = (currentTask + 1) + '/' + tasks.length;
         taskDiv.textContent = taskNames[currentTask] + (bidxList.length > 1 ? ' [' + folderName + ']' : '');
@@ -4183,13 +4708,13 @@ function runTasksSequentially(tasks, taskNames, taskIcons, force, prefix, folder
                 progressBar.textContent = folderInfo + percent + '% (' + data.current + '/' + data.total + ')';
                 
                 if (task.isSearch) {
-                    statusDiv.textContent = overallPercent + '% - ' + folderName + ' scanning... files: ' + data.files;
+                    statusDiv.textContent = overallPercent + '% - ' + folderName + ' ' + <?php echo json_encode(__('adm_js_scanning')); ?> + ' ' + <?php echo json_encode(__('adm_js_files')); ?> + ' ' + data.files;
                 } else if (task.isZipTotal) {
-                    statusDiv.textContent = overallPercent + '% - ' + folderName + ' scanning... ZIP: ' + data.zips;
+                    statusDiv.textContent = overallPercent + '% - ' + folderName + ' ' + <?php echo json_encode(__('adm_js_scanning')); ?> + ' ZIP: ' + data.zips;
                 } else {
-                    statusDiv.textContent = overallPercent + '% - ' + folderName + ' (Created: ' + data.created + ', Skip: ' + data.skipped + ')';
+                    statusDiv.textContent = overallPercent + '% - ' + folderName + ' (' + <?php echo json_encode(__('adm_js_created')); ?> + ' ' + data.created + ', ' + <?php echo json_encode(__('adm_js_skipped')); ?> + ' ' + data.skipped + ')';
                 }
-                currentDiv.innerHTML = taskIcons[currentTask] + ' ' + (data[task.key] || '');
+                currentDiv.textContent = taskIcons[currentTask] + ' ' + (data[task.key] || ''); // ★ (2026-11-04 09:37) 이름은 글자로(&amp; 같은 이름이 바뀌어 보이던 것)
             } else if (data.type === 'complete') {
                 eventSource.close();
                 
@@ -4225,15 +4750,15 @@ function runTasksSequentially(tasks, taskNames, taskIcons, force, prefix, folder
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
             
-            let html = '✅ Complete! (' + elapsed + ')<br>';
+            let html = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ')<br>';
             results.forEach((r, i) => {
                 html += '<strong>' + taskIcons[i] + ' ' + taskNames[i] + ':</strong> ';
                 if (r.isSearch) {
-                    html += 'Files: ' + r.files + '<br>';
+                    html += <?php echo json_encode(__h('adm_js_files')); ?> + ' ' + r.files + '<br>';
                 } else if (r.isZipTotal) {
                     html += 'ZIP: ' + r.zip_total + '<br>';
                 } else {
-                    html += 'Created: ' + r.created + ', Skip: ' + r.skipped + '<br>';
+                    html += <?php echo json_encode(__h('adm_js_created')); ?> + ' ' + r.created + ', ' + <?php echo json_encode(__h('adm_js_skipped')); ?> + ' ' + r.skipped + '<br>';
                 }
             });
             resultDiv.innerHTML = html;
@@ -4273,7 +4798,7 @@ function showBaseDirsList() {
     // 각 base_dir 표시
     baseDirNames.forEach((name, idx) => {
         html += '<div class="folder-item p-2 border-bottom d-flex justify-content-between align-items-center">';
-        html += '<span style="cursor:pointer;" onclick="loadFolderList(\'\', ' + idx + ')">📁 <strong>' + name + '</strong></span>';
+        html += '<span style="cursor:pointer;" onclick="loadFolderList(\'\', ' + idx + ')">📁 <strong>' + String(name).replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }) + '</strong></span>';   // ★ (2026-11-08 fix88) 폴더 이름은 글자로 — 이름에 <img onerror…> 가 있으면 스크립트가 실행됐음(아래 loadFolderList 는 이미 이스케이프)
         html += '<div>';
         html += '<button class="btn btn-sm btn-outline-primary mr-1" onclick="loadFolderList(\'\', ' + idx + ')"><?php echo __("adm_btn_open"); ?></button>';
         html += '<button class="btn btn-sm btn-primary" onclick="selectFolder(\'/\', ' + idx + ')"><?php echo __("adm_btn_select"); ?></button>';
@@ -4288,7 +4813,7 @@ function showBaseDirsList() {
 function loadFolderList(path, bidx) {
     currentBrowseBidx = bidx; // 현재 탐색 중인 bidx 저장
     const content = document.getElementById('folder-browser-content');
-    content.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm"></div> Loading...</div>';
+    content.innerHTML = '<div class="text-center"><div class="spinner-border spinner-border-sm"></div> ' + <?php echo json_encode(__h('adm_js_loading')); ?> + '</div>';
     
     const url = 'admin.php?ajax_folders=1&bidx=' + bidx + '&path=' + encodeURIComponent(path);
     
@@ -4299,47 +4824,50 @@ function loadFolderList(path, bidx) {
         })
         .then(data => {
             let html = '';
+            // ★ (2026-11-02 09:09) 폴더 이름은 글자로·인자는 JSON 으로(이름에 & < ' \ 가 있어도 깨지거나 스크립트가 되지 않게)
+            const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+            const arg = s => esc(JSON.stringify(String(s)));
             
             // 현재 경로 표시
-            const folderName = baseDirNames[bidx] || 'Unknown';
+            const folderName = baseDirNames[bidx] || <?php echo json_encode(__('adm_js_unknown')); ?>;
             html += '<div class="p-2 bg-light border-bottom small">';
-            html += '<strong>[' + folderName + ']</strong> ' + (path || '/');
+            html += '<strong>[' + esc(folderName) + ']</strong> ' + esc(path || '/');
             html += '</div>';
             
             // 상위 폴더 또는 base_dirs 목록으로 돌아가기
             if (path) {
                 const parent = path.split('/').slice(0, -1).join('/');
-                html += '<div class="folder-item p-2 border-bottom" style="cursor:pointer;background:#f8f9fa;" onclick="loadFolderList(\'' + parent.replace(/'/g, "\\'") + '\', ' + bidx + ')">';
-                html += '📁 <strong>..</strong> (Parent)';
+                html += '<div class="folder-item p-2 border-bottom" style="cursor:pointer;background:#f8f9fa;" onclick="loadFolderList(' + arg(parent) + ', ' + bidx + ')">';
+                html += '📁 <strong>..</strong> (' + <?php echo json_encode(__h('adm_js_parent')); ?> + ')';
                 html += '</div>';
             } else {
                 html += '<div class="folder-item p-2 border-bottom" style="cursor:pointer;background:#f8f9fa;" onclick="showBaseDirsList()">';
-                html += '🏠 <strong>← Root</strong>';
+                html += '🏠 <strong>← ' + <?php echo json_encode(__h('adm_js_root')); ?> + '</strong>';
                 html += '</div>';
             }
             
             if (data.error) {
-                html += '<div class="p-3 text-danger">Error: ' + data.error + '</div>';
+                html += '<div class="p-3 text-danger">' + <?php echo json_encode(__h('adm_js_error')); ?> + ' ' + esc(data.error) + '</div>';
             } else if (data.folders && data.folders.length > 0) {
                 data.folders.forEach(folder => {
                     const fullPath = path ? path + '/' + folder : '/' + folder;
                     html += '<div class="folder-item p-2 border-bottom d-flex justify-content-between align-items-center">';
-                    html += '<span style="cursor:pointer;" onclick="loadFolderList(\'' + fullPath.replace(/'/g, "\\'") + '\', ' + bidx + ')">📁 ' + folder + '</span>';
-                    html += '<button class="btn btn-sm btn-primary" onclick="selectFolder(\'' + fullPath.replace(/'/g, "\\'") + '\', ' + bidx + ')"><?php echo __("adm_btn_select"); ?></button>';
+                    html += '<span style="cursor:pointer;" onclick="loadFolderList(' + arg(fullPath) + ', ' + bidx + ')">📁 ' + esc(folder) + '</span>';
+                    html += '<button class="btn btn-sm btn-primary" onclick="selectFolder(' + arg(fullPath) + ', ' + bidx + ')"><?php echo __("adm_btn_select"); ?></button>';
                     html += '</div>';
                 });
             } else {
-                html += '<div class="p-3 text-muted">No subfolders.</div>';
+                html += '<div class="p-3 text-muted">' + <?php echo json_encode(__h('adm_js_no_subfolders')); ?> + '</div>';
             }
             
             // 현재 폴더 선택 버튼
-            html += '<div class="p-2 border-top"><button class="btn btn-sm btn-outline-primary w-100" onclick="selectFolder(\'' + (path || '/').replace(/'/g, "\\'") + '\', ' + bidx + ')"><?php echo __("adm_btn_select_folder"); ?></button></div>';
+            html += '<div class="p-2 border-top"><button class="btn btn-sm btn-outline-primary w-100" onclick="selectFolder(' + arg(path || '/') + ', ' + bidx + ')"><?php echo __("adm_btn_select_folder"); ?></button></div>';
             
             content.innerHTML = html;
         })
         .catch(err => {
             console.error('Fetch error:', err);
-            content.innerHTML = '<div class="text-danger p-3">Failed to load folders.<br><small>' + err.message + '</small></div>';
+            content.innerHTML = '<div class="text-danger p-3">' + <?php echo json_encode(__h('adm_js_folder_load_fail')); ?> + '<br><small>' + String(err.message || '').replace(/[&<>"']/g, function (c) { return '&#' + c.charCodeAt(0) + ';'; }) + '</small></div>';   // ★ (2026-11-03 16:43) 번역 + 오류 글자 이스케이프
         });
 }
 
@@ -4352,7 +4880,7 @@ function selectFolder(path, bidx) {
     // 표시용 텍스트
     let displayText = path;
     if (bidx === -1) {
-        displayText = 'All Folders (/)';
+        displayText = <?php echo json_encode(__('adm_cache_all_root')); ?>;
     } else if (baseDirNames[bidx]) {
         displayText = '[' + baseDirNames[bidx] + '] ' + path;
     }
@@ -4375,7 +4903,7 @@ function runSearchIndex() {
     resultDiv.style.display = 'none';
     progressBar.style.width = '0%';
     progressBar.textContent = '0%';
-    statusDiv.textContent = 'Generating search index...';
+    statusDiv.textContent = <?php echo json_encode(__('adm_js_gen_index')); ?>;
     currentDiv.innerHTML = '';
     
     const startTime = Date.now();
@@ -4388,14 +4916,14 @@ function runSearchIndex() {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Files: <strong>' + totalFiles + '</strong>';
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_files')); ?> + ' <strong>' + totalFiles + '</strong>';
             document.getElementById('btn-search-index').disabled = false;
             return;
         }
         
         const bidx = allBidxs[currentBidxIndex];
         const folderName = baseDirNames[currentBidxIndex];
-        statusDiv.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' generating index...';
+        statusDiv.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + <?php echo json_encode(__('adm_js_gen_index')); ?>;
         
         const url = 'index.php?make_search_index=1&bidx=' + bidx + '&stream=1';
         const eventSource = new EventSource(url);
@@ -4409,8 +4937,8 @@ function runSearchIndex() {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' scanning (files: ' + data.files + ')';
-                currentDiv.innerHTML = '🔍 ' + data.path;
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' ' + <?php echo json_encode(__('adm_js_scanning')); ?> + ' (' + <?php echo json_encode(__('adm_js_files')); ?> + ' ' + data.files + ')';
+                currentDiv.textContent = '🔍 ' + data.path; // ★ (2026-11-04 09:37) 이름은 글자로
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalFiles += data.files || 0;
@@ -4442,7 +4970,7 @@ function runZipTotal() {
     resultDiv.style.display = 'none';
     progressBar.style.width = '0%';
     progressBar.textContent = '0%';
-    statusDiv.textContent = 'Counting ZIPs...';
+    statusDiv.textContent = <?php echo json_encode(__('adm_js_counting_zips')); ?>;
     
     const startTime = Date.now();
     let currentBidxIndex = 0;
@@ -4455,14 +4983,14 @@ function runZipTotal() {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Folders: <strong>' + totalFolders + '</strong>, ZIP: <strong>' + totalZips + '</strong>';
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_folders')); ?> + ' <strong>' + totalFolders + '</strong>, ZIP: <strong>' + totalZips + '</strong>';
             document.getElementById('btn-zip-total').disabled = false;
             return;
         }
         
         const bidx = allBidxs[currentBidxIndex];
         const folderName = baseDirNames[currentBidxIndex];
-        statusDiv.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' counting ZIPs...';
+        statusDiv.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + <?php echo json_encode(__('adm_js_counting_zips')); ?>;
         
         const url = 'index.php?make_zip_total=1&bidx=' + bidx + '&stream=1';
         const eventSource = new EventSource(url);
@@ -4476,7 +5004,7 @@ function runZipTotal() {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' counting (folders: ' + (data.folders || 0) + ', ZIP: ' + data.zips + ')';
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' ' + <?php echo json_encode(__('adm_js_counting')); ?> + ' (' + <?php echo json_encode(__('adm_js_folders')); ?> + ' ' + (data.folders || 0) + ', ZIP: ' + data.zips + ')';
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalZips += data.zip_total || 0;
@@ -4514,7 +5042,7 @@ function runFilelistCache(force) {
     statusDiv.textContent = '<?php echo __("adm_loading"); ?>';
     currentDiv.innerHTML = '';
     
-    const modeText = force ? 'Regenerate' : 'Quick';
+    const modeText = force ? <?php echo json_encode(__('adm_js_mode_regen')); ?> : <?php echo json_encode(__('adm_js_mode_quick')); ?>; // ★ 2026-11-04 00:28 번역
     const startTime = Date.now();
     
     let currentBidxIndex = 0;
@@ -4526,7 +5054,7 @@ function runFilelistCache(force) {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Created: <strong>' + totalCreated + '</strong>, Skip: ' + totalSkipped + ', Total: ' + totalFolders;
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_created')); ?> + ' <strong>' + totalCreated + '</strong>, ' + <?php echo json_encode(__h('adm_js_skipped')); ?> + ' ' + totalSkipped + ', ' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalFolders;
             document.getElementById('btn-filelist-quick').disabled = false;
             document.getElementById('btn-filelist-force').disabled = false;
             return;
@@ -4548,8 +5076,8 @@ function runFilelistCache(force) {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (Created: ' + data.created + ', Skip: ' + data.skipped + ')';
-                currentDiv.innerHTML = '📋 ' + data.folder;
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (' + <?php echo json_encode(__('adm_js_created')); ?> + ' ' + data.created + ', ' + <?php echo json_encode(__('adm_js_skipped')); ?> + ' ' + data.skipped + ')';
+                currentDiv.textContent = '📋 ' + data.folder; // ★ (2026-11-04 09:37) 이름은 글자로
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalCreated += data.created || 0;
@@ -4588,7 +5116,7 @@ function runFolderCache(force) {
     statusDiv.textContent = '<?php echo __("adm_loading"); ?>';
     currentDiv.innerHTML = '';
     
-    const modeText = force ? 'Regenerate' : 'Quick';
+    const modeText = force ? <?php echo json_encode(__('adm_js_mode_regen')); ?> : <?php echo json_encode(__('adm_js_mode_quick')); ?>; // ★ 2026-11-04 00:28 번역
     const startTime = Date.now();
     
     let currentBidxIndex = 0;
@@ -4600,7 +5128,7 @@ function runFolderCache(force) {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Created: <strong>' + totalCreated + '</strong>, Skip: ' + totalSkipped + ', Total: ' + totalFolders;
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_created')); ?> + ' <strong>' + totalCreated + '</strong>, ' + <?php echo json_encode(__h('adm_js_skipped')); ?> + ' ' + totalSkipped + ', ' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalFolders;
             document.getElementById('btn-folder-quick').disabled = false;
             document.getElementById('btn-folder-force').disabled = false;
             return;
@@ -4622,8 +5150,8 @@ function runFolderCache(force) {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (Created: ' + data.created + ', Skip: ' + data.skipped + ')';
-                currentDiv.innerHTML = '📁 ' + data.folder;
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (' + <?php echo json_encode(__('adm_js_created')); ?> + ' ' + data.created + ', ' + <?php echo json_encode(__('adm_js_skipped')); ?> + ' ' + data.skipped + ')';
+                currentDiv.textContent = '📁 ' + data.folder; // ★ (2026-11-04 09:37) 이름은 글자로
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalCreated += data.created || 0;
@@ -4662,7 +5190,7 @@ function runImageFilesCache(force) {
     statusDiv.textContent = '<?php echo __("adm_loading"); ?>';
     currentDiv.innerHTML = '';
     
-    const modeText = force ? 'Regenerate' : 'Quick';
+    const modeText = force ? <?php echo json_encode(__('adm_js_mode_regen')); ?> : <?php echo json_encode(__('adm_js_mode_quick')); ?>; // ★ 2026-11-04 00:28 번역
     const startTime = Date.now();
     
     let currentBidxIndex = 0;
@@ -4674,7 +5202,7 @@ function runImageFilesCache(force) {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Created: <strong>' + totalCreated + '</strong>, Skip: ' + totalSkipped + ', Total: ' + totalFiles;
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_created')); ?> + ' <strong>' + totalCreated + '</strong>, ' + <?php echo json_encode(__h('adm_js_skipped')); ?> + ' ' + totalSkipped + ', ' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalFiles;
             document.getElementById('btn-imgfiles-quick').disabled = false;
             document.getElementById('btn-imgfiles-force').disabled = false;
             return;
@@ -4696,8 +5224,8 @@ function runImageFilesCache(force) {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (Created: ' + data.created + ', Skip: ' + data.skipped + ')';
-                currentDiv.innerHTML = '🗂️ ' + data.file;
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (' + <?php echo json_encode(__('adm_js_created')); ?> + ' ' + data.created + ', ' + <?php echo json_encode(__('adm_js_skipped')); ?> + ' ' + data.skipped + ')';
+                currentDiv.textContent = '🗂️ ' + data.file; // ★ (2026-11-04 09:37) 이름은 글자로
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalCreated += data.created || 0;
@@ -4736,7 +5264,7 @@ function runVideoFilesCache(force) {
     statusDiv.textContent = '<?php echo __("adm_loading"); ?>';
     currentDiv.innerHTML = '';
     
-    const modeText = force ? 'Regenerate' : 'Quick';
+    const modeText = force ? <?php echo json_encode(__('adm_js_mode_regen')); ?> : <?php echo json_encode(__('adm_js_mode_quick')); ?>; // ★ 2026-11-04 00:28 번역
     const startTime = Date.now();
     
     let currentBidxIndex = 0;
@@ -4748,7 +5276,7 @@ function runVideoFilesCache(force) {
             progressDiv.style.display = 'none';
             resultDiv.style.display = 'block';
             resultDiv.className = 'alert alert-success small';
-            resultDiv.innerHTML = '✅ Done! (' + elapsed + ') - Created: <strong>' + totalCreated + '</strong>, Skip: ' + totalSkipped + ', Total: ' + totalFiles;
+            resultDiv.innerHTML = '✅ ' + <?php echo json_encode(__h('adm_js_done')); ?> + ' (' + elapsed + ') - ' + <?php echo json_encode(__h('adm_js_created')); ?> + ' <strong>' + totalCreated + '</strong>, ' + <?php echo json_encode(__h('adm_js_skipped')); ?> + ' ' + totalSkipped + ', ' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalFiles;
             document.getElementById('btn-vidfiles-quick').disabled = false;
             document.getElementById('btn-vidfiles-force').disabled = false;
             return;
@@ -4770,8 +5298,8 @@ function runVideoFilesCache(force) {
                 const overallPercent = Math.round(((currentBidxIndex + (data.current / data.total)) / allBidxs.length) * 100);
                 progressBar.style.width = overallPercent + '%';
                 progressBar.textContent = '[' + (currentBidxIndex + 1) + '/' + allBidxs.length + '] ' + folderName + ' ' + percent + '% (' + data.current + '/' + data.total + ')';
-                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (Created: ' + data.created + ', Skip: ' + data.skipped + ')';
-                currentDiv.innerHTML = '🎬 ' + data.file;
+                statusDiv.textContent = overallPercent + '% - ' + folderName + ' (' + <?php echo json_encode(__('adm_js_created')); ?> + ' ' + data.created + ', ' + <?php echo json_encode(__('adm_js_skipped')); ?> + ' ' + data.skipped + ')';
+                currentDiv.textContent = '🎬 ' + data.file; // ★ (2026-11-04 09:37) 이름은 글자로
             } else if (data.type === 'complete') {
                 eventSource.close();
                 totalCreated += data.created || 0;
@@ -4797,9 +5325,9 @@ function runVideoFilesCache(force) {
 
 
 <!-- Theme -->
-<div class="tab-pane fade" id="theme">
+<div class="tab-pane fade ab-gen" data-ab-g="site" id="theme">
 <div class="card m-2 p-0">
-<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
+<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post" data-ab-save>
 <?php echo csrf_field(); ?>
 <input type="hidden" name="mode" value="theme_change">
 
@@ -4825,7 +5353,7 @@ function runVideoFilesCache(force) {
 
 <!-- Theme apply button -->
 <div class="mt-3">
-<button type="submit" class="btn btn-success"><?php echo __("adm_btn_apply_theme"); ?></button>
+<button type="submit" class="ab-orig-submit btn btn-success"><?php echo __("adm_btn_apply_theme"); ?></button>
 </div>
 </form>
 
@@ -4969,6 +5497,10 @@ $bg4 = $theme_backgrounds['4'] ?? $preview_defaults[4];
 $bg6 = $theme_backgrounds['6'] ?? $preview_defaults[6];
 ?>
 <?php foreach($themes as $tid => $tinfo): 
+// ★ (2026-11-02 09:10) <style> 안 주소는 HTML 이스케이프가 풀리지 않아 '&' 가 '&amp;' 로 남아 배경이 안 나왔음 — CSS 문자열 이스케이프로
+if (!function_exists('mc_adm_css_url')) {
+    function mc_adm_css_url($u) { return preg_replace('/[^\x20-\x7E\x{80}-\x{10FFFF}]/u', '', str_replace(['\\', "'", '"', '<', '>', "\n", "\r"], ['\\\\', "\\'", '\\22 ', '\\3c ', '\\3e ', '', ''], (string)$u)); }
+}
 $preview_custom_bg = $theme_backgrounds[(string)$tid] ?? '';
 ?>
 <div class="theme-preview-box" id="preview-<?php echo $tid; ?>" style="display:<?php echo ($current_theme == $tid) ? 'block' : 'none'; ?>;">
@@ -4988,7 +5520,7 @@ $preview_custom_bg = $theme_backgrounds[(string)$tid] ?? '';
 #preview-<?php echo $tid; ?> .preview-footer{padding:10px;text-align:center;font-size:0.7em}
 <?php if($preview_custom_bg): ?>
 /* 커스텀 배경 적용 */
-#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo h($preview_custom_bg); ?>') center/cover !important}
+#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo mc_adm_css_url($preview_custom_bg); ?>') center/cover !important}
 <?php endif; ?>
 <?php if($tid == 0): /* Library */ ?>
 <?php if(!$preview_custom_bg && defined('THEME_0_PREVIEW_BG')): ?>
@@ -5027,7 +5559,7 @@ $preview_custom_bg = $theme_backgrounds[(string)$tid] ?? '';
 #preview-<?php echo $tid; ?> .preview-content button{background:#00ff00;color:#000;border:none;font-family:'VT323',monospace;border-radius:0;text-transform:uppercase;letter-spacing:2px}
 #preview-<?php echo $tid; ?> .preview-footer{background:transparent;padding:0;margin-top:15px;text-align:center;color:#00aa00;font-family:'VT323',monospace}
 <?php elseif($tid == 2): /* Glassmorphism */ ?>
-#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo h($bg2); ?>') center/cover}
+#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo mc_adm_css_url($bg2); ?>') center/cover}
 #preview-<?php echo $tid; ?> .preview-card{padding:30px;background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;backdrop-filter:blur(10px)}
 #preview-<?php echo $tid; ?> .preview-header{background:transparent;padding:0;margin-bottom:20px}
 #preview-<?php echo $tid; ?> .preview-header h2{color:#fff;text-shadow:0 2px 10px rgba(0,0,0,0.3)}
@@ -5055,7 +5587,7 @@ $preview_custom_bg = $theme_backgrounds[(string)$tid] ?? '';
 #preview-<?php echo $tid; ?> .preview-content button{background:#ff0066;color:#fff;border:none;font-family:'Orbitron',sans-serif;clip-path:polygon(0 4px,4px 0,calc(100% - 4px) 0,100% 4px,100% calc(100% - 4px),calc(100% - 4px) 100%,4px 100%,0 calc(100% - 4px))}
 #preview-<?php echo $tid; ?> .preview-footer{background:transparent;padding:0;margin-top:15px;text-align:center;color:#00ffff;font-family:'Orbitron',sans-serif;font-size:0.6em}
 <?php elseif($tid == 4): /* Galaxy */ ?>
-#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo h($bg4); ?>') center/cover;position:relative}
+#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo mc_adm_css_url($bg4); ?>') center/cover;position:relative}
 #preview-<?php echo $tid; ?> .preview-card{padding:30px;background:rgba(10,10,30,0.85);border:2px solid;border-image:linear-gradient(135deg,#667eea,#764ba2,#f093fb,#667eea) 1;border-radius:0;backdrop-filter:blur(10px);position:relative}
 #preview-<?php echo $tid; ?> .preview-card::before{content:'✦';position:absolute;top:-12px;left:50%;transform:translateX(-50%);font-size:1.2em;color:#f093fb;text-shadow:0 0 15px #f093fb}
 #preview-<?php echo $tid; ?> .preview-header{background:transparent;padding:20px 15px}
@@ -5084,7 +5616,7 @@ $preview_custom_bg = $theme_backgrounds[(string)$tid] ?? '';
 #preview-<?php echo $tid; ?> .preview-content button{background:linear-gradient(135deg,#ff69b4,#ff1493);color:#fff;border:none;border-radius:20px;font-family:'Jua',sans-serif}
 #preview-<?php echo $tid; ?> .preview-footer{background:transparent;padding:0;margin-top:15px;text-align:center;color:#ff69b4;font-family:'Jua',sans-serif}
 <?php elseif($tid == 6): /* Dark Gothic */ ?>
-#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo h($bg6); ?>') center/cover;position:relative}
+#preview-<?php echo $tid; ?> .preview-body{background:url('<?php echo mc_adm_css_url($bg6); ?>') center/cover;position:relative}
 #preview-<?php echo $tid; ?> .preview-body::before{content:'';position:absolute;top:0;left:0;right:0;bottom:0;background:linear-gradient(180deg,rgba(0,0,0,0.7),rgba(20,0,0,0.9))}
 #preview-<?php echo $tid; ?> .preview-card{padding:30px;background:linear-gradient(180deg,rgba(20,0,0,0.97),rgba(5,0,0,0.97));border:3px double #8b0000;position:relative}
 #preview-<?php echo $tid; ?> .preview-card::before{content:'⚜';position:absolute;top:-12px;left:50%;transform:translateX(-50%);font-size:1.5em;color:#8b0000;text-shadow:0 0 15px #8b0000}
@@ -6203,7 +6735,7 @@ $preview_custom_bg = $theme_backgrounds[(string)$tid] ?? '';
 // 현재 테마별 배경 설정
 var currentBackgrounds = {
 <?php foreach($theme_backgrounds as $tid => $bg): ?>
-    <?php echo $tid; ?>: '<?php echo h($bg); ?>',
+    <?php echo $tid; ?>: <?php echo js((string)$bg); /* ★ (2026-10-30) JS 문자열이라 h() 대신 js() — h() 면 '&' 가 '&amp;' 로 들어가 입력칸에 채운 뒤 저장하면 주소가 깨졌음 */ ?>,
 <?php endforeach; ?>
 };
 
@@ -6259,23 +6791,42 @@ function selectTheme(e, tid) {
     }, 300);
 }
 
+// ★ (2026-11-06 fix24) 저장 막대 [되돌리기] — 고른 칸(라디오)은 되돌아가도 카드 테두리·미리보기는 그대로이던 것
+document.addEventListener('DOMContentLoaded', function () {
+    var r = document.querySelector('input[name="login_theme"]'), f = r && r.form; if (!f) return;
+    f.addEventListener('ab:revert', function () {
+        var c = f.querySelector('input[name="login_theme"]:checked'); if (!c) return;
+        f.querySelectorAll('.theme-card').forEach(function (x) { x.classList.toggle('active', x.contains(c)); });
+        if (typeof changeThemePreview === 'function') changeThemePreview(c.value);
+    });
+});
+
 function changeThemePreview(tid) {
     // 현재 스크롤 위치 저장
     var scrollPos = window.scrollY;
     
     // 이전 효과 컨테이너 제거
     document.querySelectorAll('.preview-effect-container').forEach(el => el.remove());
+    // ★ (2026-11-02 10:06) 숨겨지는 다른 미리보기의 타이머·애니메이션·캔버스도 정리(카드를 바꿔 누를수록 숨은 효과가 계속 돌던 것 — applyPreviewEffect 와 같은 정리)
+    document.querySelectorAll('.preview-body').forEach(function (pb) {
+        Object.keys(pb).forEach(function (k) {
+            if (/Interval$/.test(k)) { clearInterval(pb[k]); pb[k] = null; }
+            else if (/Anim$/.test(k)) { cancelAnimationFrame(pb[k]); pb[k] = null; }
+        });
+        Array.prototype.slice.call(pb.children).forEach(function (el) { if (el.tagName === 'CANVAS') el.remove(); });
+    });
     
     document.querySelectorAll('.theme-preview-box').forEach(function(el) {
         el.style.display = 'none';
     });
     document.getElementById('preview-' + tid).style.display = 'block';
     
-    // 배경 커스텀 셀렉트 3개도 같이 변경
-    ['bg_theme_url', 'bg_theme_file', 'bg_theme_reset'].forEach(function(id) {
+    // 배경 커스텀 셀렉트 3개도 같이 변경 — ★ (2026-11-02 11:40) 배경 필터 셀렉트도(전에는 미리보던 테마가 아니라 현재 테마에 필터가 저장됐음)
+    ['bg_theme_url', 'bg_theme_file', 'bg_theme_reset', 'bg_theme_filter'].forEach(function(id) {
         var sel = document.getElementById(id);
         if (sel) sel.value = tid;
     });
+    if (typeof updateFilterSelect === 'function') updateFilterSelect(tid);
     
     // URL 입력창에 현재 배경값 표시
     updateBgInput(tid);
@@ -6305,6 +6856,14 @@ function applyPreviewEffect(tid) {
     // 기존 효과 제거
     var oldEffect = previewBody.querySelector('.preview-effect-container');
     if (oldEffect) oldEffect.remove();
+    // ★ (2026-10-30) 이전 효과의 타이머·애니메이션·캔버스도 정리(카드를 누를 때마다 쌓여 CPU 를 잡아먹던 문제)
+    Object.keys(previewBody).forEach(function (k) {
+        if (/Interval$/.test(k)) { clearInterval(previewBody[k]); previewBody[k] = null; }
+        else if (/Anim$/.test(k)) { cancelAnimationFrame(previewBody[k]); previewBody[k] = null; }
+    });
+    Array.prototype.slice.call(previewBody.children).forEach(function (el) {
+        if (el.tagName === 'CANVAS') el.remove(); // 미리보기 안의 캔버스는 효과용만 있음
+    });
     
     var container = document.createElement('div');
     container.className = 'preview-effect-container';
@@ -6861,79 +7420,96 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <!-- Branding -->
 <div class="tab-pane fade" id="branding">
-<div class="card m-2 p-0">
-<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post" enctype="multipart/form-data">
+<?php // ★ (2026-11-06 10:05) 시안 B — 폼(branding_change)·칸 이름·id(로고 칸 스크립트가 찾음)는 그대로 ?>
+<div class="ab-page" data-ab-g="site">
+<div class="ab-head"><h3><?php echo __("adm_card_branding"); ?></h3></div>
+<p class="ab-lead"><?php echo __("adm_branding_desc"); ?></p>
+<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post" enctype="multipart/form-data" data-ab-save>
 <?php echo csrf_field(); ?>
-<div class="card-header bg-info text-white"><?php echo __("adm_card_branding"); ?></div>
-<ul class="list-group list-group-flush">
-<li class="list-group-item">
-<p class="text-muted mb-2"><?php echo __("adm_branding_desc"); ?></p>
-<table class="config-table" width="100%">
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_logo_type"); ?></td><td class="">
-<div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="logo_type" id="logo_type_text" value="text" <?php if(($branding['logo_type'] ?? 'text') === 'text') echo 'checked'; ?> onchange="toggleLogoType()"><label class="form-check-label" for="logo_type_text">Text Logo</label></div>
-<div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="logo_type" id="logo_type_image" value="image" <?php if(($branding['logo_type'] ?? 'text') === 'image') echo 'checked'; ?> onchange="toggleLogoType()"><label class="form-check-label" for="logo_type_image">Image Logo</label></div>
-</td></tr>
-<tr class="border-bottom" id="text_logo_row" style="<?php echo ($branding['logo_type'] ?? 'text') === 'image' ? 'display:none;' : ''; ?>"><td class="text-right"><?php echo __("adm_cfg_logo_title"); ?></td><td class="">
-<input type="text" class="form-control" id="logo_text" name="logo_text" value="<?php echo h($branding['logo_text'] ?? 'myComix'); ?>" maxlength="30">
-<small class="text-muted"><?php echo __("adm_branding_logo_help"); ?></small>
-</td></tr>
-<tr class="border-bottom" id="image_logo_row" style="<?php echo ($branding['logo_type'] ?? 'text') === 'text' ? 'display:none;' : ''; ?>"><td class="text-right"><?php echo __("adm_cfg_logo_image"); ?></td><td class="">
-<?php if(!empty($branding['logo_image']) && file_exists($branding['logo_image'])): ?>
-<div class="mb-2 p-2 bg-light rounded d-inline-block">
-<img src="<?php echo h($branding['logo_image']); ?>" alt="Logo" style="max-height:60px; max-width:200px;">
-<div class="form-check mt-2">
-<input class="form-check-input" type="checkbox" name="delete_logo_image" value="1" id="delete_logo_image">
-<label class="form-check-label text-danger" for="delete_logo_image"><?php echo __("adm_branding_delete_img"); ?></label>
+<input type="hidden" name="mode" value="branding_change">
+<?php $_bl_has = !empty($branding['logo_image']) && file_exists($branding['logo_image']); ?>
+<div class="ab-sec">🏷️ <?php echo __h('ab_brand_sec_logo'); ?></div> <?php /* ★ fix39 머리 아이콘(다른 묶음 머리와 같게) */ ?>
+<div class="ab-list">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_cfg_logo_title"); ?></span><span class="ab-desc"><?php echo __("adm_branding_logo_help"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" id="logo_text" name="logo_text" value="<?php echo h($branding['logo_text'] ?? 'myComix'); ?>" maxlength="30"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_cfg_logo_image"); ?></span><span class="ab-desc"><?php echo __h('adm_branding_logo_img_help'); ?> <?php echo __("adm_branding_img_help"); ?></span></div>
+    <div class="ab-c">
+      <div id="brandLogoBox" style="width:72px;height:72px;flex:0 0 72px;border:2px dashed #ced4da;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#9aa0a6;">
+        <img id="brandLogoImg" src="<?php echo $_bl_has ? h($branding['logo_image']) : ''; ?>" alt="" style="max-width:62px;max-height:62px;<?php echo $_bl_has ? '' : 'display:none;'; ?>">
+        <span id="brandLogoDef" style="<?php echo $_bl_has ? 'display:none;' : 'display:inline-flex;'; ?>"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#3c4043" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg></span>
+      </div>
+      <button type="button" class="btn btn-outline-primary btn-sm" id="brandLogoPick"><?php echo __h('adm_branding_pick_img'); ?></button>
+      <button type="button" class="btn btn-outline-danger btn-sm" id="brandLogoDel" style="<?php echo $_bl_has ? '' : 'display:none;'; ?>"><?php echo __h('adm_branding_delete_img'); ?></button>
+      <input type="file" name="logo_image" id="brandLogoFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none;">
+      <input type="hidden" name="delete_logo_image" id="brandLogoDelIn" value="0">
+    </div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_cfg_subtitle"); ?></span><span class="ab-desc"><?php echo __("adm_branding_subtitle_help"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" id="subtitle" name="subtitle" value="<?php echo h($branding['subtitle'] ?? __('adm_default_subtitle')); ?>" maxlength="50"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_cfg_login_button"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" id="login_button" name="login_button" value="<?php echo h($branding['login_button'] ?? __('login_submit')); ?>" maxlength="20"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_cfg_copyright"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" id="copyright" name="copyright" value="<?php echo h($branding['copyright'] ?? 'myComix © 2026'); ?>" maxlength="50"></div>
+  </div>
 </div>
-</div><br>
-<?php endif; ?>
-<input type="file" class="form-control-file" name="logo_image" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml">
-<small class="text-muted"><?php echo __("adm_branding_img_help"); ?></small>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_subtitle"); ?></td><td class="">
-<input type="text" class="form-control" id="subtitle" name="subtitle" value="<?php echo h($branding['subtitle'] ?? __('adm_default_subtitle')); ?>" maxlength="50">
-<small class="text-muted"><?php echo __("adm_branding_subtitle_help"); ?></small>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_login_button"); ?></td><td class="">
-<input type="text" class="form-control" id="login_button" name="login_button" value="<?php echo h($branding['login_button'] ?? __('login_submit')); ?>" maxlength="20">
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_copyright"); ?></td><td class="">
-<input type="text" class="form-control" id="copyright" name="copyright" value="<?php echo h($branding['copyright'] ?? 'myComix © 2026'); ?>" maxlength="50">
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_branding_page_title"); ?></td><td class="">
-<input type="text" class="form-control" id="page_title" name="page_title" value="<?php echo h($branding['page_title'] ?? 'myComix'); ?>" maxlength="50">
-<small class="text-muted"><?php echo __("adm_branding_tab_desc"); ?></small>
-</td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_admin_title"); ?></td><td class="">
-<input type="text" class="form-control" id="admin_title" name="admin_title" value="<?php echo h($branding['admin_title'] ?? 'myComix - Admin'); ?>" maxlength="50">
-<small class="text-muted"><?php echo __("adm_branding_admin_tab_desc"); ?></small>
-</td></tr>
-<tr><td class="text-right"><?php echo __("adm_cfg_preview"); ?></td><td class="">
-<div class="p-3 bg-light rounded border">
-<?php if(($branding['logo_type'] ?? 'text') === 'image' && !empty($branding['logo_image']) && file_exists($branding['logo_image'])): ?>
-<img src="<?php echo h($branding['logo_image']); ?>" alt="Logo" style="max-height:40px;">
-<?php else: ?>
-<span style="font-family:'Gugi',sans-serif; font-size:1.5em;"><?php echo h($branding['logo_text'] ?? 'myComix'); ?></span>
-<?php endif; ?>
+<div class="ab-sec">📑 <?php echo __h('ab_brand_sec_tab'); ?></div> <?php /* ★ fix39 머리 아이콘(다른 묶음 머리와 같게) */ ?>
+<div class="ab-list">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_branding_page_title"); ?></span><span class="ab-desc"><?php echo __("adm_branding_tab_desc"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" id="page_title" name="page_title" value="<?php echo h($branding['page_title'] ?? 'myComix'); ?>" maxlength="50"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_cfg_admin_title"); ?></span><span class="ab-desc"><?php echo __("adm_branding_admin_tab_desc"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" id="admin_title" name="admin_title" value="<?php echo h($branding['admin_title'] ?? 'myComix - Admin'); ?>" maxlength="50"></div>
+  </div>
+</div>
+<div class="ab-sec">👁️ <?php echo __("adm_cfg_preview"); ?></div> <?php /* ★ fix39 머리 아이콘(다른 묶음 머리와 같게) */ ?>
+<div class="ab-list"><div class="text-center" style="padding:16px">
+<img id="brandPrevImg" src="<?php echo $_bl_has ? h($branding['logo_image']) : ''; ?>" alt="Logo" style="max-height:40px;<?php echo $_bl_has ? '' : 'display:none;'; ?>">
+<span id="brandPrevText" style="font-family:'Gugi',sans-serif; font-size:1.5em;<?php echo $_bl_has ? 'display:none;' : ''; ?>"><?php echo h($branding['logo_text'] ?? 'myComix'); ?></span>
 <br><small class="text-muted"><?php echo h($branding['subtitle'] ?? __('adm_default_subtitle')); ?></small>
 <br><button type="button" class="btn btn-primary btn-sm mt-2" disabled><?php echo h($branding['login_button'] ?? __('adm_file_login')); ?></button>
 <br><small class="text-muted mt-2 d-block"><?php echo h($branding['copyright'] ?? 'myComix © 2026'); ?></small>
-</div>
-</td></tr>
-</table>
-</li>
-<li class="list-group-item p-0"><input type="hidden" name="mode" value="branding_change"><button class="btn btn-info btn-block btn-sm" type="submit"><?php echo __("adm_btn_save_branding"); ?></button></li>
-</ul>
+</div></div>
+<div class="ab-foot ab-orig-foot" style="border:0;background:transparent;padding:10px 0 0"><button class="btn btn-primary ab-orig-submit" type="submit"><?php echo __("adm_btn_save_branding"); ?></button></div>
 </form>
 </div>
 </div>
 
 <script>
-function toggleLogoType() {
-    var isImage = document.getElementById('logo_type_image').checked;
-    document.getElementById('text_logo_row').style.display = isImage ? 'none' : '';
-    document.getElementById('image_logo_row').style.display = isImage ? '' : 'none';
-}
+// ★ (2026-11-03 22:02) 로고 이미지 칸 — [이미지 선택]으로 고르면 칸·미리보기에 바로 보이고, [이미지 삭제]면 기본(책) 아이콘 + 글자 로고로. 저장은 '브랜딩 저장'
+(function () {
+    var box = document.getElementById('brandLogoBox'); if (!box) return;
+    var img = document.getElementById('brandLogoImg'), def = document.getElementById('brandLogoDef'), file = document.getElementById('brandLogoFile');
+    var del = document.getElementById('brandLogoDel'), delIn = document.getElementById('brandLogoDelIn'), pick = document.getElementById('brandLogoPick');
+    var pImg = document.getElementById('brandPrevImg'), pTxt = document.getElementById('brandPrevText'), title = document.getElementById('logo_text');
+    function show(src) {
+        var on = !!src;
+        img.style.display = on ? '' : 'none'; if (on) img.src = src;
+        def.style.display = on ? 'none' : 'inline-flex';
+        del.style.display = on ? '' : 'none';
+        if (pImg && pTxt) { pImg.style.display = on ? '' : 'none'; if (on) pImg.src = src; pTxt.style.display = on ? 'none' : ''; }
+    }
+    pick.addEventListener('click', function () { file.click(); });
+    box.addEventListener('click', function () { file.click(); }); box.style.cursor = 'pointer';
+    var init0 = (img.style.display !== 'none' && img.getAttribute('src')) ? img.getAttribute('src') : ''; // ★ (2026-11-03 23:34) 고르기 창에서 취소하면 처음 상태로
+    file.addEventListener('change', function () {
+        var f = file.files && file.files[0]; if (!f) { delIn.value = '0'; show(init0); return; }
+        delIn.value = '0';
+        try { show(URL.createObjectURL(f)); } catch (e) {}
+    });
+    del.addEventListener('click', function () { try { file.value = ''; } catch (e) {} delIn.value = '1'; show(''); });
+    if (box.closest('form')) box.closest('form').addEventListener('ab:revert', function () { if (!(file.files && file.files.length)) { delIn.value = '0'; show(init0); } }); // ★ (2026-11-06 fix24) 저장 막대 [되돌리기] — [이미지 삭제]를 눌렀던 것도 처음 모습으로
+    if (title && pTxt) title.addEventListener('input', function () { pTxt.textContent = title.value; });
+})();
 
 // ✅ 자동 로그아웃 설정 함수 (disabled 대신 CSS로 시각적 비활성화 - 값은 항상 전송됨)
 function toggleAutoLogoutTimeout() {
@@ -6993,7 +7569,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 
 <!-- Notice (popup + banner) -->
-<div class="tab-pane fade" id="notice">
+<div class="tab-pane fade ab-gen" data-ab-g="content" id="notice">
 <div class="card m-2">
 <div class="card-header" style="background:#fd7e14;color:#fff;"><?php echo __("adm_card_notice_settings"); ?></div>
 <div class="card-body">
@@ -7083,7 +7659,7 @@ $banner_settings = get_app_settings('banner', [
             $sd = $popup['start_date'] ?? '';
             $ed = $popup['end_date'] ?? '';
             if ($sd || $ed) {
-                echo ($sd ?: __('adm_date_start')) . '<br>~' . ($ed ?: __('adm_date_end'));
+                echo ($sd !== '' ? h((string)$sd) : __('adm_date_start')) . '<br>~' . ($ed !== '' ? h((string)$ed) : __('adm_date_end')); // ★ (2026-11-02 09:08) 저장된 값은 이스케이프
             } else {
                 echo '<span class="text-muted">' . __('adm_always') . '</span>';
             }
@@ -7114,7 +7690,7 @@ $banner_settings = get_app_settings('banner', [
 </div>
 <!-- Layout settings -->
 <div class="card-footer bg-light">
-<form method="post" class="mb-0">
+<form method="post" class="mb-0" data-ab-save>
     <?php echo csrf_field(); ?>
     <input type="hidden" name="mode" value="save_popup_settings">
     <?php 
@@ -7139,7 +7715,7 @@ $banner_settings = get_app_settings('banner', [
             </label>
         </div>
         <span class="text-muted" style="font-size:11px;">
-            (H:[1][2][3]→ V:[1]↓[2]↓ Grid:[1][2]↓[3][4])
+            (<?php echo __h('adm_popup_horizontal'); ?>:[1][2][3]→ <?php echo __h('adm_popup_vertical'); ?>:[1]↓[2]↓ <?php echo __h('adm_popup_grid'); ?>:[1][2]↓[3][4])<?php // ★ (2026-11-04 09:38) H·V·Grid 영어 → 배치 이름 ?>
         </span>
     </div>
     
@@ -7157,7 +7733,7 @@ $banner_settings = get_app_settings('banner', [
             <input type="number" name="popup_gap" value="<?php echo (int)$popup_gap; ?>" class="form-control form-control-sm" style="width:60px;" min="0" max="50">
             <span>px</span>
         </div>
-        <button type="submit" class="btn btn-sm btn-primary"><?php echo __("adm_btn_save"); ?></button>
+        <button type="submit" class="ab-orig-submit btn btn-sm btn-primary"><?php echo __("adm_btn_save"); ?></button>
     </div>
     <small class="text-muted d-block mt-2"><?php echo __("adm_popup_size_note"); ?></small>
 </form>
@@ -7171,7 +7747,7 @@ $banner_settings = get_app_settings('banner', [
     <small class="text-muted ml-2"><?php echo __("adm_banner_desc"); ?></small>
 </div>
 <div class="card-body">
-<form method="post">
+<form method="post" data-ab-save>
 <?php echo csrf_field(); ?>
 <input type="hidden" name="mode" value="save_banner">
 
@@ -7188,13 +7764,13 @@ $banner_settings = get_app_settings('banner', [
 <tr>
     <th style="width:120px;vertical-align:middle;padding:8px 0;"><?php echo __("adm_banner_content_label"); ?></th>
     <td style="padding:8px 0;">
-        <input type="text" class="form-control" name="banner_content" style="width:100%;" value="<?php echo h($banner_settings['content'] ?? ''); ?>" placeholder="e.g. 📢 Server maintenance: 1/25 02:00~04:00">
+        <input type="text" class="form-control" name="banner_content" style="width:100%;" value="<?php echo h($banner_settings['content'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> <?php echo __h('adm_ph_banner'); ?>">
     </td>
 </tr>
 <tr>
     <th style="width:120px;vertical-align:middle;padding:8px 0;"><?php echo __("adm_banner_link_label"); ?></th>
     <td style="padding:8px 0;">
-        <input type="text" class="form-control" name="banner_link" style="width:100%;" value="<?php echo h($banner_settings['link'] ?? ''); ?>" placeholder="e.g. https://example.com/notice">
+        <input type="text" class="form-control" name="banner_link" style="width:100%;" value="<?php echo h($banner_settings['link'] ?? ''); ?>" placeholder="<?php echo __h('adm_eg'); ?> https://example.com/notice">
         <small class="text-muted"><?php echo __("adm_banner_link_help"); ?></small>
     </td>
 </tr>
@@ -7228,13 +7804,13 @@ $banner_settings = get_app_settings('banner', [
     <th style="width:120px;vertical-align:top;padding:8px 0;"><?php echo __("adm_th_preview"); ?></th>
     <td style="padding:8px 0;">
         <div id="bannerPreview" style="padding:12px 15px;border-radius:4px;text-align:left;background:<?php echo h($banner_settings['bg_color'] ?? '#fff3cd'); ?>;color:<?php echo h($banner_settings['text_color'] ?? '#856404'); ?>;font-size:14px;">
-            <?php echo h($banner_settings['content'] ?: '<?php echo __("adm_banner_preview_text"); ?>'); ?>
+            <?php echo h($banner_settings['content'] ?: __("adm_banner_preview_text")); ?>
         </div>
     </td>
 </tr>
 </table>
 
-<button type="submit" class="btn btn-primary btn-block"><?php echo __("adm_btn_save_banner"); ?></button>
+<button type="submit" class="ab-orig-submit btn btn-primary btn-block"><?php echo __("adm_btn_save_banner"); ?></button>
 </form>
 </div>
 </div>
@@ -7279,7 +7855,7 @@ $banner_settings = get_app_settings('banner', [
 <tr>
     <th style="vertical-align:middle;padding:8px 0;"><?php echo __("adm_popup_title_field"); ?></th>
     <td style="padding:8px 0;">
-        <input type="text" class="form-control" name="popup_title" id="edit_popup_title" style="width:100%;" placeholder="e.g. Server maintenance">
+        <input type="text" class="form-control" name="popup_title" id="edit_popup_title" style="width:100%;" placeholder="<?php echo __h('adm_eg'); ?> <?php echo __h('adm_ph_popup_title'); ?>">
     </td>
 </tr>
 <tr>
@@ -7299,13 +7875,13 @@ $banner_settings = get_app_settings('banner', [
 <tr>
     <th style="vertical-align:middle;padding:8px 0;"><?php echo __("adm_th_width"); ?></th>
     <td style="padding:8px 0;">
-        <input type="number" class="form-control" name="popup_width" id="edit_popup_width" min="200" max="800" style="width:100%;max-width:150px;" placeholder="e.g. 400">
+        <input type="number" class="form-control" name="popup_width" id="edit_popup_width" min="200" max="800" style="width:100%;max-width:150px;" placeholder="<?php echo __h('adm_eg'); ?> 400">
     </td>
 </tr>
 <tr>
     <th style="vertical-align:middle;padding:8px 0;"><?php echo __("adm_th_height"); ?></th>
     <td style="padding:8px 0;">
-        <input type="number" class="form-control" name="popup_height" id="edit_popup_height" min="100" max="800" style="width:100%;max-width:150px;" placeholder="e.g. 300">
+        <input type="number" class="form-control" name="popup_height" id="edit_popup_height" min="100" max="800" style="width:100%;max-width:150px;" placeholder="<?php echo __h('adm_eg'); ?> 300">
         <small class="text-muted d-block"><?php echo __("adm_popup_size_help"); ?></small>
     </td>
 </tr>
@@ -7322,7 +7898,7 @@ $banner_settings = get_app_settings('banner', [
     <th style="vertical-align:top;padding:8px 0;"><?php echo __("adm_popup_img_upload"); ?></th>
     <td style="padding:8px 0;">
         <div class="custom-file" style="max-width:400px;">
-            <input type="file" class="custom-file-input" id="edit_popup_image_file" name="popup_image_file" accept="image/*">
+            <input type="file" class="custom-file-input" id="edit_popup_image_file" name="popup_image_file" accept="image/jpeg,image/png,image/gif,image/webp">
             <label class="custom-file-label" for="edit_popup_image_file" id="edit_popup_image_file_label"><?php echo __("adm_popup_file_select"); ?></label>
         </div>
         <small class="text-muted d-block mt-1"><?php echo __("adm_popup_upload_priority"); ?></small>
@@ -7379,7 +7955,7 @@ $banner_settings = get_app_settings('banner', [
 </div>
 
 <script>
-var popupsData = <?php echo json_encode($popups, JSON_UNESCAPED_UNICODE); ?>;
+var popupsData = <?php echo json_encode($popups, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '[]'; /* ★ (2026-11-02 08:54) 내용에 </script> 가 있어도 스크립트가 끊기지 않게 */ ?>;
 
 // 배너 미리보기
 document.querySelector('input[name="banner_content"]').addEventListener('input', updateBannerPreview);
@@ -7455,9 +8031,9 @@ document.getElementById('edit_popup_image_file').addEventListener('change', func
 </script>
 
 <!-- Users -->
-<div class="tab-pane fade" id="group">
+<div class="tab-pane fade ab-gen" data-ab-g="member" id="group">
 <div class="card m-2 p-0">
-<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
+<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post" data-ab-save>
 <?php echo csrf_field(); ?>
 <div class="card-header bg-success text-white"><?php echo __("adm_card_user_mgmt"); ?></div>
 <ul class="list-group list-group-flush">
@@ -7536,7 +8112,7 @@ foreach($ua as $uid=>$ud):
             <span class="text-warning"><?php echo __("adm_no_email_badge"); ?></span>
             <?php endif; ?>
         </span>
-        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="openEmailModal('<?php echo $su; ?>', '<?php echo h($user_email); ?>')" title="<?php echo __('adm_heading_email_edit'); ?>" style="font-size:11px;">✏️</button>
+        <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-1" onclick="openEmailModal(<?php echo h(json_encode((string)$su)); ?>, <?php echo h(json_encode((string)$user_email)); ?>)" title="<?php echo __('adm_heading_email_edit'); ?>" style="font-size:11px;">✏️</button>
         
         <div class="form-check form-check-inline mb-0"><input class="form-check-input" type="radio" name="<?php echo $su;?>_group" value="admin" <?php if($gr=="admin")echo"checked";?>><label class="form-check-label">admin</label></div>
         <div class="form-check form-check-inline mb-0"><input class="form-check-input" type="radio" name="<?php echo $su;?>_group" value="group1" <?php if($gr=="group1")echo"checked";?>><label class="form-check-label">group1</label></div>
@@ -7562,7 +8138,7 @@ foreach($ua as $uid=>$ud):
     </div>
 </li>
 <?php endforeach;?>
-<li class="list-group-item p-0"><input type="hidden" name="mode" value="group_change"><button class="btn btn-success btn-block btn-sm" type="submit"><?php echo __("adm_btn_edit_usergroup"); ?></button></li>
+<li class="list-group-item p-0"><input type="hidden" name="mode" value="group_change"><button class="ab-orig-submit btn btn-success btn-block btn-sm" type="submit"><?php echo __("adm_btn_edit_usergroup"); ?></button></li>
 </ul>
 </form>
 
@@ -7777,43 +8353,118 @@ function confirmEmailChange() {
     document.getElementById('emailChangeForm').submit();
 }
 </script>
-</div></div>
+</div>
+
+<?php // ★ (2026-11-03 09:43) 금지 아이디 관리 — 회원가입에서 쓸 수 없는 아이디(목록에서 ✕ 로 지우기, 여러 줄 한 번에 추가). 저장 = admin.php ajax_blocked_ids
+$_blk_items = [];
+foreach ((is_array(get_app_settings('registration', [])['blocked_ids'] ?? null) ? get_app_settings('registration', [])['blocked_ids'] : []) as $_bp) { if (is_int($_bp)) $_bp = (string)$_bp; if (is_string($_bp) && $_bp !== '') $_blk_items[] = $_bp; }
+sort($_blk_items, SORT_NATURAL | SORT_FLAG_CASE);
+?>
+<div class="card m-2 p-0" id="blkCard">
+<div class="card-header bg-secondary text-white">🚫 <?php echo __h('adm_blk_title'); ?></div> <?php /* ★ fix39 머리 아이콘(다른 묶음 머리와 같게) */ ?>
+<div class="card-body text-left">
+<style>
+  .blk-count { margin-bottom:10px; }
+  .blk-list { border:1px solid #dcdcdc; max-height:300px; overflow-y:auto; margin-bottom:12px; }
+  .blk-row { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:6px 12px; border-bottom:1px solid #eee; font-size:.95rem; word-break:break-all; }
+  .blk-row:last-child { border-bottom:none; }
+  .blk-row:nth-child(even) { background:#f2f2f2; }
+  .blk-del { flex:0 0 auto; border:none; background:transparent; color:#777; width:30px; height:30px; padding:0; line-height:30px; font-size:20px; cursor:pointer; border-radius:4px; }
+  .blk-del:hover { background:#e5e5e5; color:#c62828; }
+  .blk-del:disabled { opacity:.4; }
+  .blk-empty { padding:10px 12px; color:#888; }
+  .blk-add { display:flex; gap:8px; align-items:flex-start; flex-wrap:wrap; }
+  .blk-add textarea { flex:1 1 260px; max-width:520px; min-height:110px; }
+  .dark-mode .blk-list, [data-theme="dark"] .blk-list { border-color:#444; }
+  .dark-mode .blk-row, [data-theme="dark"] .blk-row { border-color:#333; }
+  .dark-mode .blk-row:nth-child(even), [data-theme="dark"] .blk-row:nth-child(even) { background:#262626; }
+  .dark-mode .blk-del, [data-theme="dark"] .blk-del { color:#aaa; }
+  .dark-mode .blk-del:hover, [data-theme="dark"] .blk-del:hover { background:#333; color:#ff8a80; }
+</style>
+<div class="blk-count" id="blkCount"><?php echo __h('adm_blk_count', count($_blk_items)); ?></div>
+<div class="blk-list" id="blkList"><?php if (!$_blk_items): ?><div class="blk-empty"><?php echo __h('adm_blk_none'); ?></div><?php endif; foreach ($_blk_items as $_bp): ?><div class="blk-row"><span><?php echo h($_bp); ?></span><button type="button" class="blk-del" data-id="<?php echo h($_bp); ?>" title="<?php echo __h('adm_blk_del'); ?>" aria-label="<?php echo __h('adm_blk_del'); ?>">&times;</button></div><?php endforeach; ?></div>
+<div class="blk-add">
+  <textarea id="blkText" class="form-control" spellcheck="false" autocomplete="off" aria-label="<?php echo __h('adm_blk_title'); ?>"></textarea>
+  <button type="button" class="btn btn-outline-secondary" id="blkAdd"><?php echo __h('adm_blk_add'); ?></button>
+</div>
+<small class="text-muted d-block mt-2"><?php echo __h('adm_blk_help'); ?></small>
+</div>
+</div>
+<script>
+(function () {
+  var CSRF = <?php echo json_encode(generate_csrf_token()); ?>;
+  var T = <?php echo json_encode(['count' => __('adm_blk_count'), 'none' => __('adm_blk_none'), 'del' => __('adm_blk_del'), 'fail' => __('adm_blk_fail'), 'invalid' => __('adm_blk_invalid'), 'full' => __('adm_blk_full'), 'partial' => __('adm_blk_partial'), 'confirm' => __('adm_blk_confirm')], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+  var list = document.getElementById('blkList'), cnt = document.getElementById('blkCount'), txt = document.getElementById('blkText'), addB = document.getElementById('blkAdd');
+  if (!list || !addB) return;
+  function render(items) {
+    list.textContent = '';
+    if (!items.length) { var e = document.createElement('div'); e.className = 'blk-empty'; e.textContent = T.none; list.appendChild(e); }
+    items.forEach(function (id) {
+      var r = document.createElement('div'); r.className = 'blk-row';
+      var s = document.createElement('span'); s.textContent = id; r.appendChild(s);
+      var b = document.createElement('button'); b.type = 'button'; b.className = 'blk-del'; b.setAttribute('data-id', id); b.title = T.del; b.setAttribute('aria-label', T.del); b.textContent = '×'; r.appendChild(b);
+      list.appendChild(r);
+    });
+    cnt.textContent = T.count.replace('%d', String(items.length));
+    var cfgCnt = document.getElementById('blkCfgCount'); if (cfgCnt) cfgCnt.textContent = cnt.textContent; // ★ (2026-11-03 11:33) 설정 탭의 개수도 같이(새로고침 전까지 옛 개수였음)
+  }
+  function send(op, extra, done) {
+    var body = 'ajax_blocked_ids=1&op=' + op + '&csrf_token=' + encodeURIComponent(CSRF) + (extra || '');
+    fetch('admin.php', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body })
+      .then(function (r) { return r.json(); })
+      .then(function (d) { if (d && d.success && Array.isArray(d.items)) { render(d.items); done(d); } else { alert(T.fail); done(null); } })
+      .catch(function () { alert(T.fail); done(null); });
+  }
+  addB.addEventListener('click', function () {
+    var v = txt.value; if (!v.trim()) { txt.focus(); return; }
+    addB.disabled = true;
+    send('add', '&text=' + encodeURIComponent(v), function (d) { addB.disabled = false; if (!d) return; if (d.added > 0) { txt.value = ''; if (d.skipped > 0) alert(T.partial.replace('%1$s', d.added).replace('%2$s', d.skipped) + (d.full ? '\n' + T.full : '')); } else alert(d.full ? T.full : T.invalid); }); // ★ (2026-11-03 20:58) 일부만 들어가면 알림
+  });
+  list.addEventListener('click', function (ev) {
+    var b = ev.target && ev.target.closest ? ev.target.closest('.blk-del') : null; if (!b || b.disabled) return;
+    var id = b.getAttribute('data-id') || '';
+    if (!window.confirm(T.confirm.replace('%s', function () { return id; }))) return;
+    b.disabled = true;
+    send('del', '&id=' + encodeURIComponent(id), function () { b.disabled = false; });
+  });
+})();
+</script>
+</div>
 
 
 <!-- Folders -->
-<div class="tab-pane fade" id="folder">
+<div class="tab-pane fade ab-gen" data-ab-g="content" id="folder">
 <?php 
 // 모든 base_dirs에 대해 폴더 권한 관리
 foreach ($base_dirs as $dir_idx => $dir_path):
     $dir_name = basename($dir_path);
 ?>
 <div class="card m-2 p-0">
-<form action="<?php echo h($_SERVER['PHP_SELF']) . '?bidx=' . $dir_idx; ?>" method="post" id="folderForm_<?php echo $dir_idx; ?>">
+<form action="<?php echo h($_SERVER['PHP_SELF']) . '?bidx=' . $dir_idx; ?>" method="post" id="folderForm_<?php echo $dir_idx; ?>" data-ab-save>
 <?php echo csrf_field(); ?>
 <div class="card-header bg-success text-white d-flex justify-content-between align-items-center flex-wrap">
     <span><?php echo __("adm_folder_perm_title"); ?> - <?php echo h($dir_name); ?></span>
-    <div class="btn-group btn-group-sm flex-wrap">
-        <button type="button" class="btn btn-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group1', true)" title="group1 <?php echo __('adm_btn_select_all'); ?>">G1✓</button>
-        <button type="button" class="btn btn-outline-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group1', false)" title="group1 <?php echo __('adm_btn_deselect_all'); ?>">G1✗</button>
-        <button type="button" class="btn btn-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group2', true)" title="group2 <?php echo __('adm_btn_select_all'); ?>">G2✓</button>
-        <button type="button" class="btn btn-outline-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group2', false)" title="group2 <?php echo __('adm_btn_deselect_all'); ?>">G2✗</button>
-        <button type="button" class="btn btn-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group3', true)" title="group3 <?php echo __('adm_btn_select_all'); ?>">G3✓</button>
-        <button type="button" class="btn btn-outline-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group3', false)" title="group3 <?php echo __('adm_btn_deselect_all'); ?>">G3✗</button>
-        <button type="button" class="btn btn-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group4', true)" title="group4 <?php echo __('adm_btn_select_all'); ?>">G4✓</button>
-        <button type="button" class="btn btn-outline-light btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'group4', false)" title="group4 <?php echo __('adm_btn_deselect_all'); ?>">G4✗</button>
-        <button type="button" class="btn btn-warning btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'all', true)" title="<?php echo __('adm_btn_select_all'); ?>"><?php echo __("adm_btn_all_check"); ?></button>
-        <button type="button" class="btn btn-secondary btn-sm" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, 'all', false)" title="<?php echo __('adm_btn_deselect_all'); ?>"><?php echo __("adm_btn_all_uncheck"); ?></button>
+    <?php // ★ (2026-11-06 11:05) 'G1✓ G1✗ … 전체✓ 전체✗' 10개 단추 → [대상 ▾] [모두 켜기] [모두 끄기] (같은 toggleAllFolder 를 부름) ?>
+    <div class="ab-fp-tools">
+      <select class="form-control form-control-sm" id="abFpT_<?php echo $dir_idx; ?>" aria-label="<?php echo __h('ab_fp_target'); ?>">
+        <option value="all"><?php echo __h('ab_fp_all_groups'); ?></option>
+        <?php foreach (['group1', 'group2', 'group3', 'group4'] as $_fg): ?><option value="<?php echo $_fg; ?>"><?php echo $_fg; ?></option><?php endforeach; ?>
+      </select>
+      <button type="button" class="btn btn-sm btn-outline-primary" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, document.getElementById('abFpT_<?php echo $dir_idx; ?>').value, true)"><?php echo __h('ab_fp_on'); ?></button>
+      <button type="button" class="btn btn-sm btn-outline-secondary" onclick="toggleAllFolder(<?php echo $dir_idx; ?>, document.getElementById('abFpT_<?php echo $dir_idx; ?>').value, false)"><?php echo __h('ab_fp_off'); ?></button>
     </div>
 </div>
 <ul class="list-group list-group-flush">
 <?php
 $ap=load_permissions($permissions_file);$dl=[];
 if (is_dir($dir_path)) {
+    try { // ★ (2026-11-02 14:25) 폴더를 못 열면(권한·NAS 끊김) 관리자 화면 전체가 500 이던 것 — 그 폴더만 '폴더 없음'
     foreach(new DirectoryIterator($dir_path) as $fi){
         if($fi->isDot()||$fi->getFilename()=="@eaDir"||!$fi->isDir())continue;
         $fn=$fi->getFilename();$pm=$ap[$fn]??[];
         $dl[]=['n'=>$fn,'g1'=>$pm['group1']??1,'g2'=>$pm['group2']??1,'g3'=>$pm['group3']??1,'g4'=>$pm['group4']??1];
     }
+    } catch (\Throwable $e) { $dl = []; }
 }
 usort($dl,function($a,$b){return strnatcasecmp($a['n'],$b['n']);});
 if (count($dl) > 0):
@@ -7832,7 +8483,7 @@ else: ?>
 <li class="list-group-item p-0">
 <input type="hidden" name="mode" value="mode_change">
 <input type="hidden" name="target_bidx" value="<?php echo $dir_idx; ?>">
-<button class="btn btn-success btn-block btn-sm" type="submit"><?php echo __("adm_btn_edit_folder_perm"); ?></button>
+<button class="ab-orig-submit btn btn-success btn-block btn-sm" type="submit"><?php echo __("adm_btn_edit_folder_perm"); ?></button>
 </li>
 </ul>
 </form></div>
@@ -7851,12 +8502,13 @@ function toggleAllFolder(dirIdx, type, checked) {
             chk.checked = checked;
         });
     }
+    if (window.mcAbRefresh) window.mcAbRefresh(document.getElementById('folderForm_' + dirIdx)); // ★ (2026-11-06) 저장 막대가 바뀐 것을 알게(칸을 직접 바꿔 신호가 없음)
 }
 </script>
 </div>
 
 <!-- Logs -->
-<div class="tab-pane fade" id="logs">
+<div class="tab-pane fade ab-gen" data-ab-g="overview" id="logs">
 <div class="container-fluid">
 
 <!-- Login log management -->
@@ -7868,6 +8520,7 @@ $log_file = __DIR__ . '/src/login_log.json';
 $login_logs = [];
 if (file_exists($log_file)) {
     $login_logs = json_decode(file_get_contents($log_file), true) ?? [];
+    if (!is_array($login_logs)) $login_logs = []; // ★ (2026-11-02 21:36) 배열이 아니면 count() 오류로 관리자 화면 500
 }
 $total_logs = count($login_logs);
 // 최신순 정렬 (역순)
@@ -7886,8 +8539,9 @@ $paged_logs = array_slice($login_logs, $offset, $logs_per_page, true);
         <strong><?php echo __("adm_total"); ?> <?php echo number_format($total_logs); ?></strong> <?php echo __('adm_login_records'); ?>
     </div>
     <div class="btn-group">
-        <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteOldLogs()"><?php echo __("adm_btn_delete_old_logs"); ?></button>
-        <button type="button" class="btn btn-sm btn-danger" onclick="deleteAllLogs()"><?php echo __("adm_btn_delete_all"); ?></button>
+        <?php $__nolog = ($total_logs > 0) ? '' : ' disabled'; /* ★ (2026-11-02 20:06) 기록이 0건이면 함수·폼이 안 만들어져 누르면 JS 오류 — 단추를 끔 */ ?>
+        <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteOldLogs()"<?php echo $__nolog; ?>><?php echo __("adm_btn_delete_old_logs"); ?></button>
+        <button type="button" class="btn btn-sm btn-danger" onclick="deleteAllLogs()"<?php echo $__nolog; ?>><?php echo __("adm_btn_delete_all"); ?></button>
     </div>
 </div>
 
@@ -7940,7 +8594,7 @@ foreach ($paged_logs as $orig_idx => $log):
     <td class="no-touch" style="white-space:nowrap;"><code style="font-size:11px;"><?php echo h($log['ip'] ?? '-'); ?></code></td>
     <td class="no-touch" style="white-space:nowrap;"><span class="badge badge-secondary"><?php echo h($country_code); ?></span><?php if($country_name && $country_name !== $country_code): ?><small class="text-muted ml-1"><?php echo h($country_name); ?></small><?php endif; ?></td>
     <td class="d-none d-md-table-cell"><small class="text-muted" style="word-break:break-all;"><?php echo h($ua); ?></small></td>
-    <td class="d-table-cell d-md-none text-center"><span style="cursor:pointer;" onclick="alert('<?php echo addslashes($ua_escaped); ?>')"><?php echo $device_icon; ?></span></td>
+    <td class="d-table-cell d-md-none text-center"><span style="cursor:pointer;" onclick="alert(<?php echo h(json_encode((string)$ua)); ?>)"><?php echo $device_icon; ?></span></td>
 </tr>
 <?php 
 $display_index++;
@@ -8036,19 +8690,26 @@ $activity_log_path = __DIR__ . '/src/activity_log.json';
 $activity_logs = [];
 if (file_exists($activity_log_path)) {
     $activity_logs = json_decode(file_get_contents($activity_log_path), true) ?? [];
+    if (!is_array($activity_logs)) $activity_logs = []; // ★ (2026-11-02 22:14) 배열이 아니면 관리자 화면 500(로그인 기록 카드와 같게)
 }
 
 // 필터 파라미터
-$filter_action = $_GET['filter_action'] ?? '';
-$filter_user = $_GET['filter_user'] ?? '';
-$filter_from = $_GET['filter_from'] ?? '';
-$filter_to = $_GET['filter_to'] ?? '';
+// ★ (2026-11-02 09:04) 문자열만(배열이 오면 urlencode 에서 관리자 화면 전체가 500)
+$filter_action = is_string($_GET['filter_action'] ?? null) ? $_GET['filter_action'] : '';
+$filter_user = is_string($_GET['filter_user'] ?? null) ? $_GET['filter_user'] : '';
+$filter_from = is_string($_GET['filter_from'] ?? null) ? $_GET['filter_from'] : '';
+$filter_to = is_string($_GET['filter_to'] ?? null) ? $_GET['filter_to'] : '';
 
 // 활동 유형별 아이콘/색상 (필터 옵션으로도 사용)
 $action_styles = [
-    __('adm_file_login') => ['icon' => '🔑', 'color' => '#28a745', 'label' => __('adm_act_login')],
-    '로그아웃' => ['icon' => '🚪', 'color' => '#6c757d', 'label' => __('adm_act_logout')],
-    '회원가입' => ['icon' => '📝', 'color' => '#20c997', 'label' => __('adm_act_register')],
+    // ★ (2026-11-04 09:38) 실제로 기록되는 동작으로(로그인·로그아웃·회원가입은 활동 기록에 남지 않아 고르면 늘 0건이었고, 업로드·삭제 등은 목록에 없었음)
+    '파일 업로드' => ['icon' => '⬆️', 'color' => '#20c997', 'label' => __('adm_act_upload')],
+    '파일 업로드(청크)' => ['icon' => '⬆️', 'color' => '#20c997', 'label' => __('adm_act_upload_chunk')],
+    '파일 삭제' => ['icon' => '🗑️', 'color' => '#dc3545', 'label' => __('adm_act_file_delete')],
+    '다중 삭제' => ['icon' => '🗑️', 'color' => '#dc3545', 'label' => __('adm_act_multi_delete')],
+    '폴더 생성' => ['icon' => '📁', 'color' => '#17a2b8', 'label' => __('adm_act_folder_create')],
+    '폴더 삭제' => ['icon' => '🗑️', 'color' => '#dc3545', 'label' => __('adm_act_folder_delete')],
+    '중복파일삭제' => ['icon' => '🧹', 'color' => '#fd7e14', 'label' => __('adm_act_dup_delete')],
     '폴더 접근' => ['icon' => '📂', 'color' => '#17a2b8', 'label' => __('adm_act_folder')],
     '검색' => ['icon' => '🔍', 'color' => '#6610f2', 'label' => __('adm_act_search')],
     '열람' => ['icon' => '📖', 'color' => '#28a745', 'label' => __('adm_act_view')],
@@ -8127,8 +8788,9 @@ $has_filter = !empty($filter_action) || !empty($filter_user) || !empty($filter_f
             <?php endif; ?>
         </div>
         <div class="btn-group">
-            <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteOldActivityLogs()"><?php echo __("adm_btn_delete_old_logs"); ?></button>
-            <button type="button" class="btn btn-sm btn-danger" onclick="deleteAllActivityLogs()"><?php echo __("adm_btn_delete_all"); ?></button>
+            <?php $__noact = ($total_activity_logs > 0) ? '' : ' disabled'; /* ★ (2026-11-02 20:06) 위와 같음 */ ?>
+            <button type="button" class="btn btn-sm btn-outline-danger" onclick="deleteOldActivityLogs()"<?php echo $__noact; ?>><?php echo __("adm_btn_delete_old_logs"); ?></button>
+            <button type="button" class="btn btn-sm btn-danger" onclick="deleteAllActivityLogs()"<?php echo $__noact; ?>><?php echo __("adm_btn_delete_all"); ?></button>
         </div>
     </div>
     
@@ -8149,16 +8811,16 @@ $has_filter = !empty($filter_action) || !empty($filter_user) || !empty($filter_f
         </select>
         
         <div class="d-flex align-items-center" style="gap:4px;">
-            <input type="date" id="filterFrom" class="form-control form-control-sm" style="width:auto;" value="<?php echo h($filter_from); ?>" onchange="applyActivityFilter()" title="Start">
+            <input type="date" id="filterFrom" class="form-control form-control-sm" style="width:auto;" value="<?php echo h($filter_from); ?>" onchange="applyActivityFilter()" title="<?php echo __h('adm_date_start'); ?>">
             <span class="text-muted">~</span>
-            <input type="date" id="filterTo" class="form-control form-control-sm" style="width:auto;" value="<?php echo h($filter_to); ?>" onchange="applyActivityFilter()" title="End">
+            <input type="date" id="filterTo" class="form-control form-control-sm" style="width:auto;" value="<?php echo h($filter_to); ?>" onchange="applyActivityFilter()" title="<?php echo __h('adm_date_end'); ?>">
         </div>
         
         <!-- Quick date range buttons -->
         <div class="btn-group btn-group-sm">
-            <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('today')" title="Today"><?php echo __("adm_btn_today"); ?></button>
-            <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('week')" title="7 days"><?php echo __("adm_btn_7days"); ?></button>
-            <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('month')" title="30 days"><?php echo __("adm_btn_30days"); ?></button>
+            <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('today')" title="<?php echo __h('adm_btn_today'); ?>"><?php echo __("adm_btn_today"); ?></button>
+            <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('week')" title="<?php echo __h('adm_btn_7days'); ?>"><?php echo __("adm_btn_7days"); ?></button>
+            <button type="button" class="btn btn-outline-secondary" onclick="setDateRange('month')" title="<?php echo __h('adm_btn_30days'); ?>"><?php echo __("adm_btn_30days"); ?></button>
         </div>
         
         <?php if ($has_filter): ?>
@@ -8250,6 +8912,12 @@ function setDateRange(range) {
 </tbody>
 </table>
 </div>
+<?php if ($filtered_count === 0): // ★ (2026-11-02 14:25) 거르기 결과 0건이면 빈 표만 나오던 것 — 안내 문구 표시 ?>
+<div class="text-center text-muted py-3">
+    <p class="mb-2"><?php echo __("adm_no_filtered_activity"); ?></p>
+    <a href="?#logs" class="btn btn-sm btn-outline-secondary"><?php echo __("adm_btn_reset_filter"); ?></a>
+</div>
+<?php endif; ?>
 
 <?php if ($activity_total_pages > 1): ?>
 <nav aria-label="Activity log pagination">
@@ -8301,7 +8969,7 @@ function deleteOldActivityLogs() {
 }
 
 function deleteAllActivityLogs() {
-    if (confirm(i18n_adm.confirm_delete_all_logs)) {
+    if (confirm(i18n_adm.confirm_delete_all_activity || i18n_adm.confirm_delete_all_logs)) { // ★ (2026-11-02 09:08) 활동 로그용 문구(전에는 접속 로그 문구가 나왔음)
         document.getElementById('activity_delete_type').value = 'all';
         document.getElementById('activityLogDeleteForm').submit();
     }
@@ -8312,7 +8980,7 @@ function deleteAllActivityLogs() {
 </div>
 
 <!-- Deleted users tab -->
-<div class="tab-pane fade" id="deleted_users">
+<div class="tab-pane fade ab-gen" data-ab-g="member" id="deleted_users">
 <div class="container-fluid">
 <div class="card m-2">
 <div class="card-header" style="background:#6c757d;color:#fff;"><?php echo __("adm_card_deleted_users"); ?></div>
@@ -8323,6 +8991,7 @@ $deleted_users_file = __DIR__ . '/src/deleted_users.json';
 $deleted_users_data = [];
 if (file_exists($deleted_users_file)) {
     $deleted_users_data = json_decode(file_get_contents($deleted_users_file), true) ?? [];
+    if (!is_array($deleted_users_data)) $deleted_users_data = []; // ★ (2026-11-02 22:14) 위와 같음
 }
 $deleted_users_data = array_reverse($deleted_users_data); // 최신순
 ?>
@@ -8376,6 +9045,7 @@ $deleted_users_data = array_reverse($deleted_users_data); // 최신순
             <?php echo csrf_field(); ?>
             <input type="hidden" name="mode" value="purge_deleted_user">
             <input type="hidden" name="purge_index" value="<?php echo $idx; ?>">
+            <input type="hidden" name="purge_uid" value="<?php echo h((string)($du['user_id'] ?? '')); ?>"><input type="hidden" name="purge_at" value="<?php echo h((string)($du['deleted_at'] ?? '')); ?>"><?php /* ★ (2026-11-09 11:39) 지울 기록 확인용 */ ?>
             <button type="submit" class="btn btn-xs btn-danger" title="<?php echo __('adm_btn_purge'); ?>">🗑️</button>
         </form>
     </td>
@@ -8403,7 +9073,7 @@ $deleted_users_data = array_reverse($deleted_users_data); // 최신순
 </div>
 
 <script>
-var deletedUsersData = <?php echo json_encode($deleted_users_data, JSON_UNESCAPED_UNICODE); ?>;
+var deletedUsersData = <?php echo json_encode($deleted_users_data, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE) ?: '[]'; /* ★ (2026-11-02 08:54) 내용에 </script> 가 있어도 스크립트가 끊기지 않게 */ ?>;
 var currentDeletedUserIdx = null;
 var loginLogPage = 1;
 var activityLogPage = 1;
@@ -8429,12 +9099,12 @@ function viewDeletedUser(idx) {
     html += '<div class="col-md-6">';
     html += '<h6><?php echo __("adm_heading_user_info"); ?></h6>';
     html += '<table class="table table-sm table-bordered" style="font-size:13px;">';
-    html += '<tr><th width="100"><?php echo __("adm_th_userid"); ?></th><td><strong>' + (du.user_id || '-') + '</strong></td></tr>';
-    html += '<tr><th><?php echo __("adm_th_email"); ?></th><td>' + (du.user_info?.email || '-') + '</td></tr>';
-    html += '<tr><th><?php echo __("adm_th_group"); ?></th><td>' + (du.user_info?.group || '-') + '</td></tr>';
-    html += '<tr><th><?php echo __("adm_th_joined"); ?></th><td>' + (du.user_info?.created_at || '-') + '</td></tr>';
+    html += '<tr><th width="100"><?php echo __("adm_th_userid"); ?></th><td><strong>' + _admEsc(du.user_id || '-') + '</strong></td></tr>';
+    html += '<tr><th><?php echo __("adm_th_email"); ?></th><td>' + _admEsc(du.user_info?.email || '-') + '</td></tr>';
+    html += '<tr><th><?php echo __("adm_th_group"); ?></th><td>' + _admEsc(du.user_info?.group || '-') + '</td></tr>';
+    html += '<tr><th><?php echo __("adm_th_joined"); ?></th><td>' + _admEsc(du.user_info?.created_at || '-') + '</td></tr>';
     html += '<tr><th><?php echo __("adm_th_category"); ?></th><td>' + (du.deleted_by === 'self' ? '<span class="badge badge-warning"><?php echo __('adm_withdrawal'); ?></span>' : '<span class="badge badge-danger"><?php echo __("adm_deletion"); ?></span>') + '</td></tr>';
-    html += '<tr><th>' + (du.deleted_by === 'self' ? '<?php echo __('adm_th_withdrawal_date'); ?>' : '<?php echo __('adm_th_deletion_date'); ?>') + '</th><td>' + (du.deleted_at || '-') + '</td></tr>';
+    html += '<tr><th>' + (du.deleted_by === 'self' ? '<?php echo __('adm_th_withdrawal_date'); ?>' : '<?php echo __('adm_th_deletion_date'); ?>') + '</th><td>' + _admEsc(du.deleted_at || '-') + '</td></tr>';
     html += '</table>';
     html += '</div>';
     
@@ -8485,7 +9155,7 @@ function renderLoginLogs() {
     html += '</div>';
     
     if (!du || !du.login_logs || du.login_logs.length === 0) {
-        html += '<p class="text-muted">No login records.</p>';
+        html += '<p class="text-muted"><?php echo __h('adm_no_login_records'); ?></p>';
         document.getElementById('loginLogSection').innerHTML = html;
         return;
     }
@@ -8501,10 +9171,10 @@ function renderLoginLogs() {
     var end = Math.min(start + logsPerPage, totalLogs);
     var pageLogs = filteredLogs.slice(start, end);
     
-    html += '<div class="text-muted mb-1" style="font-size:11px;">Total: ' + totalLogs + '' + (loginLogDateFrom || loginLogDateTo ? ' (filtered)' : '') + '</div>';
+    html += '<div class="text-muted mb-1" style="font-size:11px;">' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalLogs + (loginLogDateFrom || loginLogDateTo ? ' (' + <?php echo json_encode(__h('adm_js_filtered')); ?> + ')' : '') + '</div>';   // ★ (2026-11-03 16:43) 영어 고정 문구 → 번역
     
     if (totalLogs === 0) {
-        html += '<p class="text-muted">No login records for this period.</p>';
+        html += '<p class="text-muted"><?php echo __h('adm_no_period_records'); ?></p>';
         document.getElementById('loginLogSection').innerHTML = html;
         return;
     }
@@ -8512,7 +9182,7 @@ function renderLoginLogs() {
     html += '<div class="table-responsive"><table class="table table-sm" style="font-size:12px;">';
     html += '<thead class="thead-light"><tr><th><?php echo __("adm_th_datetime"); ?></th><th><?php echo __("adm_th_ip"); ?></th><th><?php echo __("adm_th_country"); ?></th></tr></thead><tbody>';
     for (var i = 0; i < pageLogs.length; i++) {
-        html += '<tr><td style="white-space:nowrap;">' + (pageLogs[i].datetime || '-') + '</td><td><code>' + (pageLogs[i].ip || '-') + '</code></td><td>' + (pageLogs[i].country || '-') + '</td></tr>';
+        html += '<tr><td style="white-space:nowrap;">' + _admEsc(pageLogs[i].datetime || '-') + '</td><td><code>' + _admEsc(pageLogs[i].ip || '-') + '</code></td><td>' + _admEsc(pageLogs[i].country || '-') + '</td></tr>';
     }
     html += '</tbody></table></div>';
     
@@ -8550,7 +9220,7 @@ function renderActivityLogs() {
     html += '</div>';
     
     if (!du || !du.activity_logs || du.activity_logs.length === 0) {
-        html += '<p class="text-muted">No activity logs.</p>';
+        html += '<p class="text-muted"><?php echo __h('adm_no_activity_records'); ?></p>';
         document.getElementById('activityLogSection').innerHTML = html;
         return;
     }
@@ -8566,10 +9236,10 @@ function renderActivityLogs() {
     var end = Math.min(start + logsPerPage, totalLogs);
     var pageLogs = filteredLogs.slice(start, end);
     
-    html += '<div class="text-muted mb-1" style="font-size:11px;">Total: ' + totalLogs + '' + (activityLogDateFrom || activityLogDateTo ? ' (filtered)' : '') + '</div>';
+    html += '<div class="text-muted mb-1" style="font-size:11px;">' + <?php echo json_encode(__h('adm_js_total')); ?> + ' ' + totalLogs + (activityLogDateFrom || activityLogDateTo ? ' (' + <?php echo json_encode(__h('adm_js_filtered')); ?> + ')' : '') + '</div>';   // ★ (2026-11-03 16:43) 영어 고정 문구 → 번역
     
     if (totalLogs === 0) {
-        html += '<p class="text-muted">No activity records for this period.</p>';
+        html += '<p class="text-muted"><?php echo __h('adm_no_period_activity'); ?></p>';
         document.getElementById('activityLogSection').innerHTML = html;
         return;
     }
@@ -8577,7 +9247,7 @@ function renderActivityLogs() {
     html += '<div class="table-responsive"><table class="table table-sm" style="font-size:12px;">';
     html += '<thead class="thead-light"><tr><th><?php echo __("adm_th_datetime"); ?></th><th><?php echo __('adm_th_activity'); ?></th><th><?php echo __("adm_th_detail"); ?></th></tr></thead><tbody>';
     for (var i = 0; i < pageLogs.length; i++) {
-        html += '<tr><td style="white-space:nowrap;">' + (pageLogs[i].datetime || '-') + '</td><td>' + (pageLogs[i].action || '-') + '</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + (pageLogs[i].detail || '') + '">' + (pageLogs[i].detail || '-') + '</td></tr>';
+        html += '<tr><td style="white-space:nowrap;">' + _admEsc(pageLogs[i].datetime || '-') + '</td><td>' + _admEsc(pageLogs[i].action || '-') + '</td><td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + _admEsc(pageLogs[i].detail || '') + '">' + _admEsc(pageLogs[i].detail || '-') + '</td></tr>';
     }
     html += '</tbody></table></div>';
     
@@ -8660,47 +9330,35 @@ function changeActivityLogPage(page) {
 
 <!-- Terms of service settings tab -->
 <div class="tab-pane fade" id="terms">
-<div class="card m-2">
-<div class="card-header" style="background:#17a2b8;color:#fff;"><?php echo __("adm_card_terms_settings"); ?></div>
-<div class="card-body">
-
+<?php // ★ (2026-11-06 09:55) 시안 B — 폼(save_terms)·칸(terms_enabled·terms_content)은 그대로 ?>
+<div class="ab-page" data-ab-g="member">
 <?php
 $terms_settings = get_app_settings('terms', [
     'enabled' => false,
     'content' => ''
 ]);
 ?>
+<div class="ab-head"><h3><?php echo __("adm_card_terms_settings"); ?></h3></div>
 
-<form method="post">
+<form method="post" data-ab-save>
 <?php echo csrf_field(); ?>
 <input type="hidden" name="mode" value="save_terms">
-
-<div class="form-group">
-    <div class="custom-control custom-checkbox">
-        <input type="checkbox" class="custom-control-input" id="terms_enabled" name="terms_enabled" 
-               <?php echo ($terms_settings['enabled'] ?? false) ? 'checked' : ''; ?>>
-        <label class="custom-control-label" for="terms_enabled">
-            <strong><?php echo __("adm_label_terms_required"); ?></strong>
-        </label>
-    </div>
-    <small class="text-muted"><?php echo __("adm_terms_required_desc"); ?></small>
+<div class="ab-list" style="margin-top:12px">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_label_terms_required"); ?></span><span class="ab-desc"><?php echo __("adm_terms_required_desc"); ?></span></div>
+    <div class="ab-c"><div class="custom-control custom-switch"><input type="checkbox" class="custom-control-input" id="terms_enabled" name="terms_enabled" <?php echo ($terms_settings['enabled'] ?? false) ? 'checked' : ''; ?>><label class="custom-control-label" for="terms_enabled"><span class="sr-only"><?php echo __("adm_label_terms_required"); ?></span></label></div></div>
+  </div>
+  <div class="ab-row ab-wide">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_terms_content_label"); ?></span><span class="ab-desc"><?php echo __("adm_terms_html_help"); ?></span></div>
+    <div class="ab-c"><textarea class="form-control" name="terms_content" rows="14" placeholder="<?php echo __('adm_ph_terms_content'); ?>" aria-label="<?php echo __h('adm_terms_content_label'); ?>"><?php echo h($terms_settings['content'] ?? ''); ?></textarea></div>
+  </div>
 </div>
-
-<div class="form-group">
-    <label><strong><?php echo __("adm_terms_content_label"); ?></strong></label>
-    <textarea class="form-control" name="terms_content" rows="15" style="width:100%;" placeholder="<?php echo __('adm_ph_terms_content'); ?>"><?php echo h($terms_settings['content'] ?? ''); ?></textarea>
-    <small class="text-muted"><?php echo __("adm_terms_html_help"); ?></small>
-</div>
-
-<button type="submit" class="btn btn-primary btn-block"><?php echo __("adm_btn_save_terms"); ?></button>
-
+<div class="ab-foot ab-orig-foot" style="border:0;background:transparent;padding:10px 0 0"><button type="submit" class="btn btn-primary ab-orig-submit"><?php echo __("adm_btn_save_terms"); ?></button></div>
 </form>
 
-<hr>
-
-<h6><?php echo __("adm_heading_preview"); ?></h6>
-<div class="border p-3 bg-light" style="max-height:300px;overflow-y:auto;font-size:13px;width:100%;">
-    <?php 
+<div class="ab-sec"><?php echo __("adm_heading_preview"); ?></div>
+<div class="ab-list"><div style="max-height:300px;overflow-y:auto;font-size:13px;padding:12px 16px;">
+    <?php
     $preview = $terms_settings['content'] ?? '';
     if (empty($preview)) {
         echo '<span class="text-muted">' . __("adm_no_terms_content") . '</span>';
@@ -8708,13 +9366,11 @@ $terms_settings = get_app_settings('terms', [
         echo nl2br(h($preview));
     }
     ?>
-</div>
-
-</div>
+</div></div>
 </div>
 </div>
 
-<div class="tab-pane fade" id="security">
+<div class="tab-pane fade ab-gen" data-ab-g="security" id="security">
 <div class="container-fluid">
 
 <?php
@@ -8736,7 +9392,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
 <div class="card mb-3">
 <div class="card-header bg-danger text-white"><?php echo __("adm_card_security_settings"); ?></div>
 <div class="card-body">
-<form method="POST">
+<form method="POST" data-ab-save>
 <input type="hidden" name="mode" value="security_settings">
 <input type="hidden" name="csrf_token" value="<?php echo generate_csrf_token(); ?>">
 
@@ -8811,7 +9467,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
                 <input type="radio" class="custom-control-input" id="geoip_api" name="geoip_source" value="api"
                        <?php echo $geoipSource === 'api' ? 'checked' : ''; ?>>
                 <label class="custom-control-label" for="geoip_api">
-                    🌐 External API
+                    <?php echo __h('adm_sec_external_api'); ?>
                 </label>
             </div>
         </div>
@@ -8820,7 +9476,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
                 <input type="radio" class="custom-control-input" id="geoip_mmdb" name="geoip_source" value="mmdb"
                        <?php echo $geoipSource === 'mmdb' ? 'checked' : ''; ?>>
                 <label class="custom-control-label" for="geoip_mmdb">
-                    📦 MMDB (Recommended)
+                    📦 MMDB (<?php echo __h('adm_geo_recommended'); ?>)
                 </label>
             </div>
         </div>
@@ -8829,7 +9485,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
                 <input type="radio" class="custom-control-input" id="geoip_dat" name="geoip_source" value="dat"
                        <?php echo $geoipSource === 'dat' ? 'checked' : ''; ?>>
                 <label class="custom-control-label" for="geoip_dat">
-                    📁 DAT (Legacy)
+                    📁 DAT (<?php echo __h('adm_geo_legacy'); ?>)
                 </label>
             </div>
         </div>
@@ -8838,7 +9494,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
                 <input type="radio" class="custom-control-input" id="geoip_csv" name="geoip_source" value="csv"
                        <?php echo $geoipSource === 'csv' ? 'checked' : ''; ?>>
                 <label class="custom-control-label" for="geoip_csv">
-                    📄 CSV File
+                    📄 CSV <?php echo __h('adm_geo_file'); ?>
                 </label>
             </div>
         </div>
@@ -8851,7 +9507,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
                value="<?php echo h($ipBlockSettings['geoip_mmdb_path'] ?? ''); ?>"
                placeholder="<?php echo __('adm_ph_geoip_mmdb'); ?>">
         <small class="text-info">
-            📥 <a href="https://dev.maxmind.com/geoip/geolite2-free-geolocation-data" target="_blank">MaxMind GeoLite2</a>에서 무료 다운로드 (회원가입 필요)
+            📥 <a href="https://dev.maxmind.com/geoip/geolite2-free-geolocation-data" target="_blank">MaxMind GeoLite2</a><?php echo __h("adm_geoip_free_dl"); /* ★ (2026-11-02 10:05) 언어 키로 */ ?>
         </small>
     </div>
     
@@ -8878,7 +9534,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
         <input type="checkbox" class="custom-control-input" id="block_unknown" name="block_unknown" 
                <?php echo ($ipBlockSettings['block_unknown'] ?? false) ? 'checked' : ''; ?>>
         <label class="custom-control-label" for="block_unknown">
-            🚫 Block UNKNOWN Country IPs
+            <?php echo __h('adm_sec_block_unknown'); ?>
         </label>
     </div>
     <small class="text-warning"><?php echo __("adm_sec_unknown_warning"); ?></small>
@@ -9054,17 +9710,16 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
         </label>
     </div>
     <small class="text-muted d-block mb-2">
-        <strong>On (recommended):</strong> When using Cloudflare, Nginx reverse proxy, load balancer<br>
-        <strong>Off:</strong> Direct connection, prevents IP spoofing (REMOTE_ADDR only)
+        <strong><?php echo __h('adm_sec_proxy_on'); ?></strong> <?php echo __h('adm_sec_proxy_on_desc'); ?><br>
+        <strong><?php echo __h('adm_sec_proxy_off'); ?></strong> <?php echo __h('adm_sec_proxy_off_desc'); ?>
     </small>
     <div class="alert alert-info py-2 small">
-        <strong>⚠️ Warning:</strong> If enabled without a proxy, 
-        attackers can spoof IPs via X-Forwarded-For header.
+        <strong>⚠️ <?php echo __h('adm_sec_proxy_warn'); ?></strong> <?php echo __h('adm_sec_proxy_warn_desc'); ?>
     </div>
 </div>
 
 </fieldset>
-<button type="submit" class="btn btn-danger btn-block"><?php echo __("adm_btn_save_security"); ?></button>
+<button type="submit" class="ab-orig-submit btn btn-danger btn-block"><?php echo __("adm_btn_save_security"); ?></button>
 </form>
 </div>
 </div>
@@ -9145,7 +9800,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
     <?php foreach ($lockedIPs as $locked): ?>
         <tr>
             <td><code><?php echo h($locked['ip']); ?></code></td>
-            <td><?php echo $locked['remaining'] == -1 ? '<span class="badge badge-dark">♾️ Unlimited</span>' : ceil($locked['remaining'] / 60) . 'm'; ?></td>
+            <td><?php echo $locked['remaining'] == -1 ? '<span class="badge badge-dark">' . __h('adm_lock_unlimited') . '</span>' : ceil($locked['remaining'] / 60) . __h('adm_unit_min'); ?></td>
             <td>
                 <form method="POST" style="display:inline;" onsubmit="return confirm('<?php echo __("adm_sec_confirm_unlock"); ?>');">
                     <input type="hidden" name="mode" value="unlock_ip">
@@ -9169,11 +9824,11 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
     <!-- Filter -->
     <div class="mb-2 d-flex flex-wrap align-items-center" style="gap: 8px; font-size: 0.85em;">
         <div class="input-group input-group-sm" style="width: auto;">
-            <div class="input-group-prepend"><span class="input-group-text">Start</span></div>
+            <div class="input-group-prepend"><span class="input-group-text"><?php echo __h('adm_date_start'); ?></span></div>
             <input type="date" class="form-control" id="block_log_from" style="width: 130px;">
         </div>
         <div class="input-group input-group-sm" style="width: auto;">
-            <div class="input-group-prepend"><span class="input-group-text">End</span></div>
+            <div class="input-group-prepend"><span class="input-group-text"><?php echo __h('adm_date_end'); ?></span></div>
             <input type="date" class="form-control" id="block_log_to" style="width: 130px;">
         </div>
         <button type="button" class="btn btn-sm btn-primary" onclick="loadBlockLogs(1)"><?php echo __("adm_btn_search"); ?></button>
@@ -9200,7 +9855,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
         <?php else: ?>
             <?php foreach ($blockLogs['logs'] as $idx => $log): ?>
             <tr>
-                <td><input type="checkbox" class="block-log-check" value="<?php echo $idx; ?>"></td>
+                <td><input type="checkbox" class="block-log-check" value="<?php echo h((string)($log['_i'] ?? '')); ?>"></td>
                 <td><?php echo h(substr($log['time'] ?? '', 5)); ?></td>
                 <td><code><?php echo h($log['ip'] ?? ''); ?></code></td>
                 <td><?php echo h($log['country'] ?? ''); ?></td>
@@ -9213,7 +9868,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
     </div>
     <!-- Pagination -->
     <div class="mt-2 d-flex justify-content-between align-items-center" style="font-size: 0.85em;">
-        <small class="text-muted">Page <span id="block_log_page">1</span> / <span id="block_log_pages"><?php echo $blockLogs['pages'] ?? 1; ?></span></small>
+        <small class="text-muted"><?php echo __h('adm_dup_page'); ?> <span id="block_log_page">1</span> / <span id="block_log_pages"><?php echo max(1, (int)($blockLogs['pages'] ?? 1)); ?></span></small>
         <div class="btn-group btn-group-sm">
             <button type="button" class="btn btn-outline-secondary" onclick="loadBlockLogs('prev')" id="block_log_prev"><?php echo __("adm_btn_prev"); ?></button>
             <button type="button" class="btn btn-outline-secondary" onclick="loadBlockLogs('next')" id="block_log_next"><?php echo __("adm_btn_next"); ?></button>
@@ -9229,11 +9884,11 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
     <!-- Filter -->
     <div class="mb-2 d-flex flex-wrap align-items-center" style="gap: 8px; font-size: 0.85em;">
         <div class="input-group input-group-sm" style="width: auto;">
-            <div class="input-group-prepend"><span class="input-group-text">Start</span></div>
+            <div class="input-group-prepend"><span class="input-group-text"><?php echo __h('adm_date_start'); ?></span></div>
             <input type="date" class="form-control" id="bf_log_from" style="width: 130px;">
         </div>
         <div class="input-group input-group-sm" style="width: auto;">
-            <div class="input-group-prepend"><span class="input-group-text">End</span></div>
+            <div class="input-group-prepend"><span class="input-group-text"><?php echo __h('adm_date_end'); ?></span></div>
             <input type="date" class="form-control" id="bf_log_to" style="width: 130px;">
         </div>
         <button type="button" class="btn btn-sm btn-primary" onclick="loadBfLogs(1)"><?php echo __("adm_btn_search"); ?></button>
@@ -9260,7 +9915,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
         <?php else: ?>
             <?php foreach ($bruteforceLogs['logs'] as $idx => $log): ?>
             <tr>
-                <td><input type="checkbox" class="bf-log-check" value="<?php echo $idx; ?>"></td>
+                <td><input type="checkbox" class="bf-log-check" value="<?php echo h((string)($log['_i'] ?? '')); ?>"></td>
                 <td><?php echo h(substr($log['time'] ?? '', 5, 11)); ?></td>
                 <td><code><?php echo h($log['ip'] ?? ''); ?></code></td>
                 <td><small><?php echo h($log['username'] ?? '-'); ?></small></td>
@@ -9273,7 +9928,7 @@ $currentCountry = $ipBlocker->getCountryByIP($currentIP);
     </div>
     <!-- Pagination -->
     <div class="mt-2 d-flex justify-content-between align-items-center" style="font-size: 0.85em;">
-        <small class="text-muted">Page <span id="bf_log_page">1</span> / <span id="bf_log_pages"><?php echo $bruteforceLogs['pages'] ?? 1; ?></span></small>
+        <small class="text-muted"><?php echo __h('adm_dup_page'); ?> <span id="bf_log_page">1</span> / <span id="bf_log_pages"><?php echo max(1, (int)($bruteforceLogs['pages'] ?? 1)); ?></span></small>
         <div class="btn-group btn-group-sm">
             <button type="button" class="btn btn-outline-secondary" onclick="loadBfLogs('prev')" id="bf_log_prev"><?php echo __("adm_btn_prev"); ?></button>
             <button type="button" class="btn btn-outline-secondary" onclick="loadBfLogs('next')" id="bf_log_next"><?php echo __("adm_btn_next"); ?></button>
@@ -9423,6 +10078,16 @@ $blocker->clearLoginAttempts($ip);</code></pre>
         bruteforceSwitch.addEventListener('change', toggleBruteforceSettings);
         toggleBruteforceSettings();
     }
+
+    // ★ (2026-11-02 08:54) 저장할 때 흐리게 막아 둔 칸도 같이 보냄 — 막힌(disabled) 칸은 전송되지 않아 IP 차단·무차별 대입을 끄고 저장하면 목록·메시지·횟수 설정이 지워지던 문제
+    [settingsFieldset, bruteforceSettings].forEach(function(el) {
+        var f = el && el.closest ? el.closest('form') : null;
+        if (!f || f.dataset.mcKeepDisabled) return;
+        f.dataset.mcKeepDisabled = '1';
+        f.addEventListener('submit', function() {
+            f.querySelectorAll('input:disabled, textarea:disabled, select:disabled').forEach(function(x) { x.disabled = false; });
+        });
+    });
     
     // GeoIP 소스 선택 토글
     const geoipRadios = document.querySelectorAll('input[name="geoip_source"]');
@@ -9556,9 +10221,15 @@ function toggleAllCountryButtons(select) {
 }
 
 // ✅ 차단 로그 페이지네이션 및 삭제
-let blockLogPage = 1;
-let blockLogPages = <?php echo $blockLogs['pages'] ?? 1; ?>;
+let blockLogPage = 1; // ★ (2026-11-02 20:06) 로그가 없으면 쪽 수가 0 이라 'Page 1 / 0'·다음을 누르면 0쪽이던 것 — 최소 1
+let blockLogPages = <?php echo max(1, (int)($blockLogs['pages'] ?? 1)); ?>;
 
+// ★ (2026-10-30) 관리자 화면 공통 HTML 이스케이프(로그·사용자 입력을 innerHTML 로 넣을 때)
+function _admEsc(v) {
+    return String(v == null ? '' : v).replace(/[&<>"'`]/g, function (c) {
+        return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c];
+    });
+}
 function loadBlockLogs(page) {
     if (page === 'prev') page = Math.max(1, blockLogPage - 1);
     else if (page === 'next') page = Math.min(blockLogPages, blockLogPage + 1);
@@ -9570,6 +10241,7 @@ function loadBlockLogs(page) {
     fetch(`admin.php?ajax_security_logs=1&type=block&page=${page}&date_from=${dateFrom}&date_to=${dateTo}`)
         .then(r => r.json())
         .then(data => {
+            if (page > 1 && data.total > 0 && page > (data.pages || 1)) { loadBlockLogs(data.pages || 1); return; } // ★ (2026-11-02 21:11) 마지막 쪽을 다 지우면 남은 기록이 있어도 빈 쪽이 나왔음 → 마지막 쪽으로
             blockLogPage = page;
             blockLogPages = data.pages || 1;
             
@@ -9581,13 +10253,14 @@ function loadBlockLogs(page) {
             if (!data.logs || data.logs.length === 0) {
                 tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted py-3"><?php echo __("adm_sec_no_block_logs"); ?></td></tr>';
             } else {
+                // ★ (2026-10-30) 로그 값은 외부 입력(시도한 아이디 등)이라 이스케이프, 체크값은 서버가 준 전체 위치(_i)
                 tbody.innerHTML = data.logs.map((log, idx) => `
                     <tr>
-                        <td><input type="checkbox" class="block-log-check" value="${idx}"></td>
-                        <td>${(log.time || '').substring(5)}</td>
-                        <td><code>${log.ip || ''}</code></td>
-                        <td>${log.country || ''}</td>
-                        <td><small>${(log.reason || '').split(':')[0]}</small></td>
+                        <td><input type="checkbox" class="block-log-check" value="${_admEsc(log._i || '')}"></td>
+                        <td>${_admEsc((log.time || '').substring(5))}</td>
+                        <td><code>${_admEsc(log.ip || '')}</code></td>
+                        <td>${_admEsc(log.country || '')}</td>
+                        <td><small>${_admEsc((log.reason || '').split(':')[0])}</small></td>
                     </tr>
                 `).join('');
             }
@@ -9605,7 +10278,7 @@ function toggleAllBlockLogChecks(master) {
 }
 
 function deleteSelectedBlockLogs() {
-    const indices = Array.from(document.querySelectorAll('.block-log-check:checked')).map(cb => parseInt(cb.value));
+    const indices = Array.from(document.querySelectorAll('.block-log-check:checked')).map(cb => cb.value); // ★ (2026-10-30) 내용 지문(문자열)
     if (indices.length === 0) return alert('<?php echo __("adm_sec_no_selection"); ?>');
     if (!confirm(`${indices.length} <?php echo __('adm_sec_confirm_delete_n'); ?>`)) return;
     
@@ -9650,7 +10323,7 @@ function deleteAllBlockLogs() {
 
 // ✅ 브루트포스 로그 페이지네이션 및 삭제
 let bfLogPage = 1;
-let bfLogPages = <?php echo $bruteforceLogs['pages'] ?? 1; ?>;
+let bfLogPages = <?php echo max(1, (int)($bruteforceLogs['pages'] ?? 1)); ?>;
 
 function loadBfLogs(page) {
     if (page === 'prev') page = Math.max(1, bfLogPage - 1);
@@ -9663,6 +10336,7 @@ function loadBfLogs(page) {
     fetch(`admin.php?ajax_security_logs=1&type=bruteforce&page=${page}&date_from=${dateFrom}&date_to=${dateTo}`)
         .then(r => r.json())
         .then(data => {
+            if (page > 1 && data.total > 0 && page > (data.pages || 1)) { loadBfLogs(data.pages || 1); return; } // ★ (2026-11-02 21:11) 위와 같음
             bfLogPage = page;
             bfLogPages = data.pages || 1;
             
@@ -9676,11 +10350,11 @@ function loadBfLogs(page) {
             } else {
                 tbody.innerHTML = data.logs.map((log, idx) => `
                     <tr>
-                        <td><input type="checkbox" class="bf-log-check" value="${idx}"></td>
-                        <td>${(log.time || '').substring(5, 16)}</td>
-                        <td><code>${log.ip || ''}</code></td>
-                        <td><small>${log.username || '-'}</small></td>
-                        <td><span class="badge badge-danger">${log.attempts || 0}</span></td>
+                        <td><input type="checkbox" class="bf-log-check" value="${_admEsc(log._i || '')}"></td>
+                        <td>${_admEsc((log.time || '').substring(5, 16))}</td>
+                        <td><code>${_admEsc(log.ip || '')}</code></td>
+                        <td><small>${_admEsc(log.username || '-')}</small></td>
+                        <td><span class="badge badge-danger">${(log.attempts || 0)|0}</span></td>
                     </tr>
                 `).join('');
             }
@@ -9698,7 +10372,7 @@ function toggleAllBfLogChecks(master) {
 }
 
 function deleteSelectedBfLogs() {
-    const indices = Array.from(document.querySelectorAll('.bf-log-check:checked')).map(cb => parseInt(cb.value));
+    const indices = Array.from(document.querySelectorAll('.bf-log-check:checked')).map(cb => cb.value); // ★ (2026-10-30) 내용 지문(문자열)
     if (indices.length === 0) return alert('<?php echo __("adm_sec_no_selection"); ?>');
     if (!confirm(`${indices.length} <?php echo __('adm_sec_confirm_delete_n'); ?>`)) return;
     
@@ -9747,7 +10421,8 @@ function deleteAllBfLogs() {
 
 <!-- SMTP settings -->
 <div class="tab-pane fade" id="smtp">
-<div class="container-fluid">
+<?php // ★ (2026-11-06 09:40) 시안 B(설정 목록형) — 칸 이름·값·폼(smtp_change / smtp_test)은 예전 그대로, 배치만 ?>
+<div class="ab-page" data-ab-g="security">
 
 <?php
 $smtp = get_app_settings('smtp', []);
@@ -9760,137 +10435,84 @@ $smtp_from_email = $smtp['from_email'] ?? '';
 $smtp_from_name = $smtp['from_name'] ?? 'myComix';
 ?>
 
-<div class="card mb-3">
-<div class="card-header bg-primary text-white"><?php echo __("adm_card_smtp_settings"); ?></div>
-<div class="card-body">
-    <div class="alert alert-info py-2 mb-3" style="font-size:13px;">
-        <strong><?php echo __("adm_smtp_purpose_title"); ?></strong> | <?php echo __("adm_smtp_purpose_desc"); ?><br>
-        <?php echo __("adm_smtp_providers"); ?>
-    </div>
-    
-    <form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
-    <?php echo csrf_field(); ?>
-    <input type="hidden" name="mode" value="smtp_change">
-    
-    <div class="form-group">
-        <div class="custom-control custom-switch">
-            <input type="checkbox" class="custom-control-input" id="smtp_enabled" name="smtp_enabled" <?php echo $smtp_enabled ? 'checked' : ''; ?>>
-            <label class="custom-control-label" for="smtp_enabled"><strong><?php echo __("adm_smtp_enable"); ?></strong></label>
-        </div>
-        <small class="text-muted"><?php echo __("adm_smtp_disabled_note"); ?></small>
-    </div>
-    
-    <hr>
-    
-    <div class="row">
-        <div class="col-md-8">
-            <div class="form-group">
-                <label><strong><?php echo __("adm_smtp_host"); ?></strong></label>
-                <input type="text" class="form-control" name="smtp_host" value="<?php echo h($smtp_host); ?>" placeholder="<?php echo __('adm_ph_smtp_host'); ?>">
-                <small class="text-muted">
-                    Gmail: smtp.gmail.com | Naver: smtp.naver.com | Daum: smtp.daum.net
-                </small>
-            </div>
-        </div>
-        <div class="col-md-4">
-            <div class="form-group">
-                <label><strong><?php echo __("adm_th_port"); ?></strong></label>
-                <input type="number" class="form-control" name="smtp_port" value="<?php echo (int)$smtp_port; ?>" placeholder="587">
-                <small class="text-muted">TLS: 587 | SSL: 465</small>
-            </div>
-        </div>
-    </div>
-    
-    <div class="form-group">
-        <label><strong><?php echo __("adm_smtp_encryption_label"); ?></strong></label>
-        <div class="btn-group btn-group-toggle d-block" data-toggle="buttons">
-            <label class="btn btn-outline-secondary <?php echo $smtp_encryption === 'tls' ? 'active' : ''; ?>">
-                <input type="radio" name="smtp_encryption" value="tls" <?php echo $smtp_encryption === 'tls' ? 'checked' : ''; ?>> TLS (<?php echo __("adm_recommended"); ?>)
-            </label>
-            <label class="btn btn-outline-secondary <?php echo $smtp_encryption === 'ssl' ? 'active' : ''; ?>">
-                <input type="radio" name="smtp_encryption" value="ssl" <?php echo $smtp_encryption === 'ssl' ? 'checked' : ''; ?>> SSL
-            </label>
-            <label class="btn btn-outline-secondary <?php echo $smtp_encryption === 'none' ? 'active' : ''; ?>">
-                <input type="radio" name="smtp_encryption" value="none" <?php echo $smtp_encryption === 'none' ? 'checked' : ''; ?>> <?php echo __('adm_none'); ?>
-            </label>
-        </div>
-    </div>
-    
-    <hr>
-    
-    <div class="row">
-        <div class="col-md-6">
-            <div class="form-group">
-                <label><strong><?php echo __("adm_smtp_username"); ?></strong></label>
-                <input type="text" class="form-control" name="smtp_username" value="<?php echo h($smtp_username); ?>" placeholder="<?php echo __('adm_ph_smtp_user'); ?>">
-                <small class="text-muted"><?php echo __("adm_smtp_email_note"); ?></small>
-            </div>
-        </div>
-        <div class="col-md-6">
-            <div class="form-group">
-                <label><strong><?php echo __("adm_smtp_password"); ?></strong> 
-                    <?php if (!empty($smtp['password'])): ?>
-                    <span class="badge badge-success"><?php echo __("adm_smtp_saved"); ?></span>
-                    <?php else: ?>
-                    <span class="badge badge-warning"><?php echo __("adm_smtp_not_set"); ?></span>
-                    <?php endif; ?>
-                </label>
-                <input type="password" class="form-control" name="smtp_password" autocomplete="new-password" placeholder="<?php echo !empty($smtp['password']) ? __('adm_ph_smtp_pw_change') : __('adm_ph_smtp_pw_enter'); ?>">
-                <small class="text-muted"><?php echo __("adm_smtp_gmail_note"); ?></small>
-            </div>
-        </div>
-    </div>
-    
-    <hr>
-    
-    <div class="row">
-        <div class="col-md-6">
-            <div class="form-group">
-                <label><strong><?php echo __("adm_smtp_sender"); ?></strong></label>
-                <input type="email" class="form-control" name="smtp_from_email" value="<?php echo h($smtp_from_email); ?>" placeholder="e.g. noreply@example.com">
-                <small class="text-muted"><?php echo __("adm_smtp_sender_note"); ?></small>
-            </div>
-        </div>
-        <div class="col-md-6">
-            <div class="form-group">
-                <label><strong><?php echo __("adm_smtp_sender_name"); ?></strong></label>
-                <input type="text" class="form-control" name="smtp_from_name" value="<?php echo h($smtp_from_name); ?>" placeholder="myComix">
-            </div>
-        </div>
-    </div>
-    
-    <button type="submit" class="btn btn-primary btn-block"><?php echo __("adm_btn_save_smtp"); ?></button>
-    </form>
-</div>
+<div class="ab-head"><h3><?php echo __("adm_card_smtp_settings"); ?></h3></div>
+<p class="ab-lead"><strong><?php echo __("adm_smtp_purpose_title"); ?></strong> · <?php echo __("adm_smtp_purpose_desc"); ?> <?php echo __("adm_smtp_providers"); ?></p><?php // ★ (2026-11-06 fix24) 예전 안내의 '용도' 제목도 다시 ?>
+
+<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post" data-ab-save>
+<?php echo csrf_field(); ?>
+<input type="hidden" name="mode" value="smtp_change">
+
+<div class="ab-list" style="margin-top:12px">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_enable"); ?></span><span class="ab-desc"><?php echo __("adm_smtp_disabled_note"); ?></span></div>
+    <div class="ab-c"><div class="custom-control custom-switch"><input type="checkbox" class="custom-control-input" id="smtp_enabled" name="smtp_enabled" <?php echo $smtp_enabled ? 'checked' : ''; ?>><label class="custom-control-label" for="smtp_enabled"><span class="sr-only"><?php echo __("adm_smtp_enable"); ?></span></label></div></div>
+  </div>
 </div>
 
-<!-- Test email send -->
-<div class="card mb-3">
-<div class="card-header bg-success text-white"><?php echo __("adm_card_smtp_test"); ?></div>
-<div class="card-body">
-    <form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
-    <?php echo csrf_field(); ?>
-    <input type="hidden" name="mode" value="smtp_test">
-    
-    <div class="form-group">
-        <label><strong><?php echo __("adm_smtp_test_email"); ?></strong></label>
-        <div class="input-group">
-            <input type="email" class="form-control" name="test_email" placeholder="test@example.com" required>
-            <div class="input-group-append">
-                <button type="submit" class="btn btn-success"><?php echo __("adm_btn_test_smtp"); ?></button>
-            </div>
-        </div>
-        <small class="text-muted"><?php echo __("adm_smtp_save_first_note"); ?></small>
+<div class="ab-sec">🖥️ <?php echo __h('ab_smtp_sec_server'); ?></div> <?php /* ★ fix39 머리 아이콘(다른 묶음 머리와 같게) */ ?>
+<div class="ab-list">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_host"); ?></span><span class="ab-desc">Gmail: smtp.gmail.com · Naver: smtp.naver.com · Daum: smtp.daum.net</span></div>
+    <div class="ab-c"><input type="text" class="form-control" name="smtp_host" value="<?php echo h($smtp_host); ?>" placeholder="<?php echo __('adm_ph_smtp_host'); ?>" aria-label="<?php echo __h('adm_smtp_host'); ?>"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_th_port"); ?></span><span class="ab-desc">TLS: 587 · SSL: 465</span></div>
+    <div class="ab-c"><input type="number" class="form-control ab-num" name="smtp_port" value="<?php echo (int)$smtp_port; ?>" placeholder="587" aria-label="<?php echo __h('adm_th_port'); ?>"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_encryption_label"); ?></span></div>
+    <div class="ab-c">
+      <div class="btn-group btn-group-toggle" data-toggle="buttons">
+        <label class="btn btn-sm btn-outline-secondary <?php echo $smtp_encryption === 'tls' ? 'active' : ''; ?>"><input type="radio" name="smtp_encryption" value="tls" <?php echo $smtp_encryption === 'tls' ? 'checked' : ''; ?>> TLS (<?php echo __("adm_recommended"); ?>)</label>
+        <label class="btn btn-sm btn-outline-secondary <?php echo $smtp_encryption === 'ssl' ? 'active' : ''; ?>"><input type="radio" name="smtp_encryption" value="ssl" <?php echo $smtp_encryption === 'ssl' ? 'checked' : ''; ?>> SSL</label>
+        <label class="btn btn-sm btn-outline-secondary <?php echo $smtp_encryption === 'none' ? 'active' : ''; ?>"><input type="radio" name="smtp_encryption" value="none" <?php echo $smtp_encryption === 'none' ? 'checked' : ''; ?>> <?php echo __('adm_none'); ?></label>
+      </div>
     </div>
-    </form>
-</div>
+  </div>
 </div>
 
-<!-- SMTP setup guide -->
-<div class="card mb-3">
-<div class="card-header bg-secondary text-white"><?php echo __("adm_card_smtp_guide"); ?></div>
-<div class="card-body p-0">
-<table class="table table-sm table-bordered mb-0" style="font-size:13px;">
+<div class="ab-sec">🔑 <?php echo __h('ab_smtp_sec_account'); ?></div> <?php /* ★ fix39 머리 아이콘(다른 묶음 머리와 같게) */ ?>
+<div class="ab-list">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_username"); ?></span><span class="ab-desc"><?php echo __("adm_smtp_email_note"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" name="smtp_username" value="<?php echo h($smtp_username); ?>" placeholder="<?php echo __('adm_ph_smtp_user'); ?>" aria-label="<?php echo __h('adm_smtp_username'); ?>"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_password"); ?>
+      <?php if (!empty($smtp['password'])): ?><span class="badge badge-success"><?php echo __("adm_smtp_saved_badge"); ?></span><?php else: ?><span class="badge badge-warning"><?php echo __("adm_smtp_not_set"); ?></span><?php endif; ?></span>
+      <span class="ab-desc"><?php echo __("adm_smtp_gmail_note"); ?></span></div>
+    <div class="ab-c"><input type="password" class="form-control" name="smtp_password" autocomplete="new-password" placeholder="<?php echo !empty($smtp['password']) ? __('adm_ph_smtp_pw_change') : __('adm_ph_smtp_pw_enter'); ?>" aria-label="<?php echo __h('adm_smtp_password'); ?>"></div>
+  </div>
+</div>
+
+<div class="ab-sec">✉️ <?php echo __h('ab_smtp_sec_sender'); ?></div> <?php /* ★ fix39 머리 아이콘(다른 묶음 머리와 같게) */ ?>
+<div class="ab-list">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_sender"); ?></span><span class="ab-desc"><?php echo __("adm_smtp_sender_note"); ?></span></div>
+    <div class="ab-c"><input type="email" class="form-control" name="smtp_from_email" value="<?php echo h($smtp_from_email); ?>" placeholder="<?php echo __h('adm_eg'); ?> noreply@example.com" aria-label="<?php echo __h('adm_smtp_sender'); ?>"></div>
+  </div>
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_sender_name"); ?></span></div>
+    <div class="ab-c"><input type="text" class="form-control" name="smtp_from_name" value="<?php echo h($smtp_from_name); ?>" placeholder="myComix" aria-label="<?php echo __h('adm_smtp_sender_name'); ?>"></div>
+  </div>
+</div>
+<div class="ab-foot ab-orig-foot" style="border:0;background:transparent;padding:10px 0 0"><button type="submit" class="btn btn-primary ab-orig-submit"><?php echo __("adm_btn_save_smtp"); ?></button></div>
+</form>
+
+<div class="ab-sec"><?php echo __("adm_card_smtp_test"); ?></div>
+<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
+<?php echo csrf_field(); ?>
+<input type="hidden" name="mode" value="smtp_test">
+<div class="ab-list">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __("adm_smtp_test_email"); ?></span><span class="ab-desc"><?php echo __("adm_smtp_save_first_note"); ?></span></div>
+    <div class="ab-c"><div class="input-group"><input type="email" class="form-control" name="test_email" placeholder="test@example.com" required aria-label="<?php echo __h('adm_smtp_test_email'); ?>"><div class="input-group-append"><button type="submit" class="btn btn-outline-primary"><?php echo __("adm_btn_test_smtp"); ?></button></div></div></div>
+  </div>
+</div>
+</form>
+
+<div class="ab-sec"><?php echo __("adm_card_smtp_guide"); ?></div>
+<div class="ab-list"><div class="table-responsive"><table class="table table-sm mb-0" style="font-size:13px;">
 <thead class="thead-light">
 <tr><th><?php echo __("adm_th_service"); ?></th><th><?php echo __("adm_smtp_host"); ?></th><th><?php echo __("adm_th_port"); ?></th><th><?php echo __("adm_th_encryption"); ?></th><th><?php echo __("adm_th_note"); ?></th></tr>
 </thead>
@@ -9900,22 +10522,20 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
 <tr><td><strong>Daum/Kakao</strong></td><td>smtp.daum.net</td><td>465</td><td>SSL</td><td><?php echo __("adm_smtp_guide_daum"); ?></td></tr>
 <tr><td><strong>Outlook</strong></td><td>smtp.office365.com</td><td>587</td><td>TLS</td><td><?php echo __("adm_smtp_guide_outlook"); ?></td></tr>
 </tbody>
-</table>
-</div>
-</div>
+</table></div></div>
 
-<div class="alert alert-warning" style="font-size:13px;">
+<div class="ab-note ab-warn">
     <strong><?php echo __("adm_smtp_gmail_warning"); ?></strong><br>
-    1. In your Google account, <strong><?php echo __("adm_user_2fa"); ?></strong> <?php echo __('adm_smtp_step1'); ?><br>
-    2. <a href="https://myaccount.google.com/apppasswords" target="_blank"><?php echo __("adm_smtp_app_pw"); ?></a>를 생성하여 SMTP 비밀번호로 사용하세요.<br>
-    3. Regular passwords are blocked by security policy.
+    1. <?php echo __h('adm_smtp_step1_pre'); ?> <strong><?php echo __("adm_user_2fa"); ?></strong> <?php echo __('adm_smtp_step1'); ?><br>
+    2. <a href="https://myaccount.google.com/apppasswords" target="_blank" rel="noopener"><?php echo __("adm_smtp_app_pw"); ?></a><?php echo __h("adm_smtp_app_pw_use"); ?><br>
+    3. <?php echo __h('adm_smtp_step3'); ?>
 </div>
 
 </div>
 </div>
 
 <!-- Find duplicates -->
-<div class="tab-pane fade" id="duplicates">
+<div class="tab-pane fade ab-gen" data-ab-g="content" id="duplicates">
 <div class="container-fluid">
 
 <div class="card mb-3">
@@ -10116,14 +10736,22 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
             return;
         }
         
-        if (!confirm(selected.length + ' <?php echo __("adm_dup_confirm_delete"); ?>')) {
+        // ★ (2026-11-04 09:37) 어떤 그룹이 통째로(원본까지) 지워지면 확인 창에 한 줄 더
+        let _wholeGroups = 0;
+        if (duplicateData && Array.isArray(duplicateData.groups)) {
+            duplicateData.groups.forEach(g => { if (g && Array.isArray(g.files) && g.files.length && g.files.every(f => checkedFiles.has(f.path))) _wholeGroups++; });
+        }
+        const _wholeMsg = _wholeGroups > 0 ? '\n\n' + <?php echo json_encode(__('adm_dup_confirm_whole_group')); ?>.replace('%d', _wholeGroups) : '';
+        if (!confirm(selected.length + ' <?php echo __("adm_dup_confirm_delete"); ?>' + _wholeMsg)) {
             return;
         }
         
         deleteFiles(selected);
     });
     
+    let searchGen = 0; // ★ (2026-11-02 10:04) 검색마다 번호 — 취소 직후 다시 시작하면 옛 반복이 되살아나 같은 진행 파일을 함께 쓰던 것
     async function startSearch() {
+        const gen = ++searchGen;
         isSearching = true;
         isCancelled = false;
         
@@ -10148,13 +10776,13 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
                 throw new Error(collectResult.error);
             }
             
-            if (isCancelled) return;
+            if (isCancelled || gen !== searchGen) return;
             
-            updateProgress(15, `Files: ${collectResult.total_files.toLocaleString()}, Candidates: ${collectResult.candidates.toLocaleString()}`);
+            updateProgress(15, <?php echo json_encode(__('adm_js_files')); ?> + ' ' + collectResult.total_files.toLocaleString() + ', ' + <?php echo json_encode(__('adm_js_candidates')); ?> + ' ' + collectResult.candidates.toLocaleString());
             
             // Step 2: 배치별 해시 계산
             let done = false;
-            while (!done && !isCancelled) {
+            while (!done && !isCancelled && gen === searchGen) {
                 const processData = new FormData();
                 processData.append('action', 'duplicate_process');
                 processData.append('csrf_token', document.querySelector('input[name="csrf_token"]').value);
@@ -10164,6 +10792,7 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
                     body: processData
                 });
                 const processResult = await processResp.json();
+                if (gen !== searchGen) return; // 그사이 새 검색이 시작됨
                 
                 if (processResult.error) {
                     throw new Error(processResult.error);
@@ -10175,17 +10804,19 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
                 } else {
                     updateProgress(
                         processResult.progress,
-                        `Hashing... (${processResult.processed.toLocaleString()}/${processResult.total.toLocaleString()})`
+                        <?php echo json_encode(__('adm_dup_hashing')); ?> + ` (${processResult.processed.toLocaleString()}/${processResult.total.toLocaleString()})`
                     );
                 }
             }
             
         } catch (err) {
-            alert('Error: ' + err.message);
+            if (gen === searchGen) alert(<?php echo json_encode(__('adm_js_error')); ?> + ' ' + err.message);
         } finally {
-            isSearching = false;
-            document.getElementById('startDuplicateSearch').style.display = '';
-            document.getElementById('cancelDuplicateSearch').style.display = 'none';
+            if (gen === searchGen) { // 옛 검색의 마무리가 새 검색 버튼 상태를 바꾸지 않게
+                isSearching = false;
+                document.getElementById('startDuplicateSearch').style.display = '';
+                document.getElementById('cancelDuplicateSearch').style.display = 'none';
+            }
         }
     }
     
@@ -10209,25 +10840,25 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
         const list = document.getElementById('duplicateList');
         const actions = document.getElementById('duplicateActions');
         
-        const modeLabel = data.search_mode === 'precise' ? '🎯 Precise' : '⚡ Quick';
+        const modeLabel = data.search_mode === 'precise' ? <?php echo json_encode(__h('adm_dup_mode_precise')); ?> : <?php echo json_encode(__h('adm_dup_mode_quick')); ?>; // ★ (2026-11-04 00:32) 영어 고정 문구 → 언어 키
         const modeDesc = data.search_mode === 'precise' 
-            ? 'Same size + filename + MD5' 
-            : 'Same size + MD5 (any filename)';
+            ? <?php echo json_encode(__h('adm_dup_cond_precise')); ?>
+            : <?php echo json_encode(__h('adm_dup_cond_quick')); ?>;
         const modeWarning = data.search_mode === 'precise'
             ? ''
-            : '<br><strong class="text-danger">⚠️ Files with different names but same content are shown as duplicates!</strong>';
+            : '<br><strong class="text-danger">' + <?php echo json_encode(__h('adm_dup_content_warning')); ?> + '</strong>';
         
         stats.innerHTML = `
             <strong><?php echo __("adm_dup_search_done"); ?></strong> <span class="badge badge-secondary">${modeLabel}</span><br>
-            <small class="text-muted">Condition: ${modeDesc}</small>${modeWarning}<br>
-            Total: ${data.total_files.toLocaleString()}/ 
-            Groups: ${data.duplicate_groups.toLocaleString()}/ 
-            Duplicates: ${data.duplicate_files.toLocaleString()}/ 
-            Saveable: ${data.saveable_size}
+            <small class="text-muted"><?php echo __h('adm_dup_cond'); ?>: ${modeDesc}</small>${modeWarning}<br>
+            <?php echo __h('adm_dup_total'); ?>: ${data.total_files.toLocaleString()}/ 
+            <?php echo __h('adm_dup_groups'); ?>: ${data.duplicate_groups.toLocaleString()}/ 
+            <?php echo __h('adm_dup_dups'); ?>: ${data.duplicate_files.toLocaleString()}/ 
+            <?php echo __h('adm_dup_saveable'); ?>: ${data.saveable_size}
         `;
         
         if (data.duplicate_groups === 0) {
-            list.innerHTML = '<div class="alert alert-success">No duplicates found! 👍</div>';
+            list.innerHTML = '<div class="alert alert-success">' + <?php echo json_encode(__h('adm_dup_none')); ?> + '</div>';
             actions.style.display = 'none';
             return;
         }
@@ -10245,7 +10876,15 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
         
         const list = document.getElementById('duplicateList');
         const totalGroups = duplicateData.groups.length;
+        // ★ (2026-11-09 14:17) 지워서 남은 그룹이 없으면 처음 검색에서 0건일 때와 같게('중복 없음' 안내, 단추줄 숨김) — 전에는 '쪽 1 / 0 (그룹 1-0 / 0)'과 빈 단추줄이 보였음
+        if (totalGroups === 0) {
+            list.innerHTML = '<div class="alert alert-success">' + <?php echo json_encode(__h('adm_dup_none')); ?> + '</div>';
+            const __da = document.getElementById('duplicateActions'); if (__da) __da.style.display = 'none';
+            return;
+        }
         const totalPages = Math.ceil(totalGroups / duplicatePerPage);
+        // ★ (2026-11-02 09:08) 지워서 그룹이 줄면 지금 쪽이 범위를 넘어 빈 화면 — 마지막 쪽으로
+        if (duplicatePage > Math.max(1, totalPages)) duplicatePage = Math.max(1, totalPages);
         const startIdx = (duplicatePage - 1) * duplicatePerPage;
         const endIdx = Math.min(startIdx + duplicatePerPage, totalGroups);
         
@@ -10253,8 +10892,8 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
         
         // 선택된 파일 수 표시 및 페이지네이션 (상단)
         html += `<div class="d-flex justify-content-between align-items-center mb-2">
-            <span class="text-muted">Selected: <strong id="selectedCount">${checkedFiles.size}</strong></span>
-            <span class="text-muted">Page ${duplicatePage} / ${totalPages} (Group ${startIdx + 1}-${endIdx} / ${totalGroups})</span>
+            <span class="text-muted"><?php echo __h('adm_dup_selected'); ?>: <strong id="selectedCount">${checkedFiles.size}</strong></span>
+            <span class="text-muted"><?php echo __h('adm_dup_page'); ?> ${duplicatePage} / ${totalPages} (<?php echo __h('adm_dup_group'); ?> ${startIdx + 1}-${endIdx} / ${totalGroups})</span>
         </div>`;
         
         if (totalPages > 1) {
@@ -10265,17 +10904,17 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
         for (let idx = startIdx; idx < endIdx; idx++) {
             const group = duplicateData.groups[idx];
             const modeInfo = duplicateData.search_mode === 'precise'
-                ? `📏 ${group.size_formatted} | 📝 ${group.filename || '(filename)'} | 🔑 ${group.hash.substring(0, 8)}...`
+                ? `📏 ${group.size_formatted} | 📝 ${escapeHtml(group.filename || '(filename)')} | 🔑 ${group.hash.substring(0, 8)}...`
                 : `📏 ${group.size_formatted} | 🔑 ${group.hash.substring(0, 8)}...`;
             
             html += `<div class="card mb-2">
                 <div class="card-header py-1 bg-light d-flex justify-content-between align-items-center">
                     <span>
-                        <strong>Group ${idx + 1}</strong> <small class="text-muted">(${group.files.length} <?php echo __('adm_sys_unit_files'); ?>)</small>
+                        <strong><?php echo __h('adm_dup_group'); ?> ${idx + 1}</strong> <small class="text-muted">(${group.files.length} <?php echo __('adm_sys_unit_files'); ?>)</small>
                         <br><small class="text-info">${modeInfo}</small>
                     </span>
                     <button type="button" class="btn btn-sm btn-outline-danger select-all-except-first" data-group="${idx}">
-                        Select All Except First
+                        <?php echo __h('adm_dup_select_except_first'); ?>
                     </button>
                 </div>
                 <div class="card-body py-2">`;
@@ -10286,8 +10925,8 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
                 html += `<div class="form-check">
                     <input type="checkbox" class="form-check-input dup-checkbox dup-group-${idx}" id="dup_${idx}_${fIdx}" 
                            value="${escapeHtml(file.path)}" data-first="${isFirst}" ${isChecked ? 'checked' : ''}>
-                    <label class="form-check-label ${isFirst ? 'text-primary font-weight-bold' : ''}" for="dup_${idx}_${fIdx}">
-                        ${isFirst ? '🏠 [Original] ' : '📋 '}${escapeHtml(file.path)}
+                    <label class="form-check-label ${isFirst ? 'text-primary font-weight-bold' : ''}" for="dup_${idx}_${fIdx}" style="overflow-wrap:anywhere;word-break:break-word;">
+                        ${isFirst ? '🏠 [' + <?php echo json_encode(__h('adm_js_original')); ?> + '] ' : '📋 '}${escapeHtml(file.path)}
                         <small class="text-muted">(${file.mtime})</small>
                     </label>
                 </div>`;
@@ -10302,6 +10941,9 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
         }
         
         list.innerHTML = html;
+        // ★ (2026-11-04 00:32) 쪽을 넘겨도 '결과에서 검색' 거르기 유지 — 전엔 새 쪽에서 풀렸음
+        const _rf = document.getElementById('resultFilter');
+        if (_rf && _rf.value.trim() !== '') _rf.dispatchEvent(new Event('input'));
         
         // 체크박스 변경 이벤트 (상태 추적)
         document.querySelectorAll('.dup-checkbox').forEach(cb => {
@@ -10409,11 +11051,11 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
         .then(response => response.json())
         .then(data => {
             if (data.error) {
-                alert('Error: ' + data.error);
+                alert(<?php echo json_encode(__('adm_js_error')); ?> + ' ' + data.error);
                 return;
             }
             
-            alert('✅ Deleted: ' + data.deleted + ' <?php echo __('adm_sys_unit_files'); ?>\n\n💡 If counts don\'t update:\nCache tab → Regen stats / Delete folder cache\n→ Refresh main page');
+            alert('✅ ' + <?php echo json_encode(__('adm_js_deleted')); ?> + ' ' + data.deleted + ' ' + <?php echo json_encode(__('adm_sys_unit_files')); ?> + '\n\n' + <?php echo json_encode(__('adm_js_dup_del_hint')); ?>);
             
             // checkedFiles에서 삭제된 파일 제거
             files.forEach(f => checkedFiles.delete(f));
@@ -10434,14 +11076,14 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
             updateSelectedCount();
         })
         .catch(err => {
-            alert('Delete error: ' + err.message);
+            alert(<?php echo json_encode(__('adm_js_delete_error')); ?> + ' ' + err.message);
         });
     }
     
     function escapeHtml(str) {
         const div = document.createElement('div');
         div.textContent = str;
-        return div.innerHTML;
+        return div.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;'); // ★ (2026-11-02 10:04) value="…" 속성에도 쓰므로 따옴표까지
     }
     
     // 결과 필터링
@@ -10457,7 +11099,7 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
 </div></div>
 
 <!-- System -->
-<div class="tab-pane fade" id="system">
+<div class="tab-pane fade ab-gen" data-ab-g="overview" id="system">
 <div class="container-fluid">
 
 <?php
@@ -10979,7 +11621,8 @@ function getFolderSize($path) {
     try {
         $iterator = new RecursiveIteratorIterator(
             new RecursiveDirectoryIterator($path, FilesystemIterator::SKIP_DOTS),
-            RecursiveIteratorIterator::SELF_FIRST
+            RecursiveIteratorIterator::SELF_FIRST,
+            RecursiveIteratorIterator::CATCH_GET_CHILD // ★ (2026-11-02 20:06) 읽을 수 없는 하위 폴더에서 크기 계산이 멈추지 않게
         );
         foreach ($iterator as $file) {
             if ($file->isFile()) {
@@ -11426,7 +12069,7 @@ $hasAllRequired = empty($missingRequired) && empty($missingRequiredWithAlt);
 <!-- ⭐ Required Service Check -->
 <div class="info-card">
 <div class="card-header <?php echo $hasAllRequired ? 'bg-success text-white' : 'bg-danger text-white'; ?>">
-    ⭐ Required Service Check 
+    <?php echo __h('adm_sys_service_check'); ?> 
     <?php echo $hasAllRequired ? '- ' . __('adm_sys_all_ok') : '- ' . __('adm_sys_missing_items'); ?>
 </div>
 <div class="card-body p-0">
@@ -11767,6 +12410,19 @@ foreach ($baseDirsInfo as $idx => $info):
         <span class="status-badge status-warning">⚠️ N/A</span>
     <?php endif; ?>
 </td></tr>
+<?php // ★ (2026-11-03 16:43) 7-Zip·UnRAR 도 표시(FileStation 시스템 정보처럼 버전·경로) — 실제로 쓰는 경로(설정 또는 자동으로 찾은 것) 기준
+foreach (['7z' => '7-Zip', 'unrar' => 'UnRAR'] as $_st_k => $_st_n):
+    $_st_p = class_exists('ArchiveHandler') ? ArchiveHandler::getToolPath($_st_k) : '';
+    $_st_v = $_st_p !== '' ? ArchiveHandler::toolVersion($_st_k) : ''; ?>
+<tr><td><strong><?php echo $_st_n; ?></strong></td><td>
+    <?php if ($_st_p !== ''): ?>
+        <span class="status-badge status-ok">✅ OK<?php echo $_st_v !== '' ? ' ' . h($_st_v) : ''; ?></span><?php if (ArchiveHandler::isToolAutoDetected($_st_k)): ?> <small class="text-muted">(<?php echo __h('adm_sys_auto_found'); ?>)</small><?php endif; ?>
+        <br><small class="text-muted"><?php echo h($_st_p); ?></small>
+    <?php else: ?>
+        <span class="status-badge status-warning">⚠️ N/A</span>
+    <?php endif; ?>
+</td></tr>
+<?php endforeach; ?>
 </table>
 </div>
 </div>
@@ -11885,16 +12541,16 @@ foreach ($loadedExtensions as $ext):
 <div class="btn-group-vertical w-100">
     <?php if (function_exists('opcache_reset')): ?>
     <button type="button" class="btn btn-outline-warning btn-sm mb-2" onclick="if(confirm('<?php echo __("adm_sys_confirm_opcache"); ?>')){location.href='?clear_opcache=1';}">
-        ⚡ Reset OPcache
+        <?php echo __h('adm_sys_reset_opcache'); ?>
     </button>
     <?php endif; ?>
     <?php if (function_exists('apcu_clear_cache')): ?>
     <button type="button" class="btn btn-outline-warning btn-sm mb-2" onclick="if(confirm('<?php echo __("adm_sys_confirm_apcu"); ?>')){location.href='?clear_apcu=1';}">
-        🗄️ Reset APCu
+        <?php echo __h('adm_sys_reset_apcu'); ?>
     </button>
     <?php endif; ?>
     <button type="button" class="btn btn-outline-info btn-sm" onclick="location.reload();">
-        🔃 Refresh
+        <?php echo __h('adm_sys_refresh'); ?>
     </button>
 </div>
 </div>
@@ -11906,58 +12562,30 @@ foreach ($loadedExtensions as $ext):
 <!-- Language settings tab -->
 <!-- ============================================================ -->
 <div class="tab-pane fade" id="language">
-<div class="card m-2 p-0">
-<div class="card-header bg-info text-white"><?php echo __('language_title'); ?></div>
-<div class="card-body">
+<?php // ★ (2026-11-06 09:55) 시안 B — 폼(save_language)·칸(site_language)은 그대로 ?>
+<div class="ab-page" data-ab-g="site">
+<div class="ab-head"><h3><?php echo __('language_title'); ?></h3></div>
+<p class="ab-lead"><?php echo __('language_description'); ?> <?php echo __('language_applies_to'); ?></p>
 
-<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
+<form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post" data-ab-save>
 <?php echo csrf_field(); ?>
 <input type="hidden" name="mode" value="save_language">
-
-<div class="mb-4">
-    <p class="text-muted"><?php echo __('language_description'); ?></p>
-    <p class="text-muted small"><?php echo __('language_applies_to'); ?></p>
-</div>
-
-<div class="form-group mb-4">
-    <label class="font-weight-bold mb-2"><?php echo __('language_select'); ?></label>
-    <div class="d-flex flex-wrap" style="gap:15px;">
-    <?php 
-    $current_lang = get_current_lang();
-    $available_langs = get_available_langs();
-    foreach ($available_langs as $code => $name): 
-        $checked = ($code === $current_lang) ? 'checked' : '';
-        $active_class = ($code === $current_lang) ? 'border-primary bg-light' : '';
-    ?>
-        <label class="d-flex align-items-center p-3 border rounded <?php echo $active_class; ?>" style="cursor:pointer;min-width:200px;gap:12px;">
-            <input type="radio" name="site_language" value="<?php echo $code; ?>" <?php echo $checked; ?> style="width:18px;height:18px;">
-            <div>
-                <div style="font-size:1.2em;">
-                    <?php echo $code === 'ko' ? '🇰🇷' : '🇺🇸'; ?>
-                    <strong><?php echo h($name); ?></strong>
-                </div>
-                <small class="text-muted"><?php echo $code === 'ko' ? 'Korean' : 'English'; ?></small>
-            </div>
-        </label>
+<?php $current_lang = get_current_lang(); $available_langs = get_available_langs(); ?>
+<div class="ab-list" style="margin-top:12px">
+  <div class="ab-row">
+    <div class="ab-t"><span class="ab-name"><?php echo __('language_select'); ?></span>
+      <span class="ab-desc"><?php echo __('language_current'); ?>: <?php echo $current_lang === 'ko' ? '🇰🇷' : ''; ?><?php echo $current_lang === 'en' ? '🇺🇸' : ''; ?> <?php echo h($available_langs[$current_lang] ?? 'Unknown'); ?> (<?php echo h($current_lang); ?>)</span></div>
+    <div class="ab-c">
+    <?php foreach ($available_langs as $code => $name):
+        $checked = ($code === $current_lang) ? 'checked' : ''; ?>
+      <label class="ab-opt"><input type="radio" name="site_language" value="<?php echo h($code); ?>" <?php echo $checked; ?>>
+        <span><?php echo $code === 'ko' ? '🇰🇷' : '🇺🇸'; ?> <strong><?php echo h($name); ?></strong> <small class="text-muted"><?php echo $code === 'ko' ? 'Korean' : 'English'; ?></small></span></label>
     <?php endforeach; ?>
     </div>
+  </div>
 </div>
-
-<div class="p-3 bg-light rounded mb-3">
-    <small class="text-muted">
-        <strong><?php echo __('language_current'); ?>:</strong> 
-        <?php echo $code === 'ko' ? '🇰🇷' : ''; ?><?php echo $code === 'en' ? '🇺🇸' : ''; ?>
-        <?php echo h($available_langs[$current_lang] ?? 'Unknown'); ?>
-        (<?php echo $current_lang; ?>)
-    </small>
-</div>
-
-<button type="submit" class="btn btn-info">
-    🌐 <?php echo __h('language_save'); ?>
-</button>
+<div class="ab-foot ab-orig-foot" style="border:0;background:transparent;padding:10px 0 0"><button type="submit" class="btn btn-primary ab-orig-submit">🌐 <?php echo __h('language_save'); ?></button></div>
 </form>
-
-</div>
 </div>
 </div>
 
@@ -12016,8 +12644,10 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>
 (function(){
     document.addEventListener('click', function(e) {
+        // ★ (2026-11-02 11:35) 이미 막은 클릭·새 탭(Ctrl·⌘·Shift·가운데)·내려받기 링크는 건드리지 않음(bootstrap 과 같게)
+        if (e.defaultPrevented || e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
         var link = e.target.closest('a[href]');
-        if (!link) return;
+        if (!link || link.hasAttribute('download')) return;
         var href = link.getAttribute('href');
         if (!href || href.startsWith('#') || href.startsWith('javascript:') || link.target === '_blank') return;
         if (href.includes('mode=logout')) return;
@@ -12025,7 +12655,8 @@ document.addEventListener('DOMContentLoaded', function() {
         document.documentElement.classList.add('leaving');
         setTimeout(function() { location.href = href; }, 100);
     });
-    document.addEventListener('submit', function() {
+    document.addEventListener('submit', function(e) {
+        if (e.defaultPrevented) return; // ★ (2026-11-02 11:35) 확인 창 '취소'(return false)면 화면을 흐리지 않음 — 전에는 투명한 채로 남았음
         document.documentElement.classList.add('leaving');
     });
     window.addEventListener('pageshow', function(e) {
@@ -12054,6 +12685,7 @@ if (($auto_logout_settings['enabled'] ?? true) && $_is_auto_logout_target && !$_
 window.SESSION_TIMEOUT = <?php echo $timeout; ?>;
 window.SESSION_REMAINING = <?php echo $remaining; ?>;
 </script>
+<?php echo mc_al_i18n_script(); ?>
 <script src="./js/auto-logout.js?v=<?php echo time(); ?>"></script>
 <?php endif; ?>
 
@@ -12096,6 +12728,7 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
     // Chart.js 초기화
     function initCharts() {
         if (cpuChart) return; // 이미 초기화됨
+        if (typeof Chart === 'undefined') return; // ★ (2026-11-02 09:08) 그래프 라이브러리(CDN)를 못 받으면(인터넷 없음) 그래프만 빼고 시스템 정보는 계속 보이게 — 전에는 여기서 멈춰 탭이 비었음
         
         const baseOpts = {
             responsive: true,
@@ -12190,7 +12823,7 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
                 if (wsList) {
                     let html = '<table class="table table-sm table-borderless mb-0">';
                     data.webserver.forEach(ws => {
-                        html += '<tr><td>🟢 <strong>' + ws.name + '</strong></td>';
+                        html += '<tr><td>🟢 <strong>' + (typeof _admEsc === 'function' ? _admEsc(ws.name) : String(ws.name).replace(/</g, '&lt;')) + '</strong></td>'; // ★ (2026-11-02 19:12) 이스케이프
                         html += '<td>' + ws.count + ' processes</td>';
                         html += '<td class="text-right">' + formatBytes(ws.memory) + '</td></tr>';
                     });
@@ -12199,7 +12832,7 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
                 }
             } else {
                 const wsList = document.getElementById('webserver-list');
-                if (wsList) wsList.innerHTML = '<span class="text-muted">No running web server found</span>';
+                if (wsList) wsList.innerHTML = '<span class="text-muted"><?php echo __h('adm_no_webserver'); ?></span>';
             }
         }).catch(() => {});
     }
@@ -12229,6 +12862,7 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
                     netTxSpeed = Math.max(0, (data.net_tx - lastData.net_tx) / dt);
                 }
             }
+            const prevData = lastData; // ★ (2026-10-30) 인터페이스별 속도는 아래에서 이전 값과 비교해야 함(덮어쓰기 전에 보관)
             lastData = data;
             lastTimestamp = data.timestamp;
             
@@ -12302,9 +12936,9 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
                     }
                     
                     // 속도 계산 (이전 데이터와 비교)
-                    if (lastData && lastData.interfaces && lastData.interfaces[idx]) {
-                        const rxDiff = iface.rx - (lastData.interfaces[idx].rx || 0);
-                        const txDiff = iface.tx - (lastData.interfaces[idx].tx || 0);
+                    if (prevData && prevData.interfaces && prevData.interfaces[idx]) {
+                        const rxDiff = iface.rx - (prevData.interfaces[idx].rx || 0);
+                        const txDiff = iface.tx - (prevData.interfaces[idx].tx || 0);
                         if (rxDiff > 0 || txDiff > 0) {
                             const totalSpeed = (rxDiff + txDiff) / (refreshMs / 1000);
                             speed = formatSpeed(totalSpeed);
@@ -12317,7 +12951,7 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
                     
                     html += '<div style="display:flex;align-items:center;justify-content:center;gap:2px;padding:1px 0;">';
                     html += '<span style="line-height:1;">' + icon + '</span>';
-                    html += '<strong style="font-size:0.95em;">' + iface.name + '</strong>';
+                    html += '<strong style="font-size:0.95em;">' + (typeof _admEsc === 'function' ? _admEsc(iface.name) : String(iface.name).replace(/</g, '&lt;')) + '</strong>'; // ★ (2026-11-02 19:12) 이스케이프
                     if (linkSpeed) html += '<span class="badge badge-info ml-1">' + linkSpeed + '</span>';
                     if (speed) html += '<span class="badge badge-success ml-1">' + speed + '</span>';
                     html += '</div>';
@@ -12409,7 +13043,7 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
     var keepaliveTimer = null;
     
     function keepSessionAlive() {
-        fetch('init.php?check_session=1&extend=1', {
+        fetch('init.php?check_session=1&extend=1&keep=admin', {
             method: 'GET',
             credentials: 'same-origin',
             cache: 'no-store'
@@ -12422,6 +13056,8 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
         }).catch(function(){});
     }
     
+    // ★ (2026-11-03 09:15) 이 화면이 '자동 로그아웃 대상'이면 5분마다 연장하지 않음 — 연장 요청이 마지막 활동 시각을 늘 지금으로 바꿔, 체크해도 열어 둔 동안 로그아웃되지 않았음(사용 중 활동은 auto-logout.js 가 연장)
+    if (<?php echo (!empty($auto_logout_settings['enabled'] ?? true) && !empty($_is_auto_logout_target) && empty($_is_remember_me)) ? 'true' : 'false'; ?>) return;
     // 5분마다 세션 갱신
     keepaliveTimer = setInterval(keepSessionAlive, KEEPALIVE_INTERVAL);
     
@@ -12432,6 +13068,102 @@ window.SESSION_REMAINING = <?php echo $remaining; ?>;
 })();
 </script>
 
+<?php // ★ (2026-11-06 09:30) 시안 B 저장 막대 — form[data-ab-save] 를 바꾸면 아래에 '바꾼 내용 N개 [되돌리기] [저장]'
+//   [저장] = 그 폼의 원래 저장 단추(.ab-orig-submit)를 그대로 누름(보내는 값·처리는 예전과 같음) · 스크립트가 없으면 원래 단추가 그대로 보임
+//   [되돌리기] = 처음 값으로(숨은 칸 포함) + input/change 신호(미리보기·흐리게 처리 등이 따라오게) · 바꾼 채 페이지를 떠나면 묻기 ?>
+<div class="ab-savebar" id="abSaveBar" role="region" aria-live="polite" aria-label="<?php echo __h('ab_bar_label'); ?>">
+  <div class="ab-sb-t"><span id="abSbCnt"></span><small id="abSbWhere"></small></div>
+  <button type="button" class="btn btn-sm btn-outline-light" id="abSbRevert"><?php echo __h('ab_revert'); ?></button>
+  <button type="button" class="btn btn-sm btn-primary" id="abSbSave"><?php echo __h('ab_save'); ?></button>
+</div>
+<script>
+(function () {
+  var forms = [].slice.call(document.querySelectorAll('form[data-ab-save]'));
+  var bar = document.getElementById('abSaveBar');
+  if (!forms.length || !bar) return;
+  document.documentElement.classList.add('ab-js');
+  var T = <?php echo js(['cnt' => __('ab_changed'), 'where' => __('ab_where'), 'leave' => __('ab_leave_warn'), 'others' => __('ab_others_lost')]); ?>;
+  var cur = null, submitting = false;
+  function els(f) { return [].slice.call(f.elements).filter(function (e) { return e.name && e.type !== 'submit' && e.type !== 'button' && e.name !== 'csrf_token'; }); }
+  function val(e) {
+    if (e.type === 'checkbox' || e.type === 'radio') return e.checked ? '1' : '0';
+    if (e.type === 'file') return (e.files && e.files.length) ? 'F' + e.files.length + (e.files[0].name || '') : '';
+    if (e.tagName === 'SELECT' && e.multiple) return [].map.call(e.options, function (o) { return o.selected ? '1' : '0'; }).join('');
+    return String(e.value);
+  }
+  function aux(f) { return [].slice.call(f.elements).filter(function (e) { return !e.name && e.id && !(e.closest && e.closest('.ab-fp-tools')) && /^(INPUT|SELECT|TEXTAREA)$/.test(e.tagName) && e.type !== 'submit' && e.type !== 'button' && e.type !== 'file'; }); } // ★ (2026-11-06 fix24) 이름 없는 보조 칸(자동 로그아웃 '분·초' 등 — 숨은 칸을 채움)은 세지 않고 되돌리기만
+  forms.forEach(function (f) { f.__ab0 = els(f).map(function (e) { return [e, val(e)]; }); f.__abSet = f.__ab0.map(function (p) { return p[0]; }); f.__abX = aux(f).map(function (e) { return [e, val(e)]; }); });
+  function changed(f) { // 같은 이름(라디오 묶음 등)은 한 칸으로 · 지운 칸(콘텐츠 폴더 줄 ✕ 등)·새로 넣어 값이 있는 칸도 바뀐 것으로
+    var seen = {}, known = f.__abSet;
+    f.__ab0.forEach(function (p) { if (!p[0].isConnected || !f.contains(p[0])) seen[p[0].name + '#gone'] = 1; else if (val(p[0]) !== p[1]) seen[p[0].name] = 1; });
+    els(f).forEach(function (e) { if (known.indexOf(e) < 0 && ((e.type === 'checkbox' || e.type === 'radio') ? e.checked : String(e.value).trim() !== '')) seen[e.name + '#new'] = 1; });
+    return Object.keys(seen).length;
+  }
+  function pane(f) { var p = f.closest('.tab-pane'); return p ? p.id : ''; }
+  function tabName(f) { var id = pane(f), a = id ? document.querySelector('.admin-menu a[href="#' + id + '"]') : null; return a ? a.textContent.trim() : ''; }
+  function rowOf(e) { var r = e.closest ? e.closest('.ab-row, table.config-table > tbody > tr') : null; return (r && r.closest('form') === e.form) ? r : null; } // ★ (2026-11-06 fix25) 바꾼 칸의 줄(목록형 줄·설정 표 줄만 — 큰 칸은 표시 안 함)
+  function marks() {
+    [].forEach.call(document.querySelectorAll('.ab-dirty'), function (r) { r.classList.remove('ab-dirty'); });
+    forms.forEach(function (f) { if (!f.__abN) return; f.__ab0.forEach(function (p) { if (p[0].isConnected && val(p[0]) !== p[1]) { var r = rowOf(p[0]); if (r) r.classList.add('ab-dirty'); } }); });
+  }
+  function refresh() {
+    var best = null, total = 0;
+    forms.forEach(function (f) { var n = changed(f); f.__abN = n; if (n) { total += n; if (!best || f === cur) best = f; } });
+    cur = best;
+    marks();
+    if (!best) { bar.classList.remove('show'); return; }
+    document.getElementById('abSbCnt').textContent = T.cnt.replace('%d', best.__abN);
+    var w = document.getElementById('abSbWhere'), own = document.getElementById(pane(best)); // 대시보드 안의 통계 탭(tab-pane)과 헷갈리지 않게 그 폼의 화면만 봄
+    w.textContent = '';
+    if (!own || !own.classList.contains('active')) { var a = document.createElement('a'); a.textContent = T.where.replace('%s', tabName(best)); a.href = '#' + pane(best); a.addEventListener('click', function (ev) { ev.preventDefault(); /* ★ fix25 href 로 키보드(Tab)로도 닿게 — 주소 #은 안 바꿈 */ var l = document.querySelector('.admin-menu a[href="#' + pane(best) + '"]'); if (l && window.jQuery) jQuery(l).tab('show'); }); w.appendChild(a); }
+    bar.classList.add('show');
+  }
+  forms.forEach(function (f) {
+    var t = 0, h = function (e) { cur = f; clearTimeout(t); t = setTimeout(refresh, 60); };
+    f.addEventListener('input', h); f.addEventListener('change', h);
+    if (window.MutationObserver) new MutationObserver(function () { cur = f; clearTimeout(t); t = setTimeout(refresh, 60); }).observe(f, { childList: true, subtree: true }); // 줄 더하기·지우기(✕)
+  });
+  var tc = 0; // ★ (2026-11-06 fix24) 신호 없이 값만 바꾸는 단추 — 테마 카드(클릭 전파를 막음)·로고 [이미지 삭제]·보안의 국가 단추(폼 밖에 있음) 등 — 아무 곳 클릭이든 먼저(capture) 받아 60ms 뒤 다시 셈
+  document.addEventListener('click', function (e) { var f = e.target && e.target.closest ? e.target.closest('form[data-ab-save]') : null; if (f) cur = f; clearTimeout(tc); tc = setTimeout(refresh, 60); }, true);
+  window.addEventListener('submit', function (e) { if (!e.defaultPrevented) submitting = true; }); // ★ (2026-11-06 fix24) 확인 창 '취소'(return false)로 안 보냈으면 떠날 때 계속 묻게(전에는 한 번 취소하면 다시 안 물었음)
+  if (window.jQuery) jQuery(document).on('shown.bs.tab', '.admin-menu a[data-toggle="tab"]', refresh);
+  document.getElementById('abSbSave').addEventListener('click', function () {
+    if (!cur) return;
+    var others = forms.filter(function (f) { return f !== cur && changed(f) > 0; }).length; // 다른 칸에도 안 저장한 변경 — 이것만 저장하면 화면이 다시 열리며 사라짐
+    if (others && !confirm(T.others.replace('%d', others))) return;
+    var b = cur.querySelector('.ab-orig-submit') || cur.querySelector('[type=submit]');
+    if (cur.requestSubmit) { try { cur.requestSubmit(b && b.form === cur ? b : undefined); return; } catch (e) {} } // 보내지면 submit 신호에서 submitting = true(입력 확인에 걸리면 그대로 false)
+    if (b) b.click(); else { submitting = true; cur.submit(); }
+  });
+  document.getElementById('abSbRevert').addEventListener('click', function () {
+    if (!cur) return;
+    var diff = cur.__ab0.filter(function (p) { return p[0].isConnected && val(p[0]) !== p[1]; }); // 바뀐 칸만 되돌리고 그 칸에만 신호(지운 줄은 되살리지 못함 — 남은 수로 보임)
+    diff.forEach(function (p) {
+      var e = p[0], v = p[1];
+      if (e.type === 'checkbox' || e.type === 'radio') e.checked = v === '1';
+      else if (e.type === 'file') { try { e.value = ''; } catch (x) {} }
+      else if (e.tagName === 'SELECT' && e.multiple) [].forEach.call(e.options, function (o, i) { o.selected = v.charAt(i) === '1'; });
+      else e.value = v;
+    });
+    var diffX = (cur.__abX || []).filter(function (p) { return p[0].isConnected && val(p[0]) !== p[1]; });
+    diffX.forEach(function (p) { if (p[0].type === 'checkbox' || p[0].type === 'radio') p[0].checked = p[1] === '1'; else p[0].value = p[1]; });
+    diff = diff.concat(diffX);
+    cur.__ab0.forEach(function (p) { var e = p[0]; if (e.type === 'radio' && e.parentElement && e.parentElement.classList.contains('btn')) e.parentElement.classList.toggle('active', e.checked); });
+    diff.forEach(function (p) { try { p[0].dispatchEvent(new Event('input', { bubbles: true })); p[0].dispatchEvent(new Event('change', { bubbles: true })); } catch (x) {} });
+    try { cur.dispatchEvent(new CustomEvent('ab:revert')); } catch (x) {} // ★ (2026-11-06 fix24) 화면 모양을 값에서 다시 그려야 하는 곳(테마 카드·로고 칸)이 받음
+    refresh();
+  });
+  document.addEventListener('keydown', function (e) { // ★ (2026-11-06 fix25) 저장 막대가 보일 때만 Ctrl/⌘+S = [저장](안 보이면 브라우저 기본 그대로)
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === 's' || e.key === 'S') && bar.classList.contains('show')) { e.preventDefault(); document.getElementById('abSbSave').click(); }
+  });
+  window.addEventListener('beforeunload', function (e) {
+    if (submitting) return;
+    if (forms.some(function (f) { return changed(f) > 0; })) { document.documentElement.classList.remove('leaving'); e.preventDefault(); e.returnValue = T.leave; return T.leave; } // ★ (2026-11-06 fix24) 링크 이동 효과가 화면을 투명하게(leaving) 만든 뒤 '머물기'를 고르면 화면이 안 보이던 것
+  });
+  window.mcAbRefresh = function (f) { if (f && f.__ab0) cur = f; refresh(); }; // 화면 스크립트가 칸을 바꾼 뒤 부를 수 있게(바꾼 폼을 주면 그 폼을 막대에)
+})();
+</script>
+<?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 </body></html>
 <?php
 } else {

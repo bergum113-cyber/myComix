@@ -12,6 +12,9 @@
  * - $vips_path 설정 시 VIPS 우선 사용, 없으면 GD 폴백
  */
 
+// ★ (2026-11-04 09:39) 주소로 바로 열면(설정 없이) 치명 오류 500 → 아무것도 안 함. 늘 bootstrap.php 가 config.php 다음에 불러옴
+if (!function_exists('get_app_settings')) { if (basename($_SERVER['SCRIPT_FILENAME'] ?? '') === basename(__FILE__)) { http_response_code(404); exit; } return; }
+
 // ============================================================
 // 안전한 설정 병합 함수
 // ============================================================
@@ -196,18 +199,19 @@ if (!function_exists('compressImage')) {
             if ($size_info[2] === IMAGETYPE_PNG) $ext = 'png';
             elseif ($size_info[2] === IMAGETYPE_WEBP) $ext = 'webp';
             
-            $temp_in = sys_get_temp_dir() . '/compress_in_' . uniqid() . '.' . $ext;
-            $temp_out = sys_get_temp_dir() . '/compress_out_' . uniqid() . '.jpg';
+            $temp_in = sys_get_temp_dir() . '/compress_in_' . uniqid() . bin2hex(random_bytes(4)) . '.' . $ext; // ★ (2026-11-02 11:36) 스레드끼리 겹치지 않게
+            $temp_out = sys_get_temp_dir() . '/compress_out_' . uniqid() . bin2hex(random_bytes(4)) . '.jpg';
             
             @file_put_contents($temp_in, $img_data, LOCK_EX);
             
             // 리사이즈 필요 여부에 따라 명령 선택
             if ($width > $maxWidth) {
                 // vips thumbnail: 리사이즈 + 품질 조절
-                $cmd = '"' . $vips_path . '" thumbnail "' . $temp_in . '" "' . $temp_out . '" ' . $maxWidth . ' --size down -Q ' . $quality . ' 2>&1';
+                // ★ (2026-10-30) vips thumbnail 에는 -Q 옵션이 없어(Unknown option) 늘 실패하고 GD 로 넘어갔음 — 품질은 출력 파일 이름 뒤 [Q=..] 로
+                $cmd = '"' . $vips_path . '" thumbnail "' . $temp_in . '" "' . $temp_out . '[Q=' . (int)$quality . ',background=255]" ' . (int)$maxWidth . ' --height 10000000 --size down 2>&1'; // --height 큰 값: 폭 기준으로만 줄임(안 주면 폭×폭 정사각형에 맞춰 세로로 긴 그림이 아주 작아짐)
             } else {
                 // vips jpegsave: 품질 조절만
-                $cmd = '"' . $vips_path . '" jpegsave "' . $temp_in . '" "' . $temp_out . '" --Q ' . $quality . ' 2>&1';
+                $cmd = '"' . $vips_path . '" jpegsave "' . $temp_in . '" "' . $temp_out . '" --Q ' . $quality . ' --background 255 2>&1'; // ★ (2026-11-04 01:16) 투명 PNG·WebP 바탕 흰색(기본 검정) — 옵션을 모르는 옛 vips 면 실패해 아래 GD(흰 바탕)로
             }
             
             exec($cmd, $output, $return_code);
@@ -222,19 +226,30 @@ if (!function_exists('compressImage')) {
         
         // ✅ VIPS 미설정 또는 실패 시 GD 폴백
         if ($compressed === null) {
+            // ★ (2026-11-02 09:13) 아주 큰 그림은 GD 로 풀면 메모리 한도를 넘어 그 요청이 통째로 죽음(500) — 남은 메모리로 못 풀 크기면 원본 그대로
+            $_ml = trim((string)ini_get('memory_limit'));
+            if ($_ml !== '' && $_ml !== '-1') {
+                $_mb = (int)$_ml; $_u = strtolower(substr($_ml, -1));
+                if ($_u === 'g') $_mb *= 1073741824; elseif ($_u === 'm') $_mb *= 1048576; elseif ($_u === 'k') $_mb *= 1024;
+                $_need = (int)$width * (int)$height * 5 + ($width > $maxWidth ? (int)$maxWidth * (int)($height * ($maxWidth / max(1, $width))) * 5 : (($size_info[2] === IMAGETYPE_PNG || $size_info[2] === IMAGETYPE_WEBP) ? (int)$width * (int)$height * 5 : 0)) + strlen($img_data) * 2;
+                if ($_mb > 0 && memory_get_usage(true) + $_need > $_mb) {
+                    return $img_data;
+                }
+            }
             $img = @imagecreatefromstring($img_data);
             if ($img === false) {
                 return $img_data;
             }
 
             // 리사이즈 (설정된 최대 너비 초과 시)
-            if ($width > $maxWidth) {
-                $newW = $maxWidth;
-                $newH = (int)($height * ($maxWidth / $width));
-                $resized = imagecreatetruecolor($newW, $newH);
-                imagealphablending($resized, false);
-                imagesavealpha($resized, true);
-                imagecopyresampled($resized, $img, 0, 0, 0, 0, $newW, $newH, $width, $height);
+            // ★ (2026-11-04 00:33) JPEG 는 투명을 못 담아 투명 PNG·WebP 바탕이 검게 나왔음 — 흰 바탕에 얹어 저장
+            $newW = ($width > $maxWidth) ? (int)$maxWidth : (int)$width;
+            $newH = ($width > $maxWidth) ? (int)($height * ($maxWidth / $width)) : (int)$height;
+            if ($width > $maxWidth || $size_info[2] === IMAGETYPE_PNG || $size_info[2] === IMAGETYPE_WEBP) {
+                $resized = imagecreatetruecolor(max(1, $newW), max(1, $newH));
+                imagefill($resized, 0, 0, imagecolorallocate($resized, 255, 255, 255));
+                imagealphablending($resized, true);
+                imagecopyresampled($resized, $img, 0, 0, 0, 0, max(1, $newW), max(1, $newH), $width, $height);
                 imagedestroy($img);
                 $img = $resized;
             }
@@ -347,9 +362,9 @@ if (!function_exists('warmupZipImageCache')) {
         $total = min($count, count($image_files));
         
         for ($i = 0; $i < $total; $i++) {
-            $filename = basename($image_files[$i]);
+            $filename = mc_zip_cache_name($image_files[$i]); // ★ (2026-10-30) 하위 폴더가 다른 같은 이름 충돌 방지
             $cache_img = "{$cache_dir}/{$filename}";
-            $tmp_cache_img = "{$cache_img}.tmp";
+            $tmp_cache_img = "{$cache_img}.tmp." . bin2hex(random_bytes(4)); // ★ (2026-11-02 09:13) 요청마다 다른 임시 이름 — 뷰어·미리 만들기가 같은 임시 파일을 번갈아 써서 다 된 캐시 그림이 잘리던 경우
 
             // 이미 캐시 있으면 스킵
             if (!file_exists($cache_img)) {
@@ -358,10 +373,10 @@ if (!function_exists('warmupZipImageCache')) {
                     $img_data = $_arc->extractFile($image_files[$i]);
                     if ($img_data === null) $img_data = false;
                 } else {
-                    $img_data = $zip->getFromName($image_files[$i]);
+                    $img_data = mc_zip_from_name($zip, $image_files[$i]); // ★ (2026-10-31) 바꾼 이름·예전 이름 모두
                 }
                 if ($img_data !== false) {
-                    $compressed = compressImage($img_data, null, false);
+                    $compressed = compressImage($img_data, null, true); // ★ (2026-11-04 09:39) 뷰어(viewer.php)와 같게 늘 줄임 — 미리 만든 앞 10쪽만 원본 크기(2배 이상 무거움)로 나갔음
                     
                     // 원자적 쓰기 (파일 락 + 임시 파일)
                     $fp = @fopen($tmp_cache_img, 'c+b');
@@ -389,9 +404,8 @@ if (!function_exists('warmupZipImageCache')) {
                             }
 
                             if (!@rename($tmp_cache_img, $cache_img)) {
-                                if (@copy($tmp_cache_img, $cache_img)) {
-                                    @unlink($tmp_cache_img);
-                                }
+                                @copy($tmp_cache_img, $cache_img);
+                                @unlink($tmp_cache_img); // ★ (2026-11-04 09:39) copy 도 실패해도 임시 파일은 지움
                             }
                             @touch($cache_img);
                             $processed++;
@@ -452,7 +466,7 @@ if (!function_exists('rebuild_folder_caches')) {
         try {
             $iterator = new RecursiveIteratorIterator(
                 new RecursiveDirectoryIterator($base_dir, FilesystemIterator::SKIP_DOTS),
-                RecursiveIteratorIterator::SELF_FIRST
+                RecursiveIteratorIterator::SELF_FIRST, RecursiveIteratorIterator::CATCH_GET_CHILD
             );
             
             foreach ($iterator as $item) {
@@ -557,4 +571,19 @@ if (!function_exists('getCacheQuality')) {
         
         return $qualities['high'];
     }
+}
+
+if (!function_exists('mc_zip_cache_name')) {
+/**
+ * ★ (2026-10-30) 압축 안 이미지의 캐시 파일 이름
+ *   하위 폴더가 있으면 폴더 경로의 짧은 해시를 앞에 붙임 — 1권/001.jpg 와 2권/001.jpg 가 같은 캐시를 쓰던 문제
+ *   (폴더 없는 항목은 전과 같은 이름이라 기존 캐시를 그대로 씀)
+ */
+function mc_zip_cache_name($entry) {
+    $entry = str_replace('\\', '/', (string)$entry);
+    $base = basename($entry);
+    $dir = trim(dirname($entry), '/');
+    if ($dir === '' || $dir === '.') return $base;
+    return substr(md5($dir), 0, 8) . '_' . $base;
+}
 }

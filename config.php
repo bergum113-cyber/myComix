@@ -26,10 +26,19 @@
  *    - 경로에 인덱스 접두사 추가
  */
 
+// ★ (2026-11-02 08:50) 세션 쿠키 보안 속성 — 코드 어디에서도 정하지 않아 php.ini 기본값(HttpOnly·SameSite 없음)이었음
+//   HttpOnly: 스크립트가 세션 쿠키를 못 읽게 / SameSite=Lax: 다른 사이트에서 보낸 요청(POST·그림 등)에는 쿠키가 안 실림 / HTTPS 면 Secure
+//   세션을 시작하기 전에만(이미 시작했거나 헤더를 보냈으면 그대로). 같은 사이트 안의 이동·탭 복귀에는 영향 없음
+if (PHP_SAPI !== 'cli' && session_status() === PHP_SESSION_NONE && !headers_sent()) {
+    @ini_set('session.cookie_httponly', '1');
+    @ini_set('session.cookie_samesite', 'Lax');
+    if ((!empty($_SERVER['HTTPS']) && strtolower((string)$_SERVER['HTTPS']) !== 'off') || (int)($_SERVER['SERVER_PORT'] ?? 0) === 443) @ini_set('session.cookie_secure', '1');
+}
+
 // ============================================================
 // 앱 버전
 // ============================================================
-define('MYCOMIX_VERSION', 'v2.4.3');
+define('MYCOMIX_VERSION', 'v2.5.0'); // ★ (2026-11-04 15:23) 2.4.3 → 2.5.0(펜닐 요청)
 
 // ============================================================
 // 설정 파일 경로
@@ -93,7 +102,16 @@ function load_app_settings($file) {
         return [];
     }
     
-    $json = @file_get_contents($file);
+    // ★ (2026-11-02 08:55) 공유 잠금으로 읽음 — 관리자 저장(비우고 다시 쓰기) 중에 읽으면 빈 내용이라 그 요청만 기본 설정(콘텐츠 폴더 등)으로 돌던 문제
+    $json = false;
+    $fp = @fopen($file, 'rb');
+    if ($fp) {
+        if (@flock($fp, LOCK_SH)) { $json = stream_get_contents($fp); @flock($fp, LOCK_UN); }
+        fclose($fp);
+    }
+    if ($json === false || $json === '') {
+        $json = @file_get_contents($file);
+    }
     if ($json === false) {
         return [];
     }
@@ -118,11 +136,10 @@ function save_app_settings($file, $settings) {
         @mkdir($dir, 0755, true);
     }
     
-    return @file_put_contents(
-        $file, 
-        json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
-        LOCK_EX
-    );
+    // ★ (2026-11-04 00:26) JSON 을 못 만들면(잘못된 UTF-8 등) 쓰지 않음 — 종전엔 false 를 그대로 써서 설정 파일이 0바이트가 됐음(전체 설정 사라짐)
+    $json = json_encode($settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+    if (!is_string($json)) return false;
+    return @file_put_contents($file, $json, LOCK_EX);
 }
 }
 
@@ -186,6 +203,11 @@ if (!function_exists('set_app_settings')) {
 function set_app_settings($key, $value) {
     global $app_settings, $settings_file;
     
+    // ★ (2026-11-04 00:26) 요청 처음에 설정을 못 읽어 비어 있으면(잠깐의 공유 위반·깨진 파일) 다시 읽고, 그래도 비면 저장하지 않음 — 항목 하나 저장이 전체 설정(콘텐츠 폴더 등)을 지웠음
+    if ((!is_array($app_settings) || !$app_settings) && is_file($settings_file) && (int)@filesize($settings_file) > 2) {
+        $app_settings = function_exists('load_app_settings') ? load_app_settings($settings_file) : [];
+        if (!is_array($app_settings) || !$app_settings) return false;
+    }
     // 전역 변수 업데이트
     $app_settings[$key] = $value;
     
@@ -195,11 +217,9 @@ function set_app_settings($key, $value) {
         @mkdir($dir, 0755, true);
     }
     
-    return @file_put_contents(
-        $settings_file, 
-        json_encode($app_settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT),
-        LOCK_EX
-    ) !== false;
+    $json = json_encode($app_settings, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE); // ★ (2026-11-04 00:26) 못 만들면 안 씀(0바이트 방지)
+    if (!is_string($json)) return false;
+    return @file_put_contents($settings_file, $json, LOCK_EX) !== false;
 }
 }
 
@@ -606,6 +626,11 @@ if (file_exists(__DIR__ . '/archive_handler.php')) {
             $unrar_path ?? '',
             $sevenzip_path ?? ''
         );
+        // ★ (2026-10-31) 설정 경로가 비었어도 자동으로 찾은 7-Zip/UnRAR 가 있으면 지원 형식에 반영(RAR 은 7-Zip 만 있어도 열림)
+        if (isset($archive_extensions) && is_array($archive_extensions)) {
+            $archive_extensions['rar'] = $archive_extensions['cbr'] = ArchiveHandler::isSupported('rar');
+            $archive_extensions['7z']  = $archive_extensions['cb7'] = ArchiveHandler::isSupported('7z');
+        }
     }
 }
 ?>

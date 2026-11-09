@@ -108,6 +108,7 @@
     // 모달 숨김
     function hideWarning() {
         log('✅ 모달 숨김');
+        updateCountdown(); // ★ (2026-11-02 11:38) 숨기기 전에 남은 시간을 새로 씀 — 북모드 전용 경고 창이 이 숫자가 뛰는 걸 보고 닫히는데, 전에는 숫자가 멈춰 그 창이 남았음
         const modal = document.getElementById('auto-logout-modal');
         if (modal) {
             modal.style.display = 'none';
@@ -227,6 +228,11 @@
             if (modal && modal.contains(e.target)) {
                 return; // 모달 내부 클릭 무시
             }
+            // ★ (2026-11-02 10:00) 북모드 전용 경고 창도 같음 — 그 바탕을 누르면 활동으로 보고 경고만 숨겨, 북모드 창은 멈춘 숫자로 남았음
+            const bmodal = document.getElementById('book-mode-logout-modal');
+            if (bmodal && bmodal.contains(e.target)) {
+                return;
+            }
         }
         
         const now = Date.now();
@@ -295,6 +301,9 @@
                 // 경고 시점 체크
                 if (remainingTime <= CONFIG.WARNING_TIME && !warningShown) {
                     showWarning();
+                } else if (warningShown && remainingTime > CONFIG.WARNING_TIME) {
+                    // ★ (2026-10-30) 다른 탭에서 활동해 서버 세션이 연장됐으면 경고 창을 닫음(전에는 큰 숫자로 계속 떠 있고 새로고침도 막혀 있었음)
+                    hideWarning();
                 }
             }
         })

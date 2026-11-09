@@ -1,1 +1,15 @@
-Deny from all
+# ★ (2026-10-30) 설정·사용자 파일은 계속 차단하고, 관리자가 올린 로고·배경·팝업 이미지(png/jpg/gif/webp)만 브라우저에서 보이게
+#   (전에는 전부 차단이라 아파치가 .htaccess 를 읽는 환경이면 src/ 안의 업로드 이미지가 403 으로 안 보였음)
+<IfModule mod_authz_core.c>
+    Require all denied
+    <FilesMatch "\.(png|jpe?g|gif|webp)$">
+        Require all granted
+    </FilesMatch>
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order deny,allow
+    Deny from all
+    <FilesMatch "\.(png|jpe?g|gif|webp)$">
+        Allow from all
+    </FilesMatch>
+</IfModule>

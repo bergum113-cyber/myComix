@@ -246,6 +246,9 @@ class MaxMindReader {
         
         $size = $ctrlByte & 0x1f;
         
+        // ★ (2026-11-02 10:07) 포인터는 크기 확장 바이트가 없음(5비트가 곧 포인터 크기·값) — MaxMind DB 규격
+        if ($type == self::DATA_TYPE_POINTER) return $this->decodeByType($type, $size);
+        
         if ($size >= 29) {
             $bytesToRead = $size - 28;
             $bytes = fread($this->fileHandle, $bytesToRead);
@@ -270,7 +273,9 @@ class MaxMindReader {
             case self::DATA_TYPE_POINTER:
                 $pointer = $this->decodePointer($size);
                 $pos = ftell($this->fileHandle);
-                $result = $this->decodeData($pointer);
+                // ★ (2026-11-02 10:07) 포인터는 데이터 구역 시작 기준(검색 트리 + 구분 16바이트 뒤) — 전에는 파일 맨 앞 기준으로 읽어 엉뚱한 값
+                $dataStart = (int)(($this->metadata['record_size'] / 4) * $this->metadata['node_count']) + 16;
+                $result = $this->decodeData($dataStart + $pointer);
                 fseek($this->fileHandle, $pos);
                 return [$result, ftell($this->fileHandle)];
                 
@@ -330,41 +335,18 @@ class MaxMindReader {
      * 포인터 디코딩
      */
     private function decodePointer($size) {
-        $pointerSize = (($size >> 3) & 0x3) + 1;
-        $pointerBytes = fread($this->fileHandle, $pointerSize);
-        
-        $packed = '';
-        
-        switch ($pointerSize) {
-            case 1:
-                $packed = chr(($size & 0x7) << 5) . $pointerBytes;
-                break;
-            case 2:
-                $packed = chr(($size & 0x7) << 5 | ord($pointerBytes[0])) . substr($pointerBytes, 1);
-                break;
-            case 3:
-                $packed = chr($size & 0x7) . $pointerBytes;
-                break;
-            case 4:
-                $packed = $pointerBytes;
-                break;
+        // ★ (2026-11-02 10:07) MaxMind DB 규격대로 — SS(크기 2비트)·VVV(값 3비트), SS=0:11비트 / 1:19비트+2048 / 2:27비트+526336 / 3:32비트(VVV 안 씀)
+        //   전에는 계산식이 틀려(1바이트 포인터 0x02 → 8194, 규격 값 258) 나라 이름 대신 엉뚱한 자리를 읽었음
+        $ss = ($size >> 3) & 0x3;
+        $vvv = $size & 0x7;
+        $b = fread($this->fileHandle, $ss + 1);
+        $b = str_pad((string)$b, $ss + 1, "\x00");
+        switch ($ss) {
+            case 0: return ($vvv << 8) | ord($b[0]);
+            case 1: return (($vvv << 16) | (ord($b[0]) << 8) | ord($b[1])) + 2048;
+            case 2: return (($vvv << 24) | (ord($b[0]) << 16) | (ord($b[1]) << 8) | ord($b[2])) + 526336;
+            default: return unpack('N', $b)[1];
         }
-        
-        $packed = str_pad($packed, 4, "\x00", STR_PAD_LEFT);
-        $pointer = unpack('N', $packed)[1];
-        
-        // Offset adjustment
-        $offset = 0;
-        switch ($pointerSize) {
-            case 2:
-                $offset = 2048;
-                break;
-            case 3:
-                $offset = 526336;
-                break;
-        }
-        
-        return $pointer + $offset;
     }
     
     /**
@@ -434,15 +416,18 @@ class MaxMindReader {
         $marker = "\xab\xcd\xefMaxMind.com";
         $markerLength = strlen($marker);
         
-        fseek($this->fileHandle, -8192, SEEK_END);
-        $searchArea = fread($this->fileHandle, 8192);
+        // ★ (2026-11-02 10:07) 파일 크기에 맞춰 끝부분을 읽음(규격상 메타데이터는 끝 128KB 안) — 8KB 보다 작은 파일은 fseek 가 실패해 엉뚱한 곳을 읽었음
+        $fileSize = (int)(fstat($this->fileHandle)['size'] ?? 0);
+        $readLen = min($fileSize, 131072);
+        fseek($this->fileHandle, $fileSize - $readLen);
+        $searchArea = fread($this->fileHandle, $readLen);
         
         $pos = strrpos($searchArea, $marker);
         if ($pos === false) {
             throw new Exception("Invalid MaxMind database: metadata marker not found");
         }
         
-        $metadataStart = ftell($this->fileHandle) - 8192 + $pos + $markerLength;
+        $metadataStart = $fileSize - $readLen + $pos + $markerLength;
         fseek($this->fileHandle, $metadataStart);
         
         list($metadata) = $this->decode();

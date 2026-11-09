@@ -551,3 +551,34 @@ body,
                 border-color 0.3s ease, 
                 color 0.3s ease;
 }
+/* ★ (2026-11-02 20:11) 창(모달)이 열려 있으면 다크 전환 단추 숨김 — 휴대폰에서 창 아래 '닫기' 단추를 덮어 테마만 바뀌었음 */
+body.modal-open #darkmode-toggle,
+body.modal-open .darkmode-toggle {
+    visibility: hidden !important;      /* display 는 단추 인라인 !important 가 이겨서 visibility 로 */
+    pointer-events: none !important;
+}
+
+/* ★ (2026-11-04 09:40) 위 '뷰어로 가는 링크 안 글자는 모두 밝게' 규칙이 북마크·작품·즐겨찾기 화면의 회색 아랫줄·주황 % 까지 흰색으로 만들던 것
+   — 그 몇 가지만 각 화면의 다크 색으로(:not(#_) 는 없는 id — 위 규칙보다 우선순위만 올림) */
+.dark-mode a .bm-when:not(#_), [data-theme="dark"] a .bm-when:not(#_),
+.dark-mode a .bm-sub:not(#_), [data-theme="dark"] a .bm-sub:not(#_),
+.dark-mode a .vol-file:not(#_), [data-theme="dark"] a .vol-file:not(#_) { color: #9aa0a6 !important; }
+.dark-mode a .fav-sub:not(#_), [data-theme="dark"] a .fav-sub:not(#_) { color: #d9c2a3 !important; } /* 즐겨찾기 원래 색(나무 선반) */
+/* ★ (2026-11-04 10:11) 노란 단추(작품 화면 '▶ 이어보기' 등) 글자는 어둡게 — 같은 규칙에 밝은 글자가 되어 안 보였음 */
+.dark-mode a.btn-warning:not(#_), [data-theme="dark"] a.btn-warning:not(#_),
+.dark-mode a.btn-warning:not(#_) *:not(.badge), [data-theme="dark"] a.btn-warning:not(#_) *:not(.badge) { color: #212529 !important; }
+.dark-mode .bm-list a .bm-page:not(#_), [data-theme="dark"] .bm-list a .bm-page:not(#_) { color: #bbb !important; }
+.dark-mode a .vol-pct:not(#_), [data-theme="dark"] a .vol-pct:not(#_) { color: #f39c12 !important; }
+
+/* ★ (2026-11-08 fix80, 펜닐 제보) 다크모드 '맨 위로'(▲) 단추 — 검은 반투명 바탕이라 어두운 화면에서 원 테두리가 안 보였음
+   → 아래 다크모드 단추와 같은 회색 원 + 옅은 테두리(목록·뷰어·작품 탐색·작품·즐겨찾기 화면 공통) */
+.dark-mode #scrollTopBtn,
+[data-theme="dark"] #scrollTopBtn {
+    background-color: rgba(64, 64, 64, 0.7) !important;
+    color: #e0e0e0 !important;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.14), 0 2px 8px rgba(0, 0, 0, 0.35) !important;
+}
+.dark-mode #scrollTopBtn:hover,
+[data-theme="dark"] #scrollTopBtn:hover {
+    background-color: rgba(64, 64, 64, 0.9) !important;
+}

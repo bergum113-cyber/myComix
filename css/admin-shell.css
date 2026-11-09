@@ -1,0 +1,478 @@
+/* ★ (2026-11-06 fix27) 관리자 공통 틀 + 통일 색·크기 (admin.php · admin_translations.php)
+   - PC(992px~): 위 막대 + 왼쪽 고정 메뉴(라이믹스 관리자처럼) + 흰 바탕 본문
+   - 태블릿·모바일(~991px): 위 막대의 [≡] 로 밀어 나오는 메뉴 · 본문은 화면 폭에 맞춰 흐름
+   - 색: 강조색 하나(파랑) + 회색 계열 · 빨강은 지우기만 · 묶음 머리는 모두 같은 연회색 띠
+   - 크기: 본문 14px · 작은 글 12.5px · 묶음 제목 14.5px · 입력 34px · 단추 32px
+   - 모양만 바꿈 — 칸 이름·값·동작은 그대로 */
+:root{
+  /* 크기(모든 색 테마 같음) */
+  --mc-top:54px;--mc-side:236px;--mc-r:12px;--mc-rs:8px;--mc-danger:#DC2626;
+  /* 기본 = 2 스카이 블루 */
+  --mc-acc:#3858E9;--mc-acc-d:#2741C4;--mc-acc-w:#EEF2FF;--mc-ring:rgba(56,88,233,.18);
+  --mc-page:#F5F7FB;--mc-line:#E5E7EB;--mc-line2:#EEF0F3;--mc-head:#FFFFFF;--mc-hover:#F3F4F6;
+  --mc-tx:#111827;--mc-sub:#6B7280;--mc-mut:#8A919C;--mc-ico:#3858E9;
+  --mc-top-bg:#FFFFFF;--mc-top-tx:#0F172A;--mc-top-mut:#6B7280;--mc-top-line:#E5E7EB;--mc-top-hover:#F3F4F6;--mc-top-badge:#F3F4F6;--mc-top-badge-tx:#374151;
+  --mc-side-bg:#FFFFFF;--mc-side-tx:#334155;--mc-side-ico:#94A3B8;--mc-side-grp:#94A3B8;--mc-side-line:#E5E7EB;--mc-side-hover:#F3F4F6;--mc-act-bg:#EEF2FF;--mc-act-tx:#2741C4;
+  --mc-band:#F4F6FF;--mc-band-line:#E0E6FB
+}
+/* ★ 관리자 화면 색 6가지(위 막대의 [색] 단추로 고름 — html data-adm-theme) */
+html[data-adm-theme="mint"]{--mc-acc:#10B981;--mc-acc-d:#047857;--mc-acc-w:#ECFDF5;--mc-ring:rgba(16,185,129,.2);--mc-page:#F8FAFC;--mc-line:#E2E8F0;--mc-line2:#EEF2F6;--mc-tx:#0F172A;--mc-sub:#64748B;--mc-ico:#059669;--mc-top-line:#E2E8F0;--mc-side-line:#E2E8F0;--mc-act-bg:#ECFDF5;--mc-act-tx:#047857;--mc-band:#F1FBF6;--mc-band-line:#D5F0E3}
+html[data-adm-theme="lavender"]{--mc-acc:#7C5CFC;--mc-acc-d:#5B3FD9;--mc-acc-w:#F3F0FF;--mc-ring:rgba(124,92,252,.2);--mc-page:#FFFFFF;--mc-line:#ECEAF5;--mc-line2:#F2F0F8;--mc-head:#FAF9FF;--mc-hover:#F5F3FC;--mc-tx:#1E1B3A;--mc-sub:#6E6B85;--mc-mut:#8F8CA6;--mc-ico:#7C5CFC;--mc-top-tx:#1E1B3A;--mc-top-mut:#6E6B85;--mc-top-line:#ECEAF5;--mc-top-hover:#F5F3FC;--mc-top-badge:#F3F0FF;--mc-top-badge-tx:#3F3D56;--mc-side-bg:#FAF9FF;--mc-side-tx:#3F3D56;--mc-side-ico:#A3A1B8;--mc-side-grp:#A3A1B8;--mc-side-line:#ECEAF5;--mc-side-hover:#F1EEFB;--mc-act-bg:#EDE8FF;--mc-act-tx:#5B3FD9;--mc-band:#F6F3FF;--mc-band-line:#E6DFFB}
+html[data-adm-theme="ocean"]{--mc-acc:#0EA5A4;--mc-acc-d:#0F766E;--mc-acc-w:#E6FAF8;--mc-ring:rgba(14,165,164,.2);--mc-page:#FFFFFF;--mc-line:#D7ECEA;--mc-line2:#E7F3F2;--mc-head:#F0FAFA;--mc-hover:#EEF8F7;--mc-tx:#0F2A2A;--mc-sub:#4B6B69;--mc-mut:#6F8C8A;--mc-ico:#0E8F8E;--mc-top-bg:#0F766E;--mc-top-tx:#FFFFFF;--mc-top-mut:#B7E4E0;--mc-top-line:#0F766E;--mc-top-hover:rgba(255,255,255,.14);--mc-top-badge:rgba(255,255,255,.16);--mc-top-badge-tx:#FFFFFF;--mc-side-bg:#F0FAFA;--mc-side-tx:#134E4A;--mc-side-ico:#5EA8A3;--mc-side-grp:#5EA8A3;--mc-side-line:#D7ECEA;--mc-side-hover:#E3F4F3;--mc-act-bg:#D5F3F0;--mc-act-tx:#0F766E;--mc-band:#EEF9F8;--mc-band-line:#D2ECE9}
+html[data-adm-theme="coral"]{--mc-acc:#F2674E;--mc-acc-d:#C9462F;--mc-acc-w:#FFF1EE;--mc-ring:rgba(242,103,78,.2);--mc-page:#FFFAF8;--mc-line:#F0E6E2;--mc-line2:#F6EEEB;--mc-hover:#FBF4F2;--mc-tx:#1C1917;--mc-sub:#78716C;--mc-mut:#9A928D;--mc-ico:#E5533A;--mc-top-tx:#1C1917;--mc-top-mut:#78716C;--mc-top-line:#F0E6E2;--mc-top-hover:#FBF4F2;--mc-top-badge:#FBF1EE;--mc-top-badge-tx:#44403C;--mc-side-tx:#44403C;--mc-side-ico:#A8A29E;--mc-side-grp:#A8A29E;--mc-side-line:#F0E6E2;--mc-side-hover:#FBF4F2;--mc-act-bg:#FFF1EE;--mc-act-tx:#C9462F;--mc-band:#FFF5F2;--mc-band-line:#F8DDD6}
+html[data-adm-theme="dark"]{--mc-acc:#3B82F6;--mc-acc-d:#1D4ED8;--mc-acc-w:#EFF6FF;--mc-ring:rgba(59,130,246,.2);--mc-page:#F9FAFB;--mc-ico:#2563EB;--mc-top-bg:#111827;--mc-top-tx:#FFFFFF;--mc-top-mut:#9CA3AF;--mc-top-line:#111827;--mc-top-hover:rgba(255,255,255,.1);--mc-top-badge:#1F2937;--mc-top-badge-tx:#E5E7EB;--mc-side-bg:#111827;--mc-side-tx:#CBD5E1;--mc-side-ico:#94A3B8;--mc-side-grp:#64748B;--mc-side-line:#1F2937;--mc-side-hover:#1F2937;--mc-act-bg:#3B82F6;--mc-act-tx:#FFFFFF;--mc-band:#F3F7FF;--mc-band-line:#DCE6F8}
+body.mc-adm{background:var(--mc-page);color:var(--mc-tx);padding:var(--mc-top) 0 0 var(--mc-side);margin:0;font-size:14px}
+
+/* ── 위 막대 ── */
+.mc-adm-top{position:fixed;top:0;left:0;right:0;height:var(--mc-top);z-index:1030;display:flex;align-items:center;gap:12px;padding:0 16px;background:var(--mc-top-bg);color:var(--mc-top-tx);border-bottom:1px solid var(--mc-top-line);text-align:left}
+.mc-adm-burger{display:none;align-items:center;justify-content:center;width:40px;height:40px;margin-left:-8px;border:0;border-radius:var(--mc-rs);background:transparent;color:inherit;cursor:pointer}
+.mc-adm-burger:hover,.mc-adm-burger:focus-visible{background:var(--mc-top-hover);outline:0}
+.mc-adm-brand{font-family:'Gugi',sans-serif;font-size:1.4rem;line-height:1;min-width:0;overflow:hidden;display:flex}
+.mc-adm-brand .mc-brand{color:var(--mc-top-tx) !important;overflow:hidden;text-overflow:ellipsis}
+.mc-adm-brand .mc-brand > svg,.mc-adm-brand .mc-brand > img{box-sizing:content-box;padding:5px;border-radius:var(--mc-rs);background:var(--mc-acc);color:#fff;width:.7em;height:.7em;margin-right:.2em}
+.mc-adm-brand .mc-brand-txt{overflow:hidden;text-overflow:ellipsis}
+.mc-adm-role{font-size:12.5px;color:var(--mc-top-mut);white-space:nowrap}
+.mc-adm-role small{font-size:11px;color:var(--mc-top-mut);opacity:.8;margin-left:2px}
+.mc-adm-top-r{margin-left:auto;display:flex;align-items:center;gap:4px;white-space:nowrap}
+.mc-adm-top-r .lang-badge{margin:0 4px 0 0 !important;background:var(--mc-acc) !important;color:#fff !important;border-radius:6px !important;padding:4px 8px !important;font-weight:600}
+.mc-adm-toplink{color:var(--mc-top-tx) !important;opacity:.85;font-size:13px;padding:6px 9px;border-radius:var(--mc-rs);text-decoration:none !important}
+.mc-adm-toplink:hover,.mc-adm-toplink:focus-visible{background:var(--mc-top-hover);opacity:1;outline:0}
+.mc-adm-backdrop{position:fixed;inset:0;z-index:1040;background:rgba(15,23,42,.45)}
+.mc-adm-backdrop[hidden]{display:none}
+/* 색 고르기 */
+.mc-th{position:relative}
+.mc-th-btn{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border:0;border-radius:var(--mc-rs);background:transparent;color:var(--mc-top-tx);cursor:pointer}
+.mc-th-btn:hover,.mc-th-btn:focus-visible,.mc-th-btn[aria-expanded="true"]{background:var(--mc-top-hover);outline:0}
+.mc-th-btn .mc-th-cur{width:10px;height:10px;border-radius:50%;background:var(--mc-acc);box-shadow:0 0 0 2px var(--mc-top-bg);position:absolute;right:6px;bottom:6px}
+.mc-th-pop{position:absolute;right:0;top:calc(100% + 8px);z-index:1050;width:236px;max-width:calc(100vw - 20px);background:#fff;color:#111827;border:1px solid #E5E7EB;border-radius:var(--mc-r);box-shadow:0 12px 32px rgba(15,23,42,.16);padding:8px;text-align:left}
+.mc-th-pop[hidden]{display:none}
+.mc-th-pop .mc-th-ttl{font-size:12px;font-weight:600;color:#6B7280;margin:4px 8px 6px}
+.mc-th-opt{display:flex;align-items:center;gap:10px;width:100%;padding:8px;border:0;border-radius:var(--mc-rs);background:transparent;font-size:13.5px;color:#111827;cursor:pointer;text-align:left}
+.mc-th-opt:hover,.mc-th-opt:focus-visible{background:#F3F4F6;outline:0}
+.mc-th-opt[aria-checked="true"]{background:#F3F4F6;font-weight:600}
+.mc-th-sw{display:inline-flex;width:34px;height:22px;border-radius:6px;overflow:hidden;border:1px solid rgba(0,0,0,.08);flex:0 0 34px}
+.mc-th-sw i{flex:1}
+.mc-th-opt .mc-th-ck{margin-left:auto;visibility:hidden;color:#111827}
+.mc-th-opt[aria-checked="true"] .mc-th-ck{visibility:visible}
+
+/* ── 메뉴(왼쪽) — 묶음 이름은 작은 회색 글자, 고른 메뉴는 강조색을 옅게 깐 둥근 칸 ── */
+body.mc-adm .admin-menu{position:fixed;top:var(--mc-top);left:0;bottom:0;width:var(--mc-side);z-index:1020;display:block;margin:0;padding:6px 10px 24px;overflow-y:auto;overscroll-behavior:contain;background:var(--mc-side-bg);border-right:1px solid var(--mc-side-line);text-align:left;grid-template-columns:none}
+body.mc-adm .admin-menu .mc-nav-head{display:none}
+body.mc-adm .admin-menu .am-group{display:block;background:none;border:0;border-radius:0;padding:0;margin:0}
+body.mc-adm .admin-menu .am-title{display:flex;align-items:center;gap:6px;margin:14px 10px 6px;padding:0;background:none;color:var(--mc-side-grp);font-size:11.5px;font-weight:600;letter-spacing:.02em;white-space:nowrap;line-height:1.4;flex:none}
+body.mc-adm .admin-menu .am-title .emoji-icon,body.mc-adm .admin-menu .am-title svg{display:none}
+body.mc-adm .admin-menu .am-list{display:block;margin:0;padding:0}
+body.mc-adm .admin-menu .nav-item{display:block}
+body.mc-adm .admin-menu .nav-link{display:flex;align-items:center;gap:10px;padding:8px 10px;margin:1px 0;font-size:13.5px;line-height:1.45;color:var(--mc-side-tx);background:transparent;border:0;border-radius:var(--mc-rs);white-space:nowrap}
+body.mc-adm .admin-menu .nav-link .emoji-icon,body.mc-adm .admin-menu .nav-link svg{color:var(--mc-side-ico);width:17px;height:17px}
+body.mc-adm .admin-menu .nav-link:hover{background:var(--mc-side-hover);color:var(--mc-side-tx)}
+body.mc-adm .admin-menu .nav-link:focus-visible{outline:2px solid var(--mc-acc);outline-offset:-2px}
+body.mc-adm .admin-menu .nav-link.active{background:var(--mc-act-bg);color:var(--mc-act-tx);font-weight:600;box-shadow:none}
+body.mc-adm .admin-menu .nav-link.active .emoji-icon,body.mc-adm .admin-menu .nav-link.active svg{color:inherit}
+
+/* ── 본문 ── */
+.mc-adm-title{display:flex;align-items:center;gap:9px;margin:24px 28px 18px;padding:0;border-bottom:0;font-size:22px;font-weight:700;color:var(--mc-tx);text-align:left;line-height:1.3}
+.mc-adm-title .emoji-icon,.mc-adm-title svg{color:var(--mc-ico)}
+body.mc-adm .mc-adm-main{padding:0 28px 110px;text-align:left;font-size:14px;line-height:1.55}
+body.mc-adm .mc-adm-main > .tab-pane{padding:0 0 90px;margin:0;background:none;border-radius:0}
+body.mc-adm .mc-adm-main > .tab-pane > .container-fluid{padding-left:0;padding-right:0}
+body.mc-adm .alert-floating{top:calc(var(--mc-top) + 12px)}
+
+/* 강조색 하나 — 예전 메뉴 묶음마다 다른 색(보라·초록·주황·산호)은 같게 */
+body.mc-adm .ab-page,body.mc-adm .tab-pane.ab-gen{--abc:var(--mc-acc)}
+
+/* 글자 크기 통일 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) small,body.mc-adm :is(.mc-adm-main,.at-wrap) .small,body.mc-adm :is(.mc-adm-main,.at-wrap) .form-text{font-size:12.5px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) h3,body.mc-adm :is(.mc-adm-main,.at-wrap) .h3{font-size:18px;font-weight:600}
+body.mc-adm :is(.mc-adm-main,.at-wrap) h4,body.mc-adm :is(.mc-adm-main,.at-wrap) .h4{font-size:16.5px;font-weight:600}
+body.mc-adm :is(.mc-adm-main,.at-wrap) h5,body.mc-adm :is(.mc-adm-main,.at-wrap) .h5{font-size:15px;font-weight:600}
+body.mc-adm :is(.mc-adm-main,.at-wrap) h6,body.mc-adm :is(.mc-adm-main,.at-wrap) .h6{font-size:14px;font-weight:600}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .form-control,body.mc-adm :is(.mc-adm-main,.at-wrap) .custom-select,body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group-text{font-size:14px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .form-control:not(textarea):not([multiple]):not([size]):not([type=file]),body.mc-adm :is(.mc-adm-main,.at-wrap) .custom-select{height:34px;padding-top:5px;padding-bottom:5px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .form-control-sm:not(textarea),body.mc-adm :is(.mc-adm-main,.at-wrap) .custom-select-sm{height:30px !important;font-size:13px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .form-control,body.mc-adm :is(.mc-adm-main,.at-wrap) .custom-select{border-color:var(--mc-line);border-radius:var(--mc-rs)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .form-control:focus,body.mc-adm :is(.mc-adm-main,.at-wrap) .custom-select:focus{border-color:var(--mc-acc);box-shadow:0 0 0 3px var(--mc-ring)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .table{font-size:13.5px;color:var(--mc-tx)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .table thead th,body.mc-adm :is(.mc-adm-main,.at-wrap) .table .thead-dark th,body.mc-adm :is(.mc-adm-main,.at-wrap) .table .thead-light th{background:var(--mc-head);color:var(--mc-tx);border-color:var(--mc-line);font-weight:600;font-size:13px}
+
+/* 묶음(카드) — 흰 바탕 + 얇은 테두리 + 같은 연회색 머리띠 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card,body.mc-adm :is(.mc-adm-main,.at-wrap) .info-card{border:1px solid var(--mc-line) !important;border-radius:var(--mc-r) !important;box-shadow:0 1px 2px rgba(15,23,42,.04) !important;background:#fff;margin-bottom:16px;overflow:hidden}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card > form > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .info-card > .card-header{background:var(--mc-head) !important;color:var(--mc-tx) !important;border-bottom:1px solid var(--mc-line) !important;font-size:14.5px !important;font-weight:600;padding:11px 16px;text-align:left}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card > .card-header :is(h1,h2,h3,h4,h5,h6,strong,span:not(.badge),div,small),body.mc-adm :is(.mc-adm-main,.at-wrap) .card > form > .card-header :is(h1,h2,h3,h4,h5,h6,strong,span:not(.badge),div,small){color:inherit}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card-header .emoji-icon:not(.btn *),body.mc-adm :is(.mc-adm-main,.at-wrap) .card-header svg.mc-ei:not(.btn *){color:var(--mc-ico) !important} /* fix35 머리 안 단추(팝업 추가 등)의 아이콘은 제외 — 단추 색과 같아져 안 보였음 */
+/* 카드 제목 앞 아이콘 = 강조색을 옅게 깐 작은 칸 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card > .card-header > svg.mc-ei:first-child,body.mc-adm :is(.mc-adm-main,.at-wrap) .card > form > .card-header > svg.mc-ei:first-child,body.mc-adm :is(.mc-adm-main,.at-wrap) .info-card > .card-header > svg.mc-ei:first-child{box-sizing:content-box;width:16px;height:16px;padding:6px;border-radius:var(--mc-rs);background:var(--mc-acc-w);margin-right:6px;vertical-align:middle}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > form > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .info-card > .card-header{background:#fff !important;font-size:14px !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .info-card{margin-bottom:12px;border-radius:var(--mc-rs) !important;box-shadow:none !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card-body{padding:16px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .list-group-item{border-color:var(--mc-line2)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) hr{border-top-color:var(--mc-line2)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .alert{border-radius:var(--mc-rs);font-size:13.5px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .nav-tabs .nav-link.active{border-color:var(--mc-line) var(--mc-line) #fff;color:var(--mc-acc-d);font-weight:600}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .nav-tabs .nav-link{color:var(--mc-sub)}
+
+/* 단추 — 주 단추 = 파랑 / 나머지 = 흰 바탕 회색 테두리 / 지우기 = 빨강 (로그인 테마 미리보기 안은 제외) */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn{font-size:13.5px;border-radius:var(--mc-rs);font-weight:500}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-sm,body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-group-sm > .btn{font-size:12.5px;padding:4px 10px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-primary,.btn-success,.btn-info):not(.theme-preview-box *):not(:disabled){background-color:var(--mc-acc);border-color:var(--mc-acc);color:#fff}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-primary,.btn-success,.btn-info):not(.theme-preview-box *):disabled{background-color:var(--mc-acc);border-color:var(--mc-acc);opacity:.45;color:#fff}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-primary,.btn-success,.btn-info):not(.theme-preview-box *):not(:disabled):hover{background-color:var(--mc-acc-d);border-color:var(--mc-acc-d)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-secondary,.btn-light,.btn-warning,.btn-outline-secondary,.btn-outline-success,.btn-outline-info,.btn-outline-warning,.btn-outline-dark):not(.theme-preview-box *):not(.country-select-btn){background-color:#fff;border-color:var(--mc-line);color:var(--mc-tx)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-secondary,.btn-light,.btn-warning,.btn-outline-secondary,.btn-outline-success,.btn-outline-info,.btn-outline-warning,.btn-outline-dark):not(.theme-preview-box *):not(.country-select-btn):not(:disabled):hover{background-color:var(--mc-hover);border-color:var(--mc-sub);color:var(--mc-tx)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-outline-primary:not(.theme-preview-box *){background-color:#fff;border-color:var(--mc-acc);color:var(--mc-acc-d)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-outline-primary:not(.theme-preview-box *):not(:disabled):hover{background-color:var(--mc-acc-w);border-color:var(--mc-acc);color:var(--mc-acc-d)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-danger:not(.theme-preview-box *){background-color:var(--mc-danger);border-color:var(--mc-danger);color:#fff}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-outline-danger:not(.theme-preview-box *){background-color:#fff;border-color:#FECACA;color:var(--mc-danger)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-outline-danger:not(.theme-preview-box *):not(:disabled):hover{background-color:#FEF2F2;border-color:var(--mc-danger);color:var(--mc-danger)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-group-toggle .btn.active,.btn-group-toggle .btn:has(input:checked),.btn[class*="btn-outline-"].active):not(.theme-preview-box *):not(.country-select-btn){background-color:var(--mc-acc);border-color:var(--mc-acc);color:#fff}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn:focus{box-shadow:0 0 0 3px var(--mc-ring)}
+
+/* 대시보드 — 숫자 카드·바로가기 같은 모양(색 숫자 → 검정) */
+body.mc-adm #dashboard .stat-card{background:#fff !important;border:1px solid var(--mc-line);border-radius:var(--mc-r);padding:14px 16px;margin-bottom:12px}
+body.mc-adm #dashboard .stat-card .stat-number{color:var(--mc-tx);font-size:26px;font-weight:700}
+body.mc-adm #dashboard .stat-card .stat-label{color:var(--mc-sub);font-size:13px}
+body.mc-adm #dashboard .quick-link{border:1px solid var(--mc-line);border-radius:var(--mc-r);padding:12px 8px;font-size:13.5px;margin-bottom:12px}
+body.mc-adm #dashboard .quick-link:hover{border-color:var(--mc-acc);background:var(--mc-acc-w) !important}
+body.mc-adm #dashboard .quick-link.bg-danger{color:var(--mc-danger) !important}
+
+/* 로그인 테마 고르기 — 카드마다 다른 색 테두리 → 같은 회색, 고른 것만 파랑 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .theme-card{border:1px solid var(--mc-line) !important;border-radius:var(--mc-r);background:#fff}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .theme-card:hover{border-color:var(--mc-sub) !important;background:var(--mc-hover);transform:none}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .theme-card.active{border:2px solid var(--mc-acc) !important;background:var(--mc-acc-w);box-shadow:none}
+
+/* 목록형 화면(SMTP·언어·약관·브랜딩·설정) — 같은 묶음 모양 */
+body.mc-adm .ab-page{max-width:1000px;margin:0;padding:0 0 96px}
+body.mc-adm .ab-page .ab-head > h3{display:none}
+body.mc-adm .ab-head{margin:0}
+body.mc-adm .ab-lead{font-size:13.5px;color:var(--mc-sub);margin:0 0 12px}
+body.mc-adm .ab-list{border:1px solid var(--mc-line);border-radius:var(--mc-r);box-shadow:0 1px 2px rgba(15,23,42,.04)}
+body.mc-adm .ab-sec{display:flex;align-items:center;gap:7px;margin:18px 0 0;padding:10px 16px;background:var(--mc-head);color:var(--mc-tx);border:1px solid var(--mc-line);border-bottom:1px solid var(--mc-line2);border-radius:var(--mc-r) var(--mc-r) 0 0;font-size:14.5px;font-weight:600}
+body.mc-adm .ab-sec .emoji-icon,body.mc-adm .ab-sec .ab-ico{color:var(--mc-sub)}
+body.mc-adm .ab-sec + .ab-list,body.mc-adm .ab-sec + form > .ab-list:first-of-type{border-top-left-radius:0;border-top-right-radius:0}
+body.mc-adm .ab-row{padding:12px 16px;border-top-color:var(--mc-line2)}
+body.mc-adm .ab-name{font-size:14px;font-weight:600}
+body.mc-adm .ab-desc{font-size:12.5px;color:var(--mc-mut)}
+body.mc-adm .ab-note{border-radius:var(--mc-rs);font-size:13px}
+body.mc-adm .ab-row.ab-dirty{background:var(--mc-acc-w)}
+/* 사이트 설정(표) — 큰 분류 = 굵은 제목 + 밑줄 / 소분류 = 연회색 띠 */
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr.cfg-cat > td{font-size:16px;font-weight:600;color:var(--mc-tx);padding:26px 2px 8px;border-bottom:1px solid var(--mc-line) !important}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr.cfg-cat:first-child > td{padding-top:4px}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"]{background:var(--mc-head) !important;color:var(--mc-tx);border:0 !important;border-top:16px solid transparent !important;background-clip:padding-box;box-shadow:inset 1px 0 0 var(--mc-line),inset -1px 0 0 var(--mc-line),inset 0 1px 0 var(--mc-line),inset 4px 0 0 var(--mc-acc);padding:11px 16px 11px 18px;font-size:14.5px;border-radius:0} /* fix29 — 위 틈(투명 테두리)에 옆 선이 비치던 것 → 선은 안쪽 그림자로 */
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"] strong{font-size:14.5px;color:var(--mc-tx);font-weight:600}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"] small{color:var(--mc-mut);font-size:12.5px}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:has(> td.bg-light[colspan]) + tr > td{border-top:1px solid var(--mc-line) !important;border-top-left-radius:0 !important;border-top-right-radius:0 !important}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td{padding:12px 16px;font-size:14px;border-color:var(--mc-line)}
+body.mc-adm #config .ab-cfg table.config-table td small.text-muted{font-size:12.5px}
+body.mc-adm #config .ab-cfg .cfg-jump{top:var(--mc-top);background:var(--mc-page);border-bottom:1px solid var(--mc-line2) !important;padding:8px 0}
+
+/* 저장 막대 — PC 에선 본문 가운데 */
+body.mc-adm .ab-savebar{left:calc(var(--mc-side) + (100% - var(--mc-side)) / 2)}
+
+/* ══ 태블릿·모바일(~991px): 왼쪽 메뉴 → [≡] 로 밀어 나오는 메뉴 ══ */
+@media (max-width:991.98px){
+  body.mc-adm{padding-left:0}
+  .mc-adm-burger{display:inline-flex}
+  body.mc-adm .admin-menu{top:0;padding-top:0;width:min(300px,86vw);z-index:1045;transform:translateX(-105%);transition:transform .22s ease,visibility 0s linear .22s;visibility:hidden;box-shadow:none;border-right:0}
+  body.mc-adm.mc-nav-open .admin-menu{transform:none;visibility:visible;transition:transform .22s ease,visibility 0s;box-shadow:0 0 24px rgba(15,23,42,.25)}
+  body.mc-adm.mc-nav-open{overflow:hidden}
+  body.mc-adm .admin-menu .mc-nav-head{display:flex;align-items:center;justify-content:space-between;height:var(--mc-top);margin:0 -10px 4px;padding:0 6px 0 18px;background:var(--mc-side-bg);color:var(--mc-side-tx);border-bottom:1px solid var(--mc-side-line);font-size:15px;font-weight:700;position:sticky;top:0;z-index:1}
+  .mc-nav-close{width:40px;height:40px;border:0;border-radius:var(--mc-rs);background:transparent;color:inherit;font-size:26px;line-height:1;cursor:pointer}
+  .mc-nav-close:hover,.mc-nav-close:focus-visible{background:var(--mc-side-hover);outline:0}
+  body.mc-adm .admin-menu .nav-link{padding:11px 12px;font-size:14.5px}
+  .mc-adm-title{margin:16px 16px 14px;font-size:19px}
+  body.mc-adm .mc-adm-main{padding:0 16px 110px}
+  body.mc-adm .ab-savebar{left:50%}
+}
+@media (prefers-reduced-motion:reduce){body.mc-adm .admin-menu{transition:none !important}}
+
+/* 휴대폰 세로(~575px) — 여백 줄이고 글자·칸은 그대로 읽히게 */
+@media (max-width:575.98px){
+  .mc-adm-top{gap:8px;padding:0 10px}
+  .mc-adm-brand{font-size:1.2rem}
+  .mc-adm-role{display:none}
+  .mc-adm-toplink{padding:6px 7px;font-size:12.5px}
+  .mc-adm-top-r .lang-badge{margin-right:2px !important}
+  .mc-adm-title{margin:12px 12px 12px;padding-bottom:10px;font-size:18px}
+  body.mc-adm .mc-adm-main{padding:0 10px 110px}
+  body.mc-adm :is(.mc-adm-main,.at-wrap) .card-body{padding:12px}
+  body.mc-adm :is(.mc-adm-main,.at-wrap) .card > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card > form > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .info-card > .card-header{padding:9px 12px}
+  body.mc-adm .ab-row{padding:11px 12px}
+  body.mc-adm .ab-sec{padding:9px 12px}
+  body.mc-adm #dashboard .stat-card .stat-number{font-size:22px}
+  body.mc-adm #dashboard .quick-link{font-size:12.5px;padding:10px 4px}
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{padding:11px 12px 2px}
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:last-child{padding:4px 12px 11px}
+}
+/* 아주 좁은 폰(~359px) */
+@media (max-width:359.98px){
+  .mc-adm-toplink:first-of-type{display:none}
+  body.mc-adm .mc-adm-main{padding:0 8px 110px}
+}
+/* 휴대폰 가로(높이가 낮을 때) — 위 막대를 얇게 */
+@media (orientation:landscape) and (max-height:500px){
+  :root{--mc-top:44px}
+  .mc-adm-brand{font-size:1.15rem}
+  .mc-adm-title{margin-top:10px;margin-bottom:10px;font-size:17px}
+  body.mc-adm .admin-menu .nav-link{padding:8px 12px}
+}
+
+/* ── 다른 관리자 화면(한영 검색어 연결) 본문 ── */
+body.mc-adm .at-wrap{max-width:1040px;margin:0;padding:22px 28px 60px}
+body.mc-adm.at-page{background:var(--mc-page);padding-top:var(--mc-top)}
+body.mc-adm .at-head .at-back{display:none}
+body.mc-adm .at-head{padding-bottom:4px;margin-bottom:12px}
+body.mc-adm .at-head h1{font-size:22px;font-weight:700}
+body.mc-adm .at-card{border-radius:var(--mc-r);border-color:var(--mc-line)}
+body.mc-adm .at-card h2{font-size:14.5px;font-weight:600}
+@media (max-width:991.98px){body.mc-adm .at-wrap{padding:16px 16px 60px}}
+@media (max-width:575.98px){body.mc-adm .at-wrap{padding:12px 10px 60px}body.mc-adm .at-head h1{font-size:18px}}
+
+/* 색 글자·알림 통일 — 청록·노랑 글자는 읽기 어려워 같은 계열의 진한 색으로 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .text-primary,body.mc-adm :is(.mc-adm-main,.at-wrap) .text-info{color:var(--mc-acc-d) !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .text-warning{color:#9a5b00 !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .text-success{color:#1e7b46 !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .text-danger{color:#c0392b !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .alert-info{background:var(--mc-acc-w);border-color:#cfdcf5;color:var(--mc-acc-d)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .table-info,body.mc-adm :is(.mc-adm-main,.at-wrap) .table-info > td{background-color:var(--mc-acc-w) !important;color:var(--mc-acc-d)}
+/* 대시보드 접속 통계 숫자 칸 — 색 숫자 → 검정(오늘만 파랑) */
+body.mc-adm #dashboard .border.rounded.bg-light{background:#fff !important;border-color:var(--mc-line) !important}
+body.mc-adm #dashboard .border.rounded.bg-light > .font-weight-bold{color:var(--mc-tx) !important;font-weight:600 !important}
+/* 줄(row) 사이 간격 — 본문 여백(폰 10px)보다 넓게 바깥으로 나가 옆으로 밀리던 것(−15px) → 8px */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .row:not(.no-gutters){margin-left:-8px;margin-right:-8px}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .row:not(.no-gutters) > [class*="col"]{padding-left:8px;padding-right:8px}
+/* 위 막대가 고정이라 — 입력 확인·# 이동으로 칸까지 내려갈 때 막대 밑에 숨지 않게 */
+html:has(body.mc-adm){scroll-padding-top:calc(var(--mc-top) + 12px)}
+.mc-th-note{font-size:11.5px;color:#8A919C;margin:6px 8px 2px}
+@media (max-width:767.98px){.mc-th{position:static}.mc-th-pop{position:fixed;top:calc(var(--mc-top) + 6px);right:8px;left:auto}}
+
+
+/* ══ (2026-11-06 fix29) 휴대폰 세로 손질 · 깜빡임 · 세부 제목 색 · 대시보드 바로가기 ══ */
+/* 깜빡임 — 관리자 화면은 페이지 열 때 투명→보임, 링크 누를 때 보임→투명 효과를 끔(메뉴 옮길 때 하얗게 번쩍) · 탭 바꿀 때 흐려졌다 나타나기도 끔 */
+html[data-adm-theme],html[data-adm-theme].leaving{opacity:1 !important;transition:none !important}
+body.mc-adm .mc-adm-main > .tab-pane.fade{transition:none !important}
+body.mc-adm.mc-nav-noanim .admin-menu{transition:none !important}
+/* 색 고르기 단추의 점 — 폰에서 위 막대 오른쪽 끝으로 떨어지던 것 */
+.mc-th-btn{position:relative}
+/* 저장 막대 — 폰 세로(640px 이하)는 화면 아래 전체 폭(가운데 맞춤 규칙이 덮어써서 반쯤 밖으로 나가 [되돌리기][저장]이 안 보였음) */
+@media (max-width:640px){body.mc-adm .ab-savebar{left:0;width:100%}}
+
+/* 세부 제목(묶음 띠·카드 안 작은 제목) = 강조색 글자 + 왼쪽 강조 선 — 큰 제목(검정)·항목(검정)·설명(회색)과 층이 구분되게 */
+body.mc-adm .ab-sec{color:var(--mc-acc-d);box-shadow:inset 4px 0 0 var(--mc-acc);padding-left:18px}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"] strong{color:var(--mc-acc-d)}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr.cfg-cat > td .emoji-icon,body.mc-adm #config .ab-cfg table.config-table > tbody > tr.cfg-cat > td svg{color:var(--mc-ico)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > form > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .info-card > .card-header{color:var(--mc-acc-d) !important;box-shadow:inset 4px 0 0 var(--mc-acc)}
+body.mc-adm .mc-adm-main .card-body :is(h5,h6,p > strong:only-child,p.mt-2 > strong:first-child,.form-group > label > strong:first-child,label.font-weight-bold,.border.rounded > strong:first-child):not(.text-danger):not(.text-danger *):not(.alert *):not(.theme-preview-box *):not(.preview-content *){color:var(--mc-acc-d) !important}
+body.mc-adm .mc-adm-main .card-body :is(h5,h6,p > strong:only-child,label.font-weight-bold):not(.text-danger):not(.alert *) .emoji-icon,body.mc-adm .mc-adm-main .card-body :is(h5,h6,label.font-weight-bold):not(.alert *) svg.mc-ei{color:var(--mc-ico)}
+
+/* 대시보드 바로가기(메인·사용자 추가·로그아웃) — 메뉴처럼 눈에 띄게: 강조색 옅은 바탕 + 진한 아이콘 칸 */
+body.mc-adm #dashboard .quick-link{display:flex !important;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:92px;background:var(--mc-acc-w) !important;border:1px solid transparent !important;color:var(--mc-acc-d) !important;font-weight:700;font-size:14px;line-height:1.3;text-decoration:none !important;box-shadow:none}
+body.mc-adm #dashboard .quick-link br{display:none}
+body.mc-adm #dashboard .quick-link svg,body.mc-adm #dashboard .quick-link .emoji-icon{box-sizing:content-box;width:20px;height:20px;padding:9px;border-radius:12px;background:var(--mc-acc);color:#fff !important}
+body.mc-adm #dashboard .quick-link:hover{background:var(--mc-acc-w) !important;border-color:var(--mc-acc) !important;transform:none}
+body.mc-adm #dashboard .quick-link.bg-danger{background:#FEF2F2 !important;color:var(--mc-danger) !important}
+body.mc-adm #dashboard .quick-link.bg-danger svg,body.mc-adm #dashboard .quick-link.bg-danger .emoji-icon{background:var(--mc-danger)}
+body.mc-adm #dashboard .quick-link.bg-danger:hover{border-color:var(--mc-danger) !important;background:#FEF2F2 !important}
+
+/* 한영 검색어 연결 — 목록의 말은 읽기 칸(테두리 없이 글자만) · 고칠 때만 칸 모양(예전처럼) */
+body.mc-adm .at-wrap .translation-row .form-control{border-color:transparent !important;background:transparent !important;box-shadow:none !important;height:auto !important;padding:4px 8px;font-size:14px}
+body.mc-adm .at-wrap .translation-row.editing .form-control{border-color:#f0c36d !important;background:#fff !important}
+@media (max-width:575.98px){
+  /* 도구 줄 — 찾기 한 줄, 정렬 한 줄, CSV 두 단추 반반 */
+  body.mc-adm .at-wrap .at-tool{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  body.mc-adm .at-wrap .at-tool > form,body.mc-adm .at-wrap .at-tool > select{grid-column:1 / -1;width:100% !important}
+  body.mc-adm .at-wrap .at-tool > .btn{width:100%;padding-left:6px;padding-right:6px;font-size:13px}
+  body.mc-adm .at-wrap .translation-row{padding:8px 0;column-gap:6px}
+  body.mc-adm .at-wrap .translation-row .form-control{padding:2px 6px}
+  body.mc-adm .at-wrap .translation-row > .at-e .form-control{color:var(--mc-sub)}
+  body.mc-adm .at-wrap .translation-row .at-btns{gap:6px}
+  body.mc-adm .at-wrap .at-grid{gap:12px}
+}
+
+/* ══ (2026-11-06 fix30) 폰 세로 — 옆으로 넘치던 표는 줄마다 카드로(값 앞에 머리 이름) · 대시보드 시간표는 촘촘히 ══ */
+@media (max-width:575.98px){
+  body.mc-adm .table-responsive:has(> table.mc-stk),body.mc-adm div:has(> table.mc-stk){overflow:visible !important}
+  body.mc-adm table.mc-stk,body.mc-adm table.mc-stk > tbody{display:block;width:100% !important;min-width:0 !important;border:0}
+  body.mc-adm table.mc-stk > thead{display:none}
+  body.mc-adm table.mc-stk > tbody > tr{display:block;background:#fff !important;border:1px solid var(--mc-line);border-radius:var(--mc-rs);padding:6px 12px;margin:0 0 8px}
+  body.mc-adm table.mc-stk > tbody > tr > td{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;width:auto !important;padding:5px 0 !important;border:0 !important;background:none !important;text-align:right !important;white-space:normal !important;overflow-wrap:anywhere;min-width:0}
+  body.mc-adm table.mc-stk > tbody > tr > td.d-table-cell{display:flex !important}
+  body.mc-adm table.mc-stk > tbody > tr > td::before{content:attr(data-label);flex:0 0 auto;max-width:42%;text-align:left;font-size:12px;font-weight:500;color:var(--mc-sub);white-space:normal}
+  body.mc-adm table.mc-stk > tbody > tr > td[data-label=""]::before{display:none}
+  body.mc-adm table.mc-stk > tbody > tr > td[data-label=""]{justify-content:flex-start;text-align:left !important;font-weight:600}
+  body.mc-adm table.mc-stk > tbody > tr > td[colspan]{justify-content:center;text-align:center !important;font-weight:400}
+  body.mc-adm table.mc-stk > tbody > tr > td + td{border-top:1px solid var(--mc-line2) !important}
+  body.mc-adm table.mc-stk > tbody > tr > td > :is(input.form-control,select.form-control,.input-group){flex:0 1 150px;max-width:60%}
+  body.mc-adm table.mc-stk > tbody > tr > td > .text-truncate{white-space:normal;overflow:visible}
+  /* 대시보드 시간대 표 — 한 줄에 다 들어가게 */
+  body.mc-adm #dashboard .table-responsive table :is(th,td){padding:4px 1px !important;font-size:11.5px;white-space:nowrap}
+  /* 한영 — 영어 말은 회색 */
+  body.mc-adm .at-wrap .translation-row > .at-e .at-full{color:var(--mc-sub)}
+}
+/* 손가락으로 누르는 기기 — 너무 작은 단추(23px 등)는 최소 32px */
+@media (pointer:coarse){body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-sm{min-height:32px;min-width:32px}}
+@media (max-width:575.98px){
+  body.mc-adm table.mc-stk > tbody > tr > th{display:block;width:auto !important;padding:5px 0 4px !important;border:0 !important;background:none !important;text-align:left !important;font-weight:600;color:var(--mc-acc-d)}
+  body.mc-adm table.mc-stk > tbody > tr > th + td{border-top:1px solid var(--mc-line2) !important}
+}
+
+/* 설정의 '썸네일 크기(px)' 표 — 태블릿 세로·폰 가로(576~991px)에서도 옆으로 밀어야 칸이 보이던 것 → 같은 카드 모양 */
+@media (min-width:576px) and (max-width:991.98px){
+  body.mc-adm #config .config-table .table-responsive:has(> table.mc-stk),body.mc-adm #config .config-table div:has(> table.mc-stk){overflow:visible !important}
+  body.mc-adm #config .config-table table.mc-stk,body.mc-adm #config .config-table table.mc-stk > tbody{display:block;width:100% !important;min-width:0 !important;border:0}
+  body.mc-adm #config .config-table table.mc-stk > thead{display:none}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr{display:block;background:#fff !important;border:1px solid var(--mc-line);border-radius:var(--mc-rs);padding:6px 12px;margin:0 0 8px}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;width:auto !important;padding:5px 0 !important;border:0 !important;background:none !important;text-align:right !important;white-space:normal !important;overflow-wrap:anywhere;min-width:0}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td.d-table-cell{display:flex !important}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td::before{content:attr(data-label);flex:0 0 auto;max-width:42%;text-align:left;font-size:12px;font-weight:500;color:var(--mc-sub);white-space:normal}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td[data-label=""]::before{display:none}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td[data-label=""]{justify-content:flex-start;text-align:left !important;font-weight:600}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td[colspan]{justify-content:center;text-align:center !important;font-weight:400}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td + td{border-top:1px solid var(--mc-line2) !important}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td > :is(input.form-control,select.form-control,.input-group){flex:0 1 150px;max-width:60%}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > td > .text-truncate{white-space:normal;overflow:visible}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > th{display:block;width:auto !important;padding:5px 0 4px !important;border:0 !important;background:none !important;text-align:left !important;font-weight:600;color:var(--mc-acc-d)}
+  body.mc-adm #config .config-table table.mc-stk > tbody > tr > th + td{border-top:1px solid var(--mc-line2) !important}
+}
+@media (max-width:400px){body.mc-adm #dashboard .table-responsive table :is(th,td){font-size:10.5px;padding:3px 0 !important;letter-spacing:-.02em}}
+
+
+/* ══ (2026-11-06 fix34) 묶음 머리 통일 — 모든 화면의 카드 머리·묶음 띠·설정 소분류가 같은 모양: 테마별 옅은 띠 바탕 + 왼쪽 강조 선 + 강조색 제목 ══ */
+body.mc-adm .ab-sec{background:var(--mc-band) !important;border-color:var(--mc-band-line) !important}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"]{background-color:var(--mc-band) !important;background-clip:padding-box !important;box-shadow:inset 1px 0 0 var(--mc-band-line),inset -1px 0 0 var(--mc-band-line),inset 0 1px 0 var(--mc-band-line),inset 4px 0 0 var(--mc-acc)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card > form > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .info-card > .card-header,body.mc-adm #cache .card-header[style]{background:var(--mc-band) !important;color:var(--mc-acc-d) !important;border-bottom:1px solid var(--mc-band-line) !important;box-shadow:inset 4px 0 0 var(--mc-acc)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card > .card-header > svg.mc-ei:first-child,body.mc-adm :is(.mc-adm-main,.at-wrap) .card > form > .card-header > svg.mc-ei:first-child,body.mc-adm :is(.mc-adm-main,.at-wrap) .info-card > .card-header > svg.mc-ei:first-child{background:#fff !important;box-shadow:0 0 0 1px var(--mc-band-line)}
+/* 카드 안 카드(한 단계 아래) — 흰 바탕 + 왼쪽 강조 선(얇게) */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > form > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .info-card > .card-header{background:#fff !important;border-bottom:1px solid var(--mc-line2) !important;box-shadow:inset 3px 0 0 var(--mc-acc)}
+/* 한영 검색어 연결 — 칸 제목도 같은 모양 */
+body.mc-adm .at-wrap .at-card > h2{color:var(--mc-acc-d);background:var(--mc-band);border:1px solid var(--mc-band-line);box-shadow:inset 4px 0 0 var(--mc-acc);border-radius:var(--mc-rs);padding:8px 12px;margin:-2px 0 12px}
+
+/* ══ (2026-11-06 fix34) 한영 검색어 연결을 탭 안에 ══ */
+body.mc-adm #translations{padding:0 0 90px}
+body.mc-adm iframe.mc-embed-frame{display:block;width:100%;height:640px;border:0;background:transparent;color-scheme:normal}
+html.mc-embed,html.mc-embed body{overflow:hidden}
+html.mc-embed .mc-adm-top,html.mc-embed .admin-menu,html.mc-embed .mc-adm-backdrop,html.mc-embed .at-head{display:none !important}
+html.mc-embed body.mc-adm{padding:0 !important;background:transparent !important;min-height:0}
+html.mc-embed body.mc-adm .at-wrap{max-width:1040px;padding:0 0 12px !important;margin:0}
+.mc-toast{position:fixed;top:calc(var(--mc-top) + 12px);right:16px;z-index:1060;max-width:min(420px,calc(100vw - 32px));padding:11px 16px;border-radius:var(--mc-rs);background:#16a34a;color:#fff;font-size:14px;box-shadow:0 6px 20px rgba(15,23,42,.18);transition:opacity .3s,transform .3s}
+.mc-toast.mc-toast-err{background:var(--mc-danger)}
+.mc-toast.mc-toast-out{opacity:0;transform:translateY(-6px)}
+
+
+/* ══ (2026-11-06 fix35) 폭 기준 · 설정 마감 · 캐시 단추 · 한영 폰 줄 ══ */
+/* 폭 기준 — 본문은 1080px 까지만(넓은 화면에서 끝까지 늘어나 단추·칸이 과하게 커지던 것), 그보다 좁으면 창에 맞춰 줄어듦. 로그·보안은 표가 넓어 1400px */
+:root{--mc-wmax:1080px;--mc-wmax-wide:1400px}
+body.mc-adm .mc-adm-main > .tab-pane{max-width:var(--mc-wmax)}
+body.mc-adm .mc-adm-main > #logs,body.mc-adm .mc-adm-main > #security{max-width:var(--mc-wmax-wide)}
+body.mc-adm .mc-adm-title{max-width:var(--mc-wmax)}
+body.mc-adm .mc-adm-title:has(~ .mc-adm-main > #logs.active),body.mc-adm .mc-adm-title:has(~ .mc-adm-main > #security.active){max-width:var(--mc-wmax-wide)}
+body.mc-adm .ab-page{max-width:none}
+html.mc-embed body.mc-adm .at-wrap{max-width:none}
+/* 캐시 — 단추 두 개가 칸 끝까지 늘어나던 것 → 글자 길이만큼(폰은 그대로 꽉 차게) */
+@media (min-width:576px){
+  body.mc-adm #cache .btn-group.w-100{width:auto !important;display:inline-flex;flex-wrap:wrap;max-width:100%}
+  body.mc-adm #cache .btn-group.w-100 > .btn{flex:0 0 auto;min-width:200px}
+}
+/* 설정 — 마지막 줄 아래 테두리(숨긴 원래 저장 단추 자리라 끝이 열려 있었음) */
+body.mc-adm #config .ab-cfg table.config-table{border-bottom:1px solid var(--mc-line);border-radius:0 0 var(--mc-r) var(--mc-r)}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:last-child > td{border-bottom:0 !important}
+
+/* 한영 검색어 연결 — 폰 세로(768px 이하): 한 줄에 한글(굵게), 다음 줄에 ⇄ + 영어, 오른쪽에 ✏️ 🗑 나란히 */
+@media (max-width:768px){
+  body.mc-adm .at-wrap .translation-row{grid-template-columns:26px 18px minmax(0,1fr) auto !important;grid-template-areas:"c k k b" "c a e b" !important;row-gap:0 !important;column-gap:6px !important;align-items:center;padding:9px 2px !important}
+  body.mc-adm .at-wrap .translation-row > .at-cbx{grid-area:c}
+  body.mc-adm .at-wrap .translation-row > .at-k{grid-area:k}
+  body.mc-adm .at-wrap .translation-row > .at-arrow{grid-area:a;display:flex !important;align-items:center;justify-content:center;color:var(--mc-mut)}
+  body.mc-adm .at-wrap .translation-row > .at-arrow svg{width:15px;height:15px}
+  body.mc-adm .at-wrap .translation-row > .at-e{grid-area:e}
+  body.mc-adm .at-wrap .translation-row > .at-btns{grid-area:b;flex-direction:row !important;gap:6px;align-self:center}
+  body.mc-adm .at-wrap .translation-row .at-k .at-full{font-weight:600;color:var(--mc-tx);padding:2px 4px}
+  body.mc-adm .at-wrap .translation-row .at-e .at-full{color:var(--mc-sub);padding:2px 4px}
+  body.mc-adm .at-wrap .translation-row .at-multi{margin-left:4px}
+  body.mc-adm .at-wrap .translation-row.editing{grid-template-areas:"c k k k" "c a e e" "c b b b" !important}
+  body.mc-adm .at-wrap .translation-row.editing > .at-btns{justify-content:flex-end;padding-top:6px}
+}
+/* 설정 '썸네일 크기(px)' 표 — 폭 기준(1080px) 안에서 다 들어가게: 줄 제목은 줄바꿈, 칸은 줄어듦(원래 최소 폭 520px·줄바꿈 없음이라 옆으로 밀어야 했음) */
+@media (min-width:992px){
+  body.mc-adm #config .config-table table.table-bordered{min-width:0 !important;width:100% !important;table-layout:fixed}
+  body.mc-adm #config .config-table table.table-bordered :is(th,td){white-space:normal !important;overflow-wrap:anywhere}
+  body.mc-adm #config .config-table table.table-bordered thead th:first-child,body.mc-adm #config .config-table table.table-bordered tbody th{width:34%}
+  body.mc-adm #config .config-table table.table-bordered input.form-control{width:100% !important;min-width:0 !important}
+}
+
+/* ══ (2026-11-07 fix36) 설정 — 소분류 묶음을 다른 화면 카드처럼 둥근 카드로 + 왼쪽 제목 칸을 글자 길이에 맞게 좁힘(펜닐 요청) ══
+   - 띠(소분류 제목) 칸은 위 16px 이 묶음 사이 틈(투명 테두리)이라 모서리를 둥글게 해도 틈 안쪽은 각져 보였음
+     → 띠 칸 바탕·테두리·강조 선을 칸 안쪽(틈 제외)에 깐 ::before 로 그려 위 모서리를 둥글게(글자는 그 위에 그대로)
+   - 묶음 끝 줄(다음이 소분류·큰 분류·표 끝)의 아래 모서리도 같은 반지름(var(--mc-r))
+   - 표 전체 아래 테두리(fix35)는 묶음마다 아래 테두리가 생겨 겹치므로 없앰
+     (마지막 줄 뒤에 <script> 가 있어 :last-child 가 안 맞았음 → 줄(tr) 중 마지막 = :last-of-type)
+   - 왼쪽 제목 칸: 38% → 화면 폭별 고정 폭(PC 220px · 태블릿 200px · 작은 태블릿 160px), 낱말 단위 줄바꿈 / 두 칸 사이 세로선 없음 */
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"]{position:relative;isolation:isolate;background:transparent !important;box-shadow:none !important}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"]::before{content:"";position:absolute;inset:0;z-index:-1;pointer-events:none;background:var(--mc-band);border:1px solid var(--mc-band-line);border-bottom:0;border-radius:var(--mc-r) var(--mc-r) 0 0;box-shadow:inset 4px 0 0 var(--mc-acc)}
+body.mc-adm #config .ab-cfg table.config-table{border-bottom:0;border-radius:0}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-of-type,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td{border-bottom:1px solid var(--mc-line) !important}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-of-type,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td:first-child{border-bottom-left-radius:var(--mc-r)}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-of-type,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td:last-child{border-bottom-right-radius:var(--mc-r)}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{word-break:keep-all;overflow-wrap:break-word;border-right:0 !important}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:last-child{border-left:0 !important}
+@media (min-width:992px){body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{width:220px !important;max-width:220px !important}}
+@media (min-width:768px) and (max-width:991.98px){body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{width:200px !important;max-width:200px !important}}
+@media (min-width:577px) and (max-width:767.98px){body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{width:160px !important;max-width:160px !important}}
+/* 폰 세로(576px 이하, 제목 위·입력 아래로 쌓임): 쌓인 두 칸 사이 선 없음, 묶음 끝 아래 모서리는 아래 칸(입력) 쪽 */
+@media (max-width:576px){
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:first-child{border-right:1px solid var(--mc-line) !important;border-bottom:0 !important;border-bottom-left-radius:0 !important;border-bottom-right-radius:0 !important}
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])) > td:last-child{border-left:1px solid var(--mc-line) !important}
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr:has(> td.bg-light[colspan]) + tr > td:first-child{border-top-right-radius:0 !important}
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-of-type,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td:last-child{border-bottom-left-radius:var(--mc-r);border-bottom-right-radius:var(--mc-r)}
+}
+
+/* ══ (2026-11-07 fix37) 펜닐 제보 묶음 ══ */
+/* 1) 설정 — 폰 세로(576px 이하): 줄(tr)이 한 덩어리(block)가 되면서 줄마다 붙은 Bootstrap .border-bottom(회색 일자선)이 보였음
+      → 카드 맨 아래 둥근 모서리 밑에 일자선 · 줄 사이 선 두 겹. PC·가로는 표 칸 방식이라 tr 선이 안 그려져 문제 없었음 */
+@media (max-width:576px){
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr{border-bottom:0 !important;border-top:0 !important} /* fix38 — 소분류 띠 줄(tr.border-top)의 위 선도: 묶음마다 앞 카드 아래에 일자선으로 보였음 */
+  /* 묶음 끝 줄은 제목(위 칸) 아래에도 선이 생겼음(fix36 묶음 끝 규칙이 폰 규칙보다 우선) → 아래 칸에만 */
+  body.mc-adm #config .ab-cfg table.config-table > tbody > tr:not(.cfg-cat):not(:has(> td.bg-light[colspan])):is(:last-of-type,:has(+ tr.cfg-cat),:has(+ tr > td.bg-light[colspan])) > td:first-child:not(:last-child){border-bottom:0 !important}
+}
+/* 2) 묶음 머리 아이콘 — 아이콘이 머리 바로 안이 아니라 글자 묶음(span·strong) 안에 있거나 묶음 띠(.ab-sec)면 둥근 아이콘 상자가 빠져 있었음
+      (테마 '로그인 테마 선택' · 폴더권한관리 · 팝업 관리 · 상단 배너 · 국가 코드 참조 · SMTP · 약관 미리보기 · 설정 소분류 띠) → 다른 머리와 같은 상자 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card > .card-header,.card > form > .card-header,.info-card > .card-header) > :first-child > svg.mc-ei:first-child,
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card > .card-header,.card > form > .card-header,.info-card > .card-header) > :first-child > .emoji-icon:first-child > svg.mc-ei,
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card > .card-header,.info-card > .card-header) > div:first-child > :is(strong,span):first-child > svg.mc-ei:first-child,
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"] > strong:first-child > svg.mc-ei:first-child,
+body.mc-adm .ab-sec > svg.mc-ei:first-child,body.mc-adm .ab-sec > .emoji-icon:first-child > svg.mc-ei{box-sizing:content-box;width:16px;height:16px;padding:6px;border-radius:var(--mc-rs);margin-right:6px;vertical-align:middle;flex:0 0 auto;background:#fff !important;box-shadow:0 0 0 1px var(--mc-band-line)}
+body.mc-adm .ab-sec > svg.mc-ei:first-child,body.mc-adm .ab-sec > .emoji-icon:first-child > svg.mc-ei{margin-right:2px;color:var(--mc-acc-d)}
+body.mc-adm #config .ab-cfg table.config-table > tbody > tr > td.bg-light[colspan="2"] > strong:first-child > svg.mc-ei:first-child{margin-right:4px;color:var(--mc-acc-d)}
+/* 카드 안 카드(흰 머리)는 연한 강조색 상자 — 흰 바탕 위 흰 상자가 안 보이지 않게 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > .card-header > :first-child > svg.mc-ei:first-child,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > .card-header > div:first-child > :is(strong,span):first-child > svg.mc-ei:first-child,body.mc-adm :is(.mc-adm-main,.at-wrap) .card .card > .card-header > svg.mc-ei:first-child{background:var(--mc-acc-w) !important;box-shadow:none}
+/* 3) 붙은 단추·입력 묶음(btn-group · input-group) — 공통 둥글기(--mc-rs)가 Bootstrap 의 '붙은 쪽은 각지게'를 한쪽만 덮어
+      앞 것은 오른쪽이 각지고 뒤 것은 왼쪽이 둥근 어긋난 모양(캐시 빠른 생성/강제 재생성 · 로그 기간 · 보안 이전/다음 · 공지/SMTP 고르기 · 입력+단위 등) → 붙은 쪽만 각지게 되돌림 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group-text{border-radius:var(--mc-rs)}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-group,.btn-group-toggle) > .btn:not(:last-child):not(.dropdown-toggle),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-group > .btn-group:not(:last-child) > .btn,
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > :is(.form-control,.custom-select,.custom-file):not(:last-child),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > .input-group-prepend > :is(.btn,.input-group-text),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > .input-group-append:not(:last-child) > :is(.btn,.input-group-text),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > .input-group-append:last-child > :is(.btn,.input-group-text):not(:last-child){border-top-right-radius:0 !important;border-bottom-right-radius:0 !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.btn-group,.btn-group-toggle) > .btn:not(:first-child),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .btn-group > .btn-group:not(:first-child) > .btn,
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > :is(.form-control,.custom-select,.custom-file):not(:first-child),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > .input-group-append > :is(.btn,.input-group-text),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > .input-group-prepend:not(:first-child) > :is(.btn,.input-group-text),
+body.mc-adm :is(.mc-adm-main,.at-wrap) .input-group > .input-group-prepend:first-child > :is(.btn,.input-group-text):not(:first-child){border-top-left-radius:0 !important;border-bottom-left-radius:0 !important}
+/* 4) 왼쪽 메뉴 — 고른 메뉴만 굵게(600) 바뀌며 글꼴(나눔고딕 400·700 만 받음)이 다른 굵기로 그려져 글자가 뭉개져 보였음 → 굵기는 그대로, 색·바탕으로만 표시 */
+body.mc-adm .admin-menu .nav-link.active{font-weight:inherit}
+/* 5) 위 막대 메인·로그아웃 — 아이콘 단추(테마 단추와 같은 36px) */
+.mc-adm-icolink{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;padding:0 !important}
+.mc-adm-icolink .mc-adm-tico{display:block;flex:0 0 auto}
+@media (max-width:359.98px){.mc-adm-toplink.mc-adm-icolink:first-of-type{display:inline-flex}.mc-adm-icolink{width:32px}}
+
+/* ══ (2026-11-07 fix39) 카드 머리 왼쪽 강조 선이 둥근 모서리에서 각진 막대로 잘려 보이던 것(펜닐 제보 이미지 1~7) ══
+   - 머리 자체 모서리는 Bootstrap 3px(또는 0)인데 카드(12px)가 바깥만 둥글게 잘라, 강조 선(안쪽 그림자)의 안쪽 끝은 곧게 남아 쐐기 모양
+     → 머리 위 모서리를 카드 모서리 − 테두리(1px)와 같게 하면 강조 선이 설정 띠처럼 모서리를 따라 휨
+   - 대상(스크립트로 모든 탭 훑음): 폴더권한관리 10 · 테마 · 유저그룹/금지 아이디 · 공지 설정/팝업 관리/상단 배너 · 보안 6 · 중복 파일 · 삭제/탈퇴 사용자
+   - 펼침 카드(국가 코드 참조)가 접혀 머리만 있을 땐 아래 모서리도 */
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card,.info-card) > :is(.card-header,form > .card-header){border-top-left-radius:calc(var(--mc-r) - 1px) !important;border-top-right-radius:calc(var(--mc-r) - 1px) !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card,.info-card) > form > .card-header{border-top-left-radius:calc(var(--mc-r) - 1px) !important;border-top-right-radius:calc(var(--mc-r) - 1px) !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card,.info-card) :is(.card,.info-card) > .card-header,body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card,.info-card) :is(.card,.info-card) > form > .card-header{border-top-left-radius:calc(var(--mc-rs) - 1px) !important;border-top-right-radius:calc(var(--mc-rs) - 1px) !important}
+body.mc-adm :is(.mc-adm-main,.at-wrap) :is(.card,.info-card) > .card-header:is(:last-child,:has(+ .collapse:not(.show))){border-bottom-left-radius:calc(var(--mc-r) - 1px) !important;border-bottom-right-radius:calc(var(--mc-r) - 1px) !important}
+/* fix39 — 띠(.ab-sec)·설정 소분류 띠 아이콘 색을 카드 머리 아이콘과 같은 진한 강조색으로(위 fix37 규칙 값만 바꿈) */

@@ -6,6 +6,9 @@
  * @date 2026-01-10
  */
 
+// ★ (2026-10-30) 탭 가림막은 사람이 연 화면이 아님 — 자동 로그아웃용 활동 기록·페이지 표시를 바꾸지 않음
+//   (바꾸면 '비대상 페이지에서 옴'으로 잡혀, 가림막을 거쳐 돌아올 때 비활동 자동 로그아웃 검사를 건너뜀)
+define('MC_NO_ACTIVITY_TOUCH', true);
 // ✅ bootstrap.php 사용으로 통일
 require_once __DIR__ . '/bootstrap.php';
 
@@ -35,17 +38,17 @@ $_login_url = $base_path . '/login.php';
 </head>
 <body>
 <div id="cover" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;">
-  <div style="font:15px/1.5 sans-serif;color:#555;text-align:center;padding:14px 24px;border:1px solid #e2e4e8;border-radius:12px;background:#fafbfc;box-shadow:0 1px 3px rgba(0,0,0,0.06);">화면을 탭하면 계속 봅니다</div>
+  <div style="font:15px/1.5 sans-serif;color:#555;text-align:center;padding:14px 24px;border:1px solid #e2e4e8;border-radius:12px;background:#fafbfc;box-shadow:0 1px 3px rgba(0,0,0,0.06);"><?php echo __h("blank_tap_continue"); /* ★ (2026-11-02 10:01) 언어 키로 */ ?></div>
 </div>
 <div class="loading" id="loadingIndicator" style="display:none;">
   <div class="spinner"></div>
-  <div>로딩 중...</div>
+  <div><?php echo __h("loading"); ?></div>
 </div>
 <script>
 (function(){
   // ✅ 서버에서 생성한 동적 경로 사용
-  var SESSION_CHECK_URL = '<?php echo $_session_check_url; ?>';
-  var LOGIN_URL = '<?php echo $_login_url; ?>';
+  var SESSION_CHECK_URL = <?php echo js((string)$_session_check_url); /* ★ (2026-11-02 11:39) 설치 폴더 이름에 ' 가 있어도 깨지지 않게 */ ?>;
+  var LOGIN_URL = <?php echo js((string)$_login_url); ?>;
   
   var params = new URLSearchParams(location.search);
   var returnUrl = params.get('return');
@@ -63,6 +66,9 @@ $_login_url = $base_path . '/login.php';
       var r = new URL(returnUrl, location.origin);
       if (r.origin !== location.origin || r.pathname.charAt(0) !== '/') { returnUrl = 'index.php'; return; }
       returnUrl = r.pathname + r.search + r.hash;   // 같은 출처 경로만(호스트 제거), 스크롤 위치(#) 보존
+      // ★ (2026-11-08 전체 점검 2차 fix74) '/..//다른곳' · '/.//다른곳' 은 같은 출처로 읽히지만 정규화 뒤 경로가 '//다른곳' 이 되어
+      //   location.replace 가 그 주소를 '//호스트'(다른 사이트)로 보냈음 → 경로가 // 로 시작하면 처음 화면으로
+      if (returnUrl.charAt(1) === '/') { returnUrl = 'index.php'; }
     } catch(e) { returnUrl = 'index.php'; }
   })();
 
@@ -155,5 +161,6 @@ $_login_url = $base_path . '/login.php';
   setTimeout(function(){ if (!isChecking) resetCurtainState(); }, 800);
 })();
 </script>
+<?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 </body>
 </html>

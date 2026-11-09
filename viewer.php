@@ -28,17 +28,24 @@ $_param_img = get_param('img', 'int', -1);
 $_getfile = decode_file_param($_GET['file'] ?? '');
 $_ext = strtolower(pathinfo($_getfile, PATHINFO_EXTENSION));
 
+// ★ (2026-10-30) 보안: 폴더 권한을 모든 요청(이미지·다운로드·스트림·PDF·변환 포함)보다 먼저 확인
+//   (전에는 화면(HTML)을 그릴 때만 dir_check 해서, 주소만 알면 권한 없는 폴더의 이미지·파일을 받을 수 있었음)
+if ($_getfile !== '') {
+    dir_check($_getfile);
+}
+
 // ✅ 리다이렉트용 파라미터 - HTTP Header Injection 방지
 // $_GET['file']은 이미 URL 인코딩된 상태이므로 그대로 전달하되,
 // 개행문자(\r\n)를 제거하여 Header Injection 공격 방지
 $_raw_file_param = preg_replace('/[\r\n]/', '', $_GET['file'] ?? '');
 
+// ★ (2026-10-30) $_GET['file'] 은 PHP 가 이미 한 번 디코딩한 값 — 이름에 & # % 가 있으면 잘려서 다시 인코딩해 넘김
 if ($_ext === 'txt' && file_exists(__DIR__ . '/txt_viewer.php')) {
-    header('Location: txt_viewer.php?file=' . $_raw_file_param . '&bidx=' . $current_bidx);
+    header('Location: txt_viewer.php?file=' . encode_url($_getfile) . '&bidx=' . $current_bidx);
     exit;
 }
 if ($_ext === 'epub' && file_exists(__DIR__ . '/epub_viewer.php')) {
-    header('Location: epub_viewer.php?file=' . $_raw_file_param . '&bidx=' . $current_bidx);
+    header('Location: epub_viewer.php?file=' . encode_url($_getfile) . '&bidx=' . $current_bidx);
     exit;
 }
 
@@ -77,7 +84,7 @@ if (is_file($_favorites_file)) {
  * @param string $entry_name 압축 내 이미지 파일명
  * @return string|false      이미지 바이너리 또는 실패 시 false
  */
-function archive_get_image_data($base_file, $entry_name) {
+function archive_get_image_data($base_file, $entry_name, $img_index = null) {
     $ext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
 
     // RAR/7Z 계열: archive_handler 사용
@@ -88,7 +95,27 @@ function archive_get_image_data($base_file, $entry_name) {
         try {
             $handler = new ArchiveHandler($base_file);
             $data = $handler->extractFile($entry_name);
-            return ($data !== false && $data !== null && strlen($data) > 0) ? $data : false;
+            if ($data !== false && $data !== null && strlen($data) > 0) return $data;
+            // ★ (2026-10-31) 예전 버전이 만든 목록 캐시(리눅스 C 로캘에서 '?' 로 깨진 이름 등)라 이름이 지금 목록에 없으면
+            //   목록 캐시를 지금 이름으로 다시 쓰고 같은 순번의 쪽을 꺼냄 — 업데이트 뒤 예전 캐시 때문에 쪽이 안 열리지 않게
+            if ($img_index !== null && is_string($entry_name) && !in_array($entry_name, $handler->listFiles(), true)) {
+                $fresh = [];
+                foreach ($handler->getImageFiles() as $n) { if (is_string($n) && preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $n)) $fresh[] = $n; }
+                natsort($fresh);
+                $fresh = array_values($fresh);
+                if (!empty($fresh)) {
+                    $cf = $base_file . '.image_files.json';
+                    $tmp = $cf . '.tmp' . bin2hex(random_bytes(4));
+                    if (@file_put_contents($tmp, json_encode($fresh, JSON_UNESCAPED_UNICODE)) !== false) {
+                        if (!@rename($tmp, $cf)) @unlink($tmp);
+                    }
+                    if (isset($fresh[(int)$img_index])) {
+                        $data = $handler->extractFile($fresh[(int)$img_index]);
+                        if ($data !== false && $data !== null && strlen($data) > 0) return $data;
+                    }
+                }
+            }
+            return false;
         } catch (Exception $e) {
             return false;
         }
@@ -98,24 +125,67 @@ function archive_get_image_data($base_file, $entry_name) {
     if (!class_exists('ZipArchive')) return false;
     $zip = new ZipArchive;
     if ($zip->open($base_file) === TRUE) {
-        $data = $zip->getFromName($entry_name);
+        $data = mc_zip_from_name($zip, $entry_name); // ★ (2026-10-31) 한글 등으로 바꾼 이름도 찾기
         $zip->close();
         return $data;
     }
     return false;
 }
 
+/**
+ * ★ (2026-10-31) 암호가 걸린 압축인지(항목 암호 또는 헤더 암호) — 암호 압축을 열면 빈 화면·깨진 쪽만 보이던 문제 안내용
+ *   ZIP 은 항목 정보만 훑고(빠름), RAR/7Z 는 ArchiveHandler 의 목록 결과를 씀
+ */
+function archive_is_encrypted($base_file) {
+    static $memo = [];
+    if (isset($memo[$base_file])) return $memo[$base_file];
+    $enc = false;
+    $ext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
+    if (in_array($ext, ['zip', 'cbz'], true)) {
+        if (class_exists('ZipArchive')) {
+            $z = new ZipArchive;
+            if ($z->open($base_file) === TRUE) {
+                for ($i = 0; $i < $z->numFiles; $i++) {
+                    $st = @$z->statIndex($i);
+                    if (is_array($st) && !empty($st['encryption_method'])) { $enc = true; break; }
+                }
+                $z->close();
+            }
+        }
+    } elseif (in_array($ext, ['rar', 'cbr', '7z', 'cb7'], true) && class_exists('ArchiveHandler')) {
+        try { $h = new ArchiveHandler($base_file); $enc = $h->isEncrypted(); } catch (\Throwable $e) { $enc = false; }
+    }
+    return $memo[$base_file] = $enc;
+}
+
+/** ★ (2026-10-31) 암호 압축의 쪽 자리에 보낼 안내 그림(SVG) — 캐시하지 않음 */
+function archive_locked_image_exit() {
+    $t = htmlspecialchars(__('viewer_archive_locked_short'), ENT_QUOTES, 'UTF-8');
+    $svg = '<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800" viewBox="0 0 600 800">'
+         . '<rect width="600" height="800" fill="#eceff1"/>'
+         . '<g transform="translate(300 330)" fill="none" stroke="#607d8b" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">'
+         . '<rect x="-70" y="-10" width="140" height="110" rx="14"/><path d="M-42 -10v-34a42 42 0 0 1 84 0v34"/></g>'
+         . '<text x="300" y="520" text-anchor="middle" font-family="sans-serif" font-size="30" fill="#455a64">' . $t . '</text></svg>';
+    http_response_code(200);
+    header('Content-Type: image/svg+xml; charset=utf-8');
+    header('Content-Length: ' . strlen($svg));
+    header('Cache-Control: no-store');
+    echo $svg;
+    exit;
+}
+
 function is_streaming_request() {
-    global $_param_imgfile, $_param_thumb, $_param_filetype;
+    global $_param_imgfile, $_param_thumb, $_param_filetype, $_param_stream, $_param_download;
     
-    // 이미지 파일 요청
+    // 이미지 파일 요청 (PDF 본문도 imgfile=pdf)
     if (!empty($_param_imgfile)) return true;
     
     // 썸네일 요청
     if (!empty($_param_thumb)) return true;
     
-    // 파일 타입별 스트리밍
-    if (in_array($_param_filetype, ['pdf', 'video', 'archive'], true)) return true;
+    // 파일 타입별 스트리밍 — ★ (2026-10-30) 실제 전송(stream=1 / download=1)일 때만.
+    //   전에는 filetype=pdf|video 화면(HTML)까지 24시간 공개 캐시로 나가, 남은 로그인 시간 등이 오래된 화면으로 보였음
+    if (in_array($_param_filetype, ['video', 'archive', 'zipvideo'], true) && ($_param_stream === '1' || $_param_download === '1')) return true;
     
     return false;
 }
@@ -184,7 +254,7 @@ function splitImage($img_data, $side) {
     
     // ✅ VIPS 미설정 또는 실패 시 GD 폴백
     if ($result_data === null) {
-        $img = @imagecreatefromstring($img_data);
+        $img = function_exists('mc_gd_from_string') ? mc_gd_from_string($img_data) : @imagecreatefromstring($img_data); // ★ (2026-11-02 09:58) 너무 큰 그림은 나누지 않고 원본
         if (!$img) {
             return ['data' => $img_data, 'split' => false];
         }
@@ -221,16 +291,126 @@ function splitImage($img_data, $side) {
     return ['data' => $result_data, 'split' => true];
 }
 
+/**
+ * ★ (2026-10-29) 세로분할(3/4)용(북모드·툰모드 공통): 페이지별 "분할 대상 여부" 맵
+ * - splitImage()와 같은 기준(가로 >= 세로*1.3)을 이미지 헤더만 읽어 판정 → 세로 페이지가 좌/우로 2번 나오던 중복 방지
+ * - 서버 이미지 서빙과 같은 .image_files.json 순서(img 인덱스)를 사용
+ * - 1 = 분할, 0 = 분할 안 함(1장), null = 판정 불가(기존 동작 그대로 좌/우 2장)
+ * - ZIP/CBZ·이미지 폴더만 판정. RAR/7Z는 헤더만 읽기 어려워 null(기존 동작 유지)
+ */
+function mc_book_split_map($base_file, $type, $cache_dir = null) {
+    // 같은 요청 안에서 북모드(헤더 JS)·본문 목록이 함께 호출해도 1번만 계산
+    static $memo = [];
+    $memo_key = $type . '|' . $base_file;
+    if (isset($memo[$memo_key])) return $memo[$memo_key];
+    $map = [];
+    try {
+        $judge = function ($info) {
+            if (!is_array($info) || empty($info[0]) || empty($info[1])) return null;
+            return ((int)$info[0] >= (int)$info[1] * 1.3) ? 1 : 0;
+        };
+        $list_file = $base_file . '.image_files.json';
+
+        if ($type === 'zip' && preg_match('/\.(zip|cbz)$/i', $base_file)) {
+            // ZIP 서빙과 같은 목록: .image_files.json 배열의 img 인덱스 그대로
+            if (!is_file($list_file)) return $map;
+            $names = @json_decode(@file_get_contents($list_file), true);
+            if (!is_array($names) || empty($names)) return $map;
+            $count = min(count($names), 5000); // 비정상 대용량 목록 상한
+            $map = array_fill(0, $count, null);
+
+            // ★ (2026-10-29) 판정 결과 캐시(ZIP만): 사용자·압축파일별 이미지 캐시 폴더에 저장
+            //   → 기존 캐시 정리(7일 TTL·로그아웃 정리)와 함께 지워짐. 파일 크기·수정시각·목록 수정시각이 바뀌면 다시 판정
+            $ck = @filesize($base_file) . '|' . @filemtime($base_file) . '|' . @filemtime($list_file) . '|' . $count;
+            $cf = $cache_dir ? rtrim($cache_dir, '/\\') . '/_splitmap.json' : null;
+            if ($cf && is_file($cf)) {
+                $c = @json_decode(@file_get_contents($cf), true);
+                if (is_array($c) && ($c['k'] ?? null) === $ck && isset($c['m']) && is_array($c['m']) && count($c['m']) === $count) {
+                    $ok = true;
+                    foreach ($c['m'] as $v) { if (!($v === 0 || $v === 1 || $v === null)) { $ok = false; break; } }
+                    if ($ok) { $memo[$memo_key] = array_values($c['m']); return $memo[$memo_key]; }
+                }
+            }
+
+            $z = new ZipArchive;
+            if ($z->open($base_file) !== TRUE) { $memo[$memo_key] = $map; return $map; }
+            for ($i = 0; $i < $count; $i++) {
+                $name = $names[$i] ?? null;
+                if (!is_string($name)) continue;
+                $info = false;
+                foreach ([131072, 2097152] as $len) { // 헤더만 부분 읽기(128KB → 실패 시 2MB)
+                    $part = mc_zip_from_name($z, $name, $len);
+                    if ($part === false || $part === '') break;
+                    $info = @getimagesizefromstring($part);
+                    if ($info !== false || strlen($part) < $len) break;
+                }
+                $map[$i] = $judge($info);
+            }
+            $z->close();
+            if ($cf) {
+                if (!is_dir(dirname($cf))) @mkdir(dirname($cf), 0755, true);
+                if (is_dir(dirname($cf))) @file_put_contents($cf, json_encode(['k' => $ck, 'm' => $map]), LOCK_EX);
+            }
+        } elseif ($type === 'images' && is_dir($base_file)) {
+            // 폴더 서빙(이미지 요청 처리부)과 완전히 같은 방식으로 목록/순서 구성 → 인덱스 일치
+            $files = [];
+            if (is_file($list_file)) {
+                $cached = @json_decode(@file_get_contents($list_file), true);
+                if (is_array($cached) && !empty($cached)) {
+                    foreach ($cached as $fname) {
+                        if (is_string($fname) && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $fname) && !preg_match('#(^|[/\\\\])\.\.([/\\\\]|$)#', $fname)) { /* ★ (2026-11-09 14:14) '..' 조각이 든 이름은 건너뜀 — 손으로 만든 목록 파일로 폴더 밖·막힌 폴더 그림이 나왔음(앱은 폴더 맨 위 이름만 씀) */ /* ★ (2026-11-02 20:27) 그림 이름만 — 이 파일이 목록 대신 메타(totalpage·page_order·thumbnail…)로 덮여 있는 경우가 있어, 'toon'·'3' 같은 이름의 하위 폴더·파일이 쪽으로 잡힐 수 있었음 */
+                            $fp = realpath($base_file . DIRECTORY_SEPARATOR . $fname);
+                            if ($fp !== false) $files[] = $fp;
+                        }
+                    }
+                }
+            }
+            if (empty($files)) {
+                foreach (new DirectoryIterator($base_file) as $f) {
+                    if ($f->isFile() && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $f->getFilename()) && !mc_folder_nonpage($f->getFilename())) { // ★ (2026-11-02 08:58) 폴더 안 표지([cover].jpg — 목록 화면이 만듦)·영상 썸네일은 쪽이 아님(전에는 마지막·첫 쪽으로 끼어 들어갔음) — 세 곳 같은 기준
+                        $files[] = $f->getPathname();
+                    }
+                }
+                $files = n_sort($files);
+            }
+            $files = array_values($files);
+            $count = min(count($files), 5000);
+            $map = array_fill(0, $count, null);
+            for ($i = 0; $i < $count; $i++) {
+                if (is_string($files[$i]) && is_file($files[$i])) {
+                    $map[$i] = $judge(@getimagesize($files[$i]));
+                }
+            }
+        }
+        // RAR/7Z 등: 판정 안 함(빈 배열 → 기존처럼 좌/우 2장)
+    } catch (\Throwable $e) {
+        // 판정 실패 → 기존 동작 그대로
+    }
+    $memo[$memo_key] = $map;
+    return $map;
+}
+
+/** 현재 사용자·압축파일의 이미지 캐시 폴더 경로(이미지 서빙부와 같은 규칙) — 분할 판정 캐시 저장 위치 */
+function mc_split_cache_dir($base_file, $user_id) {
+    $uid = preg_replace('/[^a-zA-Z0-9]/', '', (string)$user_id);
+    if ($uid === '' || !function_exists('cacheKeyFromPath')) return null;
+    return __DIR__ . "/cache/{$uid}/" . cacheKeyFromPath($base_file);
+}
+
 // ✅ 경로 검증 실패 시 에러 응답은 security_helpers.php의 simple_error_exit() 사용
 
 set_time_limit(30);
+// ★ (2026-10-30) Windows 는 실행 시간 제한을 실제 경과 시간으로 잼 — 파일 내려받기·동영상·PDF 전송은 느린 회선에서 30초에 끊기지 않게
+if ($_param_download === '1' || $_param_stream === '1' || ($_param_filetype === 'pdf' && $_param_imgfile === 'pdf')) {
+    set_time_limit(0);
+}
 if (ob_get_level()) ob_end_clean();
 
 // ✅ Cache-Control 헤더 - 이미지/데이터 스트리밍 요청에만 캐시 허용
 // HTML 페이지 렌더링 시에는 no-cache 적용 (HTML 출력 전에 재설정됨)
 $_is_streaming_request = is_streaming_request();
 if ($_is_streaming_request) {
-    header("Cache-Control: public, max-age=86400");
+    header("Cache-Control: private, max-age=86400");
     header("Expires: " . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
 }
 
@@ -245,6 +425,9 @@ if ($_is_streaming_request) {
 $_session_user_id = $_SESSION['user_id'] ?? '';
 $_session_last_action = $_SESSION['last_action'] ?? time();
 $_session_remember_me = isset($_SESSION['remember_me']) && $_SESSION['remember_me'] === true;
+$_viewer_delete_token = get_delete_token(); // ★ (2026-10-30) 세션을 닫기 전에 만들어 둠(커버 설정·MP4 변환 요청용)
+$_viewer_is_admin = isset($_SESSION['user_group']) && trim((string)$_SESSION['user_group']) === 'admin'; // ★ (2026-10-30) MP4 변환(원본 삭제)은 관리자만
+$_viewer_csrf = ($_viewer_is_admin && function_exists('generate_csrf_token')) ? generate_csrf_token() : ''; // ★ (2026-11-08 fix80) '지금 장면·이 쪽을 폴더 표지로'(POST) 용 — 세션을 닫기 전에
 
 // 2. 추출한 데이터로 변수 설정
 $user_id = !empty($_session_user_id) 
@@ -294,7 +477,7 @@ if ($_param_filetype === 'archive' && $_param_download === '1') {
         simple_error_exit(403, __('err_invalid_path'));
     }
 
-    if (!file_exists($base_file)) {
+    if (!is_file($base_file)) { // ★ (2026-11-02 11:38) 폴더 경로면 filesize·readfile 경고 — 파일만
         simple_error_exit(404, __('err_file_not_found'));
     }
 
@@ -394,8 +577,14 @@ if ($_param_filetype === 'video' && $_param_stream === '1') {
     if (isset($_SERVER['HTTP_RANGE'])) {
         $range = $_SERVER['HTTP_RANGE'];
         if (preg_match('/bytes=(\d*)-(\d*)/', $range, $matches)) {
-            $start = $matches[1] !== '' ? intval($matches[1]) : 0;
-            $end = $matches[2] !== '' ? intval($matches[2]) : $file_size - 1;
+            // ★ (2026-10-30) 'bytes=-N'(끝에서 N바이트) 처리, 끝 위치는 파일 크기로 자름(길이 불일치로 플레이어가 기다리던 문제)
+            if ($matches[1] === '' && $matches[2] !== '') {
+                $start = max(0, $file_size - intval($matches[2]));
+                $end = $file_size - 1;
+            } else {
+                $start = $matches[1] !== '' ? intval($matches[1]) : 0;
+                $end = $matches[2] !== '' ? min(intval($matches[2]), $file_size - 1) : $file_size - 1;
+            }
             
             if ($start > $end || $start >= $file_size) {
                 http_response_code(416);
@@ -413,7 +602,7 @@ if ($_param_filetype === 'video' && $_param_stream === '1') {
     header("Accept-Ranges: bytes");
     header("Content-Type: $mime_type");
     header("Content-Length: $length");
-    header("Cache-Control: public, max-age=86400");
+    header("Cache-Control: private, max-age=86400");
     header("Content-Disposition: inline; filename=\"" . basename($base_file) . "\"");
     
     // 파일 스트리밍
@@ -436,10 +625,42 @@ if ($_param_filetype === 'video' && $_param_stream === '1') {
 }
 
 // ============================================================
+// ★ (2026-10-31) FileStation 동영상 플레이어 기능 — 재생바 장면 미리보기(vapi=frame) · 실시간 변환 재생(vapi=tc) · 압축 속 자막(vapi=zsubs)
+//   파일 확인은 위 스트림과 같음(맨 위 dir_check 폴더 권한 + validate_file_path). ffmpeg 는 관리자 설정 경로만, 동시 실행 자리 제한(video_lib.php)
+// ============================================================
+if (isset($_GET['vapi']) && in_array($_param_filetype, ['video', 'zipvideo'], true)) {
+    require_once __DIR__ . '/video_lib.php';
+    $getfile = decode_file_param($_GET['file'] ?? '');
+    $base_file = validate_file_path($getfile, $base_dir);
+    if ($base_file === false) {
+        log_user_activity('해킹시도', 'vapi: ' . substr($getfile, 0, 100));
+        simple_error_exit(403, __('err_invalid_path'));
+    }
+    $_vapi = is_string($_GET['vapi']) ? $_GET['vapi'] : ''; // ★ (2026-11-02 09:58) 배열이면 경고
+    if ($_param_filetype === 'zipvideo') {
+        if ($_vapi !== 'zsubs' || !is_file($base_file) || !preg_match('/\.(zip|cbz)$/i', $base_file)) simple_error_exit(404, __('viewer_archive_not_found'));
+        header('Content-Type: application/json; charset=utf-8');
+        header('Cache-Control: no-store');
+        echo json_encode(mcv_zip_subs($base_file, is_string($_GET['video'] ?? null) ? $_GET['video'] : ''), JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        exit;
+    }
+    if (!is_file($base_file) || !is_video_file($base_file)) simple_error_exit(404, __('viewer_video_not_found'));
+    if ($_vapi === 'frame') mcv_frame_send($base_file, (float)($_GET['t'] ?? 0));
+    if ($_vapi === 'tc') mcv_transcode_send($base_file, (float)($_GET['ss'] ?? 0), (int)($_GET['a'] ?? 0), (int)($_GET['q'] ?? 0));
+    simple_error_exit(400, 'bad request');
+}
+
+// ============================================================
 // ✅ MP4 변환 API
 // ============================================================
 if (($_GET['action'] ?? '') === 'convert_to_mp4') {
     header('Content-Type: application/json');
+    // ★ (2026-10-30) 보안: 원본을 지우는 동작이라 관리자만 + 토큰 필수(외부 페이지가 링크·이미지로 변환을 시키는 CSRF 방지)
+    if (!$_viewer_is_admin || !verify_delete_token($_GET['token'] ?? '')) {
+        http_response_code(403);
+        echo json_encode(['success' => false, 'error' => __('err_permission_denied')]);
+        exit;
+    }
     
     $getfile = decode_file_param($_GET['file'] ?? '');
     
@@ -534,7 +755,7 @@ if (($_GET['action'] ?? '') === 'convert_to_mp4') {
         }
         
         if (!@rename($temp_file, $final_file)) {
-            @unlink($temp_file);
+            // ★ (2026-11-02 09:59) 원본은 이미 지웠으므로 변환본(임시 파일)은 남김 — 전에는 이것까지 지워 영상이 둘 다 사라졌음
             echo json_encode(['success' => false, 'error' => __('video_move_fail')]);
             exit;
         }
@@ -636,13 +857,16 @@ if ($_param_filetype === 'zipvideo' && $_param_stream === '1') {
     }
 
     // 동영상 파일 찾기
-    $video_data = $zip->getFromName($video_name);
-    if ($video_data === false) {
+    // ★ (2026-10-30) 통째로 메모리에 올리지 않고 스트림으로 보냄(수백 MB 동영상이면 memory_limit 초과로 치명 오류)
+    // ★ (2026-10-31) 목록에 보인 이름(옛 ZIP 의 한글 등을 바꾼 이름)을 ZipArchive 가 아는 이름으로
+    $video_zname = (is_string($video_name) && $video_name !== '') ? mc_zip_native_name($zip, $video_name) : '';
+    $video_stat = $video_zname !== '' ? $zip->statName($video_zname) : false;
+    $video_stream = ($video_stat !== false) ? $zip->getStream($video_zname) : false;
+    if ($video_stream === false) {
         $zip->close();
         simple_error_exit(404, __('viewer_video_not_found'));
     }
-
-    $zip->close();
+    set_time_limit(0);
     
     // MIME 타입 결정
     $ext = strtolower(pathinfo($video_name, PATHINFO_EXTENSION));
@@ -660,14 +884,56 @@ if ($_param_filetype === 'zipvideo' && $_param_stream === '1') {
     ];
     $mime_type = $mime_types[$ext] ?? 'video/mp4';
     
-    // ZIP 내 파일은 Range 요청을 완전히 지원하기 어려우므로 전체 출력
-    header("Accept-Ranges: none");
+    // ★ (2026-10-31) Range 요청 지원(구간 보내기) — 전에는 'Accept-Ranges: none' 으로 통째로만 보내 압축 파일 속 동영상은
+    //   앞뒤로 옮기기(±5초·진행바 끌기·구간 반복·이어보기)가 안 됐음. 압축 속 파일은 바로 그 위치로 갈 수 없어(fseek 미지원)
+    //   앞부분을 읽어 버린 뒤 그 위치부터 보냄 — 저장(무압축) 파일은 빠르고, 압축된 파일은 앞부분을 푸는 시간만큼 걸림
+    $vsize = (int)$video_stat['size'];
+    $vstart = 0; $vend = $vsize - 1; $vpartial = false;
+    if (isset($_SERVER['HTTP_RANGE']) && preg_match('/^bytes=(\d*)-(\d*)$/', trim((string)$_SERVER['HTTP_RANGE']), $rm) && ($rm[1] !== '' || $rm[2] !== '')) {
+        if ($rm[1] === '') { $vstart = max(0, $vsize - (int)$rm[2]); $vend = $vsize - 1; }   // 'bytes=-N' (끝에서 N바이트)
+        else { $vstart = (int)$rm[1]; $vend = ($rm[2] !== '') ? min((int)$rm[2], $vsize - 1) : $vsize - 1; }
+        if ($vsize <= 0 || $vstart > $vend || $vstart >= $vsize) {
+            fclose($video_stream); $zip->close();
+            http_response_code(416);
+            header("Content-Range: bytes */$vsize");
+            exit;
+        }
+        $vpartial = true;
+    }
+    $vlen = $vend - $vstart + 1;
+    header("Accept-Ranges: bytes");
     header("Content-Type: $mime_type");
-    header("Content-Length: " . strlen($video_data));
-    header("Cache-Control: public, max-age=86400");
+    if ($vpartial) {
+        http_response_code(206);
+        header("Content-Range: bytes $vstart-$vend/$vsize");
+    }
+    header("Content-Length: " . $vlen);
+    header("Cache-Control: private, max-age=86400");
     header("Content-Disposition: inline; filename=\"" . basename($video_name) . "\"");
     
-    echo $video_data;
+    if ($vstart > 0) {
+        // 이 PHP·libzip 이 압축 속 파일 이동을 지원하면 바로, 아니면 앞부분을 읽어 버림(1MB 씩)
+        $sought = (@fseek($video_stream, $vstart) === 0 && @ftell($video_stream) === $vstart);
+        if (!$sought) {
+            $skip = $vstart;
+            while ($skip > 0 && !feof($video_stream)) {
+                $b = fread($video_stream, min(1048576, $skip));
+                if ($b === false || $b === '') break;
+                $skip -= strlen($b);
+                if (connection_aborted()) { fclose($video_stream); $zip->close(); exit; }
+            }
+        }
+    }
+    $vleft = $vlen;
+    while ($vleft > 0 && !feof($video_stream)) {
+        $buf = fread($video_stream, min(65536, $vleft));
+        if ($buf === false || $buf === '') break;
+        echo $buf;
+        $vleft -= strlen($buf);
+        if (connection_aborted()) break;
+    }
+    fclose($video_stream);
+    $zip->close();
     exit;
 }
 
@@ -702,7 +968,7 @@ if (is_dir($base_file)) {
         $cached_files = @json_decode(file_get_contents($img_cache_file), true);
         if (is_array($cached_files) && !empty($cached_files)) {
             foreach ($cached_files as $fname) {
-                if (is_string($fname)) {
+                if (is_string($fname) && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $fname) && !preg_match('#(^|[/\\\\])\.\.([/\\\\]|$)#', $fname)) { /* ★ (2026-11-09 14:14) '..' 조각이 든 이름은 건너뜀 — 손으로 만든 목록 파일로 폴더 밖·막힌 폴더 그림이 나왔음(앱은 폴더 맨 위 이름만 씀) */ /* ★ (2026-11-02 20:27) 그림 이름만 — 이 파일이 목록 대신 메타(totalpage·page_order·thumbnail…)로 덮여 있는 경우가 있어, 'toon'·'3' 같은 이름의 하위 폴더·파일이 쪽으로 잡힐 수 있었음 */
                     // ✅ realpath로 경로 정규화 + 파일 존재 확인
                     $full_path = realpath($base_file . DIRECTORY_SEPARATOR . $fname);
                     if ($full_path !== false) {
@@ -716,7 +982,7 @@ if (is_dir($base_file)) {
     // 캐시 없거나 비어있으면 직접 스캔
     if (empty($image_files)) {
         foreach (new DirectoryIterator($base_file) as $f) {
-            if ($f->isFile() && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $f->getFilename())) {
+            if ($f->isFile() && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $f->getFilename()) && !mc_folder_nonpage($f->getFilename())) {
                 $image_files[] = $f->getPathname();
             }
         }
@@ -766,7 +1032,7 @@ if (is_dir($base_file)) {
 $mime = detectMimeFromBytes($content);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($content));
-header('Cache-Control: public, max-age=86400');
+header('Cache-Control: private, max-age=86400');
 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
 echo $content;
                 exit;
@@ -789,7 +1055,7 @@ echo $content;
                 $mime = detectMimeFromBytes($split_result['data']);
                 header('Content-Type: ' . $mime);
                 header('Content-Length: ' . strlen($split_result['data']));
-                header('Cache-Control: public, max-age=86400');
+                header('Cache-Control: private, max-age=86400');
                 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
                 echo $split_result['data'];
                 exit;
@@ -798,7 +1064,7 @@ echo $content;
                 $mime = detectMimeFromBytes($original_content);
                 header('Content-Type: ' . $mime);
                 header('Content-Length: ' . strlen($original_content));
-                header('Cache-Control: public, max-age=86400');
+                header('Cache-Control: private, max-age=86400');
                 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
                 header('X-Split-Skipped: true'); // 분할 안 됨 표시
                 echo $original_content;
@@ -838,7 +1104,7 @@ echo $content;
 $mime = detectMimeFromBytes($content);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($content));
-header('Cache-Control: public, max-age=86400');
+header('Cache-Control: private, max-age=86400');
 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
 echo $content;
                 exit;
@@ -963,7 +1229,7 @@ if (!$is_gif && $compressed_size === $original_size) {
 $mime = detectMimeFromBytes($output_data);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($output_data));
-header('Cache-Control: public, max-age=3600'); // 또는 86400 (기존 그대로)
+header('Cache-Control: private, max-age=3600'); // 또는 86400 (기존 그대로)
 echo $output_data;
         unset($img_data, $compressed, $output_data);
         gc_collect_cycles();
@@ -1009,7 +1275,7 @@ echo $output_data;
 $mime = detectMimeFromBytes($content);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($content));
-header('Cache-Control: public, max-age=86400');
+header('Cache-Control: private, max-age=86400');
 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
 echo $content;
                         exit;
@@ -1069,7 +1335,7 @@ echo $content;
 $mime = detectMimeFromBytes($output_data);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($output_data));
-header('Cache-Control: public, max-age=3600'); // 또는 86400 (기존 그대로)
+header('Cache-Control: private, max-age=3600'); // 또는 86400 (기존 그대로)
 echo $output_data;
             
             // 백그라운드 저장 시도 (원본 캐시)
@@ -1094,11 +1360,48 @@ echo $output_data;
     }
 
     $cache_file = $base_file . '.image_files.json';
+    $_gen_ready = false;
     if (!file_exists($cache_file)) {
-        simple_error_exit(404, __('viewer_cache_not_found'));
+        // ★ (2026-10-30) 목록 캐시가 아직 없으면(폴더 화면을 거치지 않고 작품 탐색·즐겨찾기에서 바로 연 경우) 여기서 만듦
+        //   — index.php 와 같은 형식(이미지 이름 natsort 배열). 전에는 이 경우 모든 이미지가 404 였음
+        $_gen = [];
+        $_gext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
+        if (in_array($_gext, ['zip', 'cbz'], true)) {
+            $_gz = new ZipArchive;
+            if ($_gz->open($base_file) === TRUE) {
+                for ($_gi = 0; $_gi < $_gz->numFiles; $_gi++) {
+                    $_gn = mc_zip_name($_gz, $_gi);
+                    if (is_string($_gn) && preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $_gn)) $_gen[] = $_gn;
+                }
+                $_gz->close();
+            }
+        } elseif (class_exists('ArchiveHandler')) {
+            try {
+                $_gh = new ArchiveHandler($base_file);
+                foreach ($_gh->getImageFiles() as $_gn) { if (is_string($_gn) && preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $_gn)) $_gen[] = $_gn; } // index.php 와 같은 확장자
+            } catch (\Throwable $e) {}
+        }
+        if (empty($_gen)) {
+            simple_error_exit(404, __('viewer_cache_not_found'));
+        }
+        natsort($_gen);
+        $_gen = array_values($_gen);
+        // 임시 파일에 쓴 뒤 이름 바꾸기 — 동시에 온 다른 이미지 요청이 쓰는 도중의 빈 파일을 읽지 않게
+        $_gtmp = $cache_file . '.tmp' . bin2hex(random_bytes(4));
+        if (@file_put_contents($_gtmp, json_encode($_gen, JSON_UNESCAPED_UNICODE)) !== false) {
+            if (!@rename($_gtmp, $cache_file)) @unlink($_gtmp);
+        }
+        $image_files = $_gen;
+        $_gen_ready = true;
     }
 
-    $image_files = json_decode(file_get_contents($cache_file), true) ?? [];
+    if (!$_gen_ready) {
+        $image_files = json_decode((string)@file_get_contents($cache_file), true);
+        if (!is_array($image_files) || !$image_files) { // 다른 요청이 쓰는 중이었으면 한 번 더
+            usleep(200000);
+            $image_files = json_decode((string)@file_get_contents($cache_file), true) ?? [];
+        }
+    }
     if (!isset($image_files[$img_index])) {
         simple_error_exit(404, __('viewer_img_index_none'));
     }
@@ -1118,7 +1421,7 @@ echo $output_data;
         }
     }
 
-    $filename = basename($image_files[$img_index]);
+    $filename = mc_zip_cache_name($image_files[$img_index]); // ★ (2026-10-30) 하위 폴더가 다른 같은 이름 충돌 방지(cache_util.php 와 같은 규칙)
     
     // ✅ 분할 모드: 캐시 파일명에 접미사 추가
     $split_suffix = $split_side ? "_{$split_side}" : '';
@@ -1141,7 +1444,7 @@ echo $output_data;
 $mime = detectMimeFromBytes($content);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($content));
-header('Cache-Control: public, max-age=86400');
+header('Cache-Control: private, max-age=86400');
 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
 echo $content;
                 exit;
@@ -1163,7 +1466,7 @@ echo $content;
                 $mime = detectMimeFromBytes($split_result['data']);
                 header('Content-Type: ' . $mime);
                 header('Content-Length: ' . strlen($split_result['data']));
-                header('Cache-Control: public, max-age=86400');
+                header('Cache-Control: private, max-age=86400');
                 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
                 echo $split_result['data'];
                 exit;
@@ -1172,7 +1475,7 @@ echo $content;
                 $mime = detectMimeFromBytes($original_content);
                 header('Content-Type: ' . $mime);
                 header('Content-Length: ' . strlen($original_content));
-                header('Cache-Control: public, max-age=86400');
+                header('Cache-Control: private, max-age=86400');
                 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
                 header('X-Split-Skipped: true'); // 분할 안 됨 표시
                 echo $original_content;
@@ -1186,7 +1489,7 @@ echo $content;
     
     if ($lock_fp && @flock($lock_fp, LOCK_EX | LOCK_NB)) {
         // ✅ [RAR/7Z 지원] ZIP은 ZipArchive, RAR/7Z는 archive_handler로 분기 추출
-        $img_data = archive_get_image_data($base_file, $image_files[$img_index]);
+        $img_data = archive_get_image_data($base_file, $image_files[$img_index], $img_index);
         if (true) {
             if ($img_data !== false) {
                 $compressed = compressImage($img_data, null, true); // ← ✅ force=true
@@ -1221,7 +1524,7 @@ echo $content;
 $mime = detectMimeFromBytes($output_data);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($output_data));
-header('Cache-Control: public, max-age=3600'); // 또는 86400 (기존 그대로)
+header('Cache-Control: private, max-age=3600'); // 또는 86400 (기존 그대로)
 echo $output_data;
                 unset($img_data, $compressed, $output_data);
                 gc_collect_cycles();
@@ -1231,6 +1534,7 @@ echo $output_data;
                 @fclose($lock_fp);
                 @unlink($lock_file);
                 
+                if (archive_is_encrypted($base_file)) archive_locked_image_exit(); // ★ (2026-10-31) 암호 압축 안내 그림
                 http_response_code(500);
                 echo __("viewer_extract_fail");
                 exit;
@@ -1276,7 +1580,7 @@ echo $output_data;
 $mime = detectMimeFromBytes($content);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($content));
-header('Cache-Control: public, max-age=86400');
+header('Cache-Control: private, max-age=86400');
 header('Expires: ' . gmdate('D, d M Y H:i:s', time() + 86400) . ' GMT');
 echo $content;
                         exit;
@@ -1294,7 +1598,7 @@ echo $content;
         // error_log("⚠️ 캐시 대기 시간 초과, 직접 생성 시도");
         
         // ✅ [RAR/7Z 지원] ZIP은 ZipArchive, RAR/7Z는 archive_handler로 분기 추출
-        $img_data = archive_get_image_data($base_file, $image_files[$img_index]);
+        $img_data = archive_get_image_data($base_file, $image_files[$img_index], $img_index);
         if (true) {
             if ($img_data !== false) {
                 $compressed = compressImage($img_data, null, true); // ← ✅ force=true
@@ -1313,7 +1617,7 @@ echo $content;
 $mime = detectMimeFromBytes($output_data);
 header('Content-Type: ' . $mime);
 header('Content-Length: ' . strlen($output_data));
-header('Cache-Control: public, max-age=3600'); // 또는 86400 (기존 그대로)
+header('Cache-Control: private, max-age=3600'); // 또는 86400 (기존 그대로)
 echo $output_data;
                 
                 @file_put_contents($cache_save_path, $compressed, LOCK_EX); // 원본 캐시 저장
@@ -1324,6 +1628,7 @@ echo $output_data;
             }
         }
         
+        if (archive_is_encrypted($base_file)) archive_locked_image_exit(); // ★ (2026-10-31) 암호 압축 안내 그림
         http_response_code(500);
         echo __("viewer_load_fail");
         exit;
@@ -1335,7 +1640,8 @@ echo $output_data;
 $getfile = decode_file_param($_GET['file'] ?? '');
 if(!$getfile){
 	echo __("viewer_no_info");
-	die(header("Location: ./"));
+	// ★ (2026-10-30) 이미 출력이 나가 header(Location) 이 안 먹음 — 화면 새로고침으로 이동
+	die('<meta http-equiv="refresh" content="2; url=./">');
 }
 
 // ✅ 경로 검증
@@ -1343,7 +1649,7 @@ $base_file = validate_file_path($getfile, $base_dir);
 if ($base_file === false) {
     log_user_activity('해킹시도', 'viewer: ' . substr($getfile, 0, 100));
     echo __("err_invalid_path");
-    die(header("Location: ./"));
+    die('<meta http-equiv="refresh" content="2; url=./">');
 }
 
 // ✅ 열람 로그 기록 (페이지 로드 시 1회만)
@@ -1355,8 +1661,10 @@ dir_check($getfile);
 
 $base_title = explode("/", $base_file);
 $title = $base_title[(count($base_title)-1)];
-$base_folder = str_replace($title, "", $base_file);
-$link_dir = str_replace("/".$title, "", $getfile);
+// ★ (2026-10-30) 끝의 파일(폴더) 이름만 떼어냄 — str_replace 는 경로 안의 같은 글자를 전부 지워
+//   폴더 이름이 '1' 같은 경우 /comics/Vol1/1 → /comics/Vol/ 처럼 부모 경로가 깨졌음
+$base_folder = (substr($base_file, -strlen($title)) === $title) ? substr($base_file, 0, strlen($base_file) - strlen($title)) : str_replace($title, "", $base_file);
+$link_dir = (substr($getfile, -strlen("/".$title)) === "/".$title) ? substr($getfile, 0, strlen($getfile) - strlen("/".$title)) : str_replace("/".$title, "", $getfile);
 // $link_dir이 /로 시작하지 않으면 추가
 if (!empty($link_dir) && $link_dir[0] !== '/') {
     $link_dir = '/' . $link_dir;
@@ -1387,7 +1695,8 @@ if($type != "pdf"){
     // ✅ 함수 사용으로 통일 (전역 변수 의존 제거)
     if(is_file(get_bookmark_file())){
         $bookmark_arr = json_decode(file_get_contents(get_bookmark_file()), true) ?? [];
-        $bookmark = $bookmark_arr[$getfile] ?? null;
+        $__bmk = mc_rec_find($bookmark_arr, $current_bidx, $getfile); // ★ (2026-11-06 00:50) 이 콘텐츠 폴더의 책갈피만(예전: 같은 경로면 다른 콘텐츠 폴더 책의 쪽으로 열렸음)
+        $bookmark = $__bmk !== null ? $bookmark_arr[$__bmk] : null;
         
         if(is_array($bookmark)){
             $bookmark = $bookmark['bookmark'];
@@ -1398,14 +1707,15 @@ if($type != "pdf"){
     // ✅ [RAR/7Z 지원] 확장자 정규식으로 .json 경로 결정 (ZIP/RAR/7z 공통)
     if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $base_file)) {
         $json_file = get_cache_json_path($base_file);
-    } elseif ($_param_filetype === "images") {
+    } elseif ($_param_filetype === "images" || $type === "images") { // ★ (2026-10-30) 북마크·자동저장 링크처럼 filetype 없이 연 이미지 폴더도
         $json_file = $base_file . ".image_files.json";
     } else {
         $json_file = null;
     }
     
     if($json_file && is_file($json_file)){
-        $pageorder = json_decode(file_get_contents($json_file), true) ?? $pageorder;
+        $__po_read = @json_decode((string)@file_get_contents($json_file), true); // ★ (2026-11-03 23:34) 못 읽었으면(다른 요청이 쓰는 중 등) 아래에서 기본값으로 덮어쓰지 않음 — 쪽수·표지가 사라졌음
+        $pageorder = is_array($__po_read) ? $__po_read : $pageorder;
         
         // ✅ page_order는 URL 파라미터로만 변경, 기본값은 항상 0 (-)
         if (isset($_GET['pageorder'])) {
@@ -1413,7 +1723,7 @@ if($type != "pdf"){
             if (in_array($newpageorder, [0, 1, 2, 3, 4], true)) {
                 $pageorder['page_order'] = (string)$newpageorder;
             }
-            @file_put_contents($json_file, json_encode($pageorder, JSON_UNESCAPED_UNICODE), LOCK_EX);
+            if (is_array($__po_read)) @file_put_contents($json_file, json_encode($pageorder, JSON_UNESCAPED_UNICODE), LOCK_EX);
         } else {
             // URL 파라미터 없으면 기본값 0 (-) 으로 시작
             $pageorder['page_order'] = '0';
@@ -1442,11 +1752,14 @@ if($type != "pdf"){
             //   뷰어가 깨지던 문제. 실패 시 메타 생성을 건너뛰고(json 미작성 → 다음 열람 때 재시도) $mode 는 위에서 정한 기본값 사용.
             if ($zip->open($base_file) === TRUE) {
                 $thumbnail_index = 0;
+                $_found_thumb = false;
+                $_img_total = 0; // ★ (2026-10-30) 쪽수는 이미지 개수(전에는 폴더·txt 항목까지 센 numFiles)
                 for ($findthumb = 0; $findthumb < $zip->numFiles; $findthumb++) {
                     $find_img = $zip->getNameIndex($findthumb);
-                    if(preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $find_img)){
+                    if(is_string($find_img) && preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $find_img)) $_img_total++; // 목록·image_files.json 과 같은 확장자
+                    if(!$_found_thumb && preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', (string)$find_img)){
                         $thumbnail_index = $findthumb;
-                        break;
+                        $_found_thumb = true;
                     }
                 }
 
@@ -1456,7 +1769,7 @@ if($type != "pdf"){
                 if ($img_data !== false) {
                     $size = @getimagesizefromstring($img_data);
                     if ($size !== false) {
-                        $originimage = @imagecreatefromstring($img_data);
+                        $originimage = function_exists('mc_gd_from_string') ? mc_gd_from_string($img_data) : @imagecreatefromstring($img_data); // ★ (2026-11-02 09:58) 너무 큰 그림은 썸네일 없이
                         if ($originimage !== false) {
                             [$width, $height] = $size;
                             
@@ -1496,7 +1809,7 @@ if($type != "pdf"){
                 }
 
                 $pageorder = [
-                    'totalpage' => $zip->numFiles,
+                    'totalpage' => $_img_total,
                     'page_order' => "0",
                     'viewer' => "toon",
                     'thumbnail' => base64_encode($cropimage ?? '')
@@ -1517,7 +1830,7 @@ if($type != "pdf"){
                     if ($img_data !== false && $img_data !== null) {
                         $size = @getimagesizefromstring($img_data);
                         if ($size !== false) {
-                            $originimage = @imagecreatefromstring($img_data);
+                            $originimage = function_exists('mc_gd_from_string') ? mc_gd_from_string($img_data) : @imagecreatefromstring($img_data); // ★ (2026-11-02 09:58) 너무 큰 그림은 썸네일 없이
                             if ($originimage !== false) {
                                 [$width, $height] = $size;
                                 if ($width > $height) {
@@ -1557,6 +1870,34 @@ if($type != "pdf"){
     }
 }
 
+// ★ (2026-11-01) 보기 방식·툰/북 모드를 브라우저(기기)마다 기억 — 위 막대(js/viewer-bar.js)가 고를 때 쿠키에 적고, 여기서 열 때 읽음(책마다 X)
+//   · 보기 방식: 주소에 pageorder 가 없을 때만(있으면 그 값 — 막대도 같은 값을 쿠키에 먼저 적음) / 예전엔 열 때마다 '한 쪽'(0)
+//   · 모드: 목록·이어 읽기 링크는 늘 mode=toon 이라 쿠키를 우선(막대에서 바꿀 때 쿠키를 먼저 바꾸고 이동)
+//   · 압축 파일·이미지 폴더만(PDF·동영상은 그대로), 정해진 값만 받음
+if ($type === 'zip' || $type === 'images') {
+    if (!isset($_GET['pageorder'])) {
+        // ★ (2026-11-05) 모드 기억 설정을 따라(책마다면 이 책의 내 기록 → 없으면 마지막에 고른 값) — function.php mc_mv_order_for(), 목록 카드 배지와 같은 값
+        if (function_exists('mc_mv_order_for')) {
+            if (is_array($pageorder)) $pageorder['page_order'] = mc_mv_order_for($getfile, $current_bidx, (string)($pageorder['page_order'] ?? '0'));
+        } else {
+            $_mcv_c_order = (is_string($_COOKIE['mcv_order'] ?? null) ? $_COOKIE['mcv_order'] : '');
+            if (in_array($_mcv_c_order, ['0', '1', '2', '3', '4'], true) && is_array($pageorder)) $pageorder['page_order'] = $_mcv_c_order;
+        }
+    }
+    // ★ (2026-11-01 23:37) 모드 기억을 설정(끔·전체·책마다)으로 — function.php mc_mv_mode_for() / 위 막대에서 모드를 바꿔 들어오면(ms=1) 주소의 모드 그대로
+    if (!isset($_GET['ms']) && function_exists('mc_mv_mode_for')) $mode = mc_mv_mode_for($getfile, $current_bidx, $mode);
+    // ★ (2026-11-01 23:37) 이어 보기 — 주소에 위치가 없으면 내 기록의 보던 쪽에서(아래 <head> 맨 앞 스크립트가 #imageN 을 붙임)
+    $_mcv_resume = (($mode === 'toon' || $mode === 'book') && function_exists('mc_mv_resume_mark')) ? mc_mv_resume_mark($getfile, $current_bidx, $mode) : '';
+}
+// ★ (2026-11-02 01:01) PDF 도 이어 보기 — 내 기록의 보던 쪽·쪽 안 위치(#pdf_NfM)에서 (설정 '이어 보기' 끔이면 처음부터)
+if ($type === 'pdf') {
+    $_mcv_resume = function_exists('mc_mv_resume_mark') ? mc_mv_resume_mark($getfile, $current_bidx, 'pdf') : '';
+}
+// ★ (2026-11-08 전체 점검 7차 fix79) 보기 방식(page_order)은 0~4 만 — 주소의 pageorder 가 0~4 가 아니면(예: 9) 책 옆 정보 파일(.json)의 값을 거르지 않고 그대로 써서,
+//   손으로 만든 .json(받은 만화 묶음에 같이 든 파일 등)의 값이 아래 JS 글자(pageOrder)로 그대로 들어가 스크립트가 실행됐음
+if (!is_array($pageorder)) $pageorder = ['page_order' => '0', 'viewer' => 'toon'];
+if (!in_array((string)($pageorder['page_order'] ?? '0'), ['0', '1', '2', '3', '4'], true)) $pageorder['page_order'] = '0';
+
 // ✅ 이전/다음 파일 찾기 - 캐시 활용
 $totalfile = [];
 $filelist_cache = $base_folder . '/.filelist_cache.json';
@@ -1567,20 +1908,29 @@ if (is_file($filelist_cache)) {
     if ($list_cache && isset($list_cache['file_list']) && is_array($list_cache['file_list'])) {
         // ✅ file_list는 배열의 배열이므로 name만 추출
         $totalfile = array_column($list_cache['file_list'], 'name');
+        // ★ (2026-11-03 09:06) 아래 직접 훑기와 같은 대상·순서로 — 캐시 목록은 폴더를 읽은 순서 그대로(정렬 안 됨)이고 문서(docx·hwp·epub 등)까지 들어 있어
+        //   이전/다음 권이 'vol 2 → vol 10' 처럼 건너뛰거나 문서 파일을 만화 뷰어로 열어 빈 화면이었음
+        $totalfile = array_map(function ($f) { return (is_string($f) && substr($f, -10) === '_imgfolder') ? substr($f, 0, -10) : $f; }, $totalfile); // ★ (2026-11-03 11:33) 목록 캐시의 이미지 폴더 이름(꼬리 _imgfolder)을 실제 폴더 이름으로 — 이전/다음 권에서 이미지 폴더 책이 빠졌음
+        $totalfile = array_values(array_filter($totalfile, function ($f) use ($base_folder) {
+            if (!is_string($f) || $f === '' || preg_match('/\.json$/i', $f)) return false; // ★ (2026-11-04 09:44) 확장자로 — 이름에 'json' 이 든 책(예: 'Jsonny 3권.zip')이 이전/다음 권에서 빠졌음
+            return preg_match('/\.(zip|cbz|rar|cbr|7z|cb7|pdf)$/i', $f) || is_video_file($f) || is_file($base_folder . '/' . $f . '.image_files.json');
+        }));
+        if ($totalfile) $totalfile = array_values(n_sort($totalfile));
     }
 }
 
-// 캐시 없거나 비어있으면 직접 스캔
-if (empty($totalfile)) {
+// 캐시 없거나 비어있으면 직접 스캔 — ★ (2026-11-02 09:59) 캐시에 지금 책이 없으면(새로 넣은 권 등 캐시가 오래됨) 다시 훑음(전에는 이전 권 없음·다음 권이 엉뚱했음)
+if (empty($totalfile) || array_search($title, $totalfile) === false) { // (이미지 폴더 책도 여기서 다시 훑어야 이전·다음 권이 맞음)
+    $totalfile = [];
     $files = scandir($base_folder);
     $files = n_sort($files);
     
     foreach ($files as $file) {
-        if(str_contains($file, "json") || in_array($file, [".", "..", "@eaDir"])){
+        if(preg_match('/\.json$/i', $file) || in_array($file, [".", "..", "@eaDir"])){ // ★ (2026-11-04 09:44) 위와 같음
             continue;
         }
         
-        if (preg_match('/\.(zip|cbz|rar|cbr|pdf)$/i', $file) || 
+        if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7|pdf)$/i', $file) || // ★ (2026-10-30) 7z/cb7 도 이전·다음 대상
             is_file($base_folder."/".$file.".image_files.json") ||
             is_video_file($file)) {
             $totalfile[] = $file;
@@ -1595,22 +1945,27 @@ if ($now === false) {
 $next = $now + 1;
 $pre = $now - 1;
 $_maxview = $maxview_file ?? $maxview ?? 100;  // 호환성 유지
+// ★ (2026-11-04 00:31) 휴대폰이면 목록(index.php)과 같은 쪽당 개수 — 전엔 PC 값으로 계산돼 '← 목록'이 엉뚱한 쪽을 열었음
+if (isset($_SERVER['HTTP_USER_AGENT']) && preg_match('/Mobile|Android|iPhone|iPad/i', $_SERVER['HTTP_USER_AGENT'])) {
+    $_maxview = get_app_settings('maxview_file_mobile', 30);
+}
+$_maxview = max(1, (int)$_maxview);
 $page = ceil(($now+1)/$_maxview)-1;
 
 $recent = [];
 // ✅ 함수 사용으로 통일 (전역 변수 의존 제거, 파일 잠금 적용)
 $_recent_file = get_recent_file();
 $recent = load_json_with_lock($_recent_file);
-if(isset($recent[$link_dir]) && $recent[$link_dir] != null){
-    $recent_num = array_search($recent[$link_dir], $totalfile);
-    if($recent_num !== false && $recent_num < $now){
-        $recent[$link_dir] = $totalfile[$now] ?? $title;
-    }
-} else {
-    $recent[$link_dir] = $totalfile[$now] ?? $title;
-}
-
+// ★ (2026-11-03 15:00) 폴더 화면 '이어 읽기' = 그 폴더에서 마지막으로 연 책(펜닐 선택) — 전엔 목록 순서로 가장 뒤 책이라 앞 권을 다시 열어도 안 바뀌었음
+//   (★ 14:11 예전 '_imgfolder' 이름 기록도 이것으로 바로 바뀜) 목록에서 못 찾으면 지금 연 이름 그대로
+// ★ (2026-11-03 20:58) 동영상 압축(filetype=video_archive)은 남기지 않음 — '이어 읽기' 단추 주소엔 filetype 이 없어 만화 뷰어로 열려 빈 화면이었음
+if ($type !== 'video_archive') {
+// ★ (2026-11-05 23:30) 콘텐츠 폴더(bidx)마다 따로 — 열쇠 '번호|폴더 경로'(펜닐 제보: 테스트1/새폴더 에서 읽은 책이 테스트2·3 의 같은 경로 /새폴더 에도 '이어 읽기'로 떠서 눌러도 그림이 안 나왔음)
+//   예전 형식(폴더 경로만) 기록은 이 폴더 것이면 새 형식으로 옮기고 지움 — 다른 콘텐츠 폴더의 같은 경로 기록은 목록 화면이 파일이 실제로 있을 때만 씀(index.php)
+$recent[(int)$current_bidx . '|' . $link_dir] = (array_search($title, $totalfile) !== false) ? $totalfile[$now] : $title;
+unset($recent[$link_dir]);
 save_json_with_lock($_recent_file, $recent);
+}
 
 ?>
 <?php
@@ -1619,6 +1974,15 @@ flush(); ob_flush();
 <!DOCTYPE html>
 <html lang="ko">
    <head>
+<?php if ($type != "pdf" && $mode != "book" && function_exists('mc_theme_early_head')) echo mc_theme_early_head(true); /* ★ (2026-11-08 fix82) true = 투명했다 나타나는 화면(다크면 바탕은 어둡게 두고 내용만) / ★ (2026-11-08 fix80) 다크모드 흰 바탕 깜빡임 — 아래 render_darkmode_script 와 같은 조건 */ ?>
+<?php if (($type == "pdf" || $mode == "book") && function_exists('mc_fade_dark_style')): /* ★ (2026-11-08 fix82) PDF(회색 #525659)·북모드(검정)는 테마와 상관없이 늘 어두운 화면 — 들어올 때·누르고 나갈 때 투명해진 화면 뒤 흰 바탕이 보이던 것 */ echo mc_fade_dark_style($type == "pdf" ? '#525659' : '#000000'); ?><script>document.documentElement.classList.add('mc-fdk', 'mc-fdk-dark');</script>
+<?php endif; ?>
+<?php if ($type != "pdf" && $mode == "book"): /* ★ (2026-11-08 fix80, 펜닐 제보) 북모드는 늘 검은 바탕(lightGallery) — 그 창이 뜨기 전 흰 바탕이 잠깐 보이던 것(테마와 상관없이 처음부터 검게) */ ?><style>html, html body { background-color: #000; }</style>
+<?php endif; ?>
+<?php if (function_exists('mc_back_origin_viewer_js')) echo mc_back_origin_viewer_js(); /* ★ (2026-11-05) 뒤로가기 = 들어온 곳(서재·즐겨찾기·북마크 등) — function.php */ ?>
+<?php if (!empty($_mcv_resume) && preg_match('/^(image\d+|pdf_\d{1,6})(f\d{1,3})?$/', $_mcv_resume)): // ★ (2026-11-02 01:01) PDF·쪽 안 위치(f)도 / ★ (2026-11-01 23:37) 이어 보기: 위치(#…) 없이 열면 보던 쪽을 붙임 — 툰모드 복원·북모드 시작 쪽이 이 값을 씀(다른 스크립트보다 먼저) ?>
+	<script>(function(){try{if(!location.hash)history.replaceState(history.state,'',location.pathname+location.search+'#<?php echo $_mcv_resume; ?>');}catch(e){}})();</script>
+<?php endif; ?>
       <title><?php echo h($_branding['page_title'] ?? 'myComix'); ?> - <?php echo htmlspecialchars($title); ?></title>
 	<meta charset="UTF-8">
 	<!-- ✅ 핵심 레이아웃 + 페이지 전환 -->
@@ -1634,7 +1998,7 @@ flush(); ob_flush();
 	<meta name="format-detection" content="telephone=no">
 	<link rel="stylesheet" href="./css/bootstrap.min.css">
 	<link rel="stylesheet" href="./css/css2.css?family=Gugi&family=Nanum+Gothic:wght@400;700&display=swap">
-	<link rel="shortcut icon" href="./favicon.ico">
+	<?php echo function_exists('mc_favicon_tags') ? mc_favicon_tags() : '<link rel="shortcut icon" href="./favicon.ico">'; // ★ (2026-11-03 23:50) 탭 아이콘 = 로고 ?>
 	<!-- 다크모드 CSS -->
 	<?php if (isset($darkmode_settings) && ($darkmode_settings['enabled'] ?? false)): ?>
 	<link rel="stylesheet" href="./css/darkmode.css?v=<?php echo @filemtime(__DIR__ . '/css/darkmode.css') ?: '1'; ?>">
@@ -1649,16 +2013,15 @@ if($mode == "book") {
 	<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/lightgallery/1.8.2/css/lightgallery.min.css">
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/lightgallery/1.8.2/js/lightgallery.min.js"></script>
 	<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery-mousewheel/3.1.13/jquery.mousewheel.min.js"></script>
-	<script src="https://cdn.jsdelivr.net/npm/lg-fullscreen/dist/lg-fullscreen.min.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/lg-fullscreen@1.2.1/dist/lg-fullscreen.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/lightgallery@2.8.3/plugins/zoom/lg-zoom.min.js"></script>
 
 <?php
 }
 if($type == "pdf") {
 ?>
-	<link rel="stylesheet" href="./css/swiper-bundle.min.css">
-	<script src="./js/swiper-bundle.min.js"></script>
-	<script src="./js/pdf.min.js"></script>
+	<?php /* ★ (2026-11-08 전체 점검 fix71) Swiper(11.2.8 — CVE-2026-27212 프로토타입 오염 해당 버전)는 불러오기만 하고 어디서도 쓰지 않아(new Swiper 0건, 원본부터) 불러오지 않음 — 파일(js/swiper-bundle.min.js·css)은 그대로 둠 */ ?>
+	<?php /* ★ (2026-10-31) PDF.js 2.6.347 → 6.4.299(legacy 빌드, FileStation 과 같은 파일·npm 원본 대조) — 6.x 는 모듈이라 아래 스크립트에서 import() 로 읽음 */ ?>
 <?php
 }
 ?>
@@ -1807,6 +2170,17 @@ if($type == "pdf") {
 .zip-video-item.active .zip-video-size {
     color: rgba(255,255,255,0.8);
 }
+
+/* ★ (2026-10-31) 다크 모드 — 동영상 정보 칸·압축 동영상 목록이 밝은 바탕(#f8f9fa)에 밝은 글자(다크 모드 본문색 #e0e0e0)라 거의 안 보이던 것.
+   라이트 모드는 그대로, 다크 모드일 때만 어두운 바탕(동영상 플레이어 아래 버튼 줄·목록과 같은 색) */
+.dark-mode .video-info, [data-theme="dark"] .video-info { background: #1e1e1e; border: 1px solid #333; }
+.dark-mode .video-meta, [data-theme="dark"] .video-meta { color: #a8adb3; }
+.dark-mode .zip-video-item, [data-theme="dark"] .zip-video-item { background: #1e1e1e; border: 1px solid #333; }
+.dark-mode .zip-video-item:hover, [data-theme="dark"] .zip-video-item:hover { background: #2a2a2a; }
+.dark-mode .zip-video-item.text-muted, [data-theme="dark"] .zip-video-item.text-muted { color: #8a8f96 !important; }
+.dark-mode .zip-video-size, [data-theme="dark"] .zip-video-size { color: #a8adb3; }
+.dark-mode .zip-video-item.active, [data-theme="dark"] .zip-video-item.active { background: #1f3352; border-color: #3b5f99; color: #e8f0fe; }
+.dark-mode .zip-video-item.active .zip-video-size, [data-theme="dark"] .zip-video-item.active .zip-video-size { color: #bcd0f0; }
 <?php endif; ?>
 
 		img.lg-image {
@@ -1966,6 +2340,59 @@ img.loaded {
   max-height: 100% !important;
   object-fit: contain !important;
 }
+
+/* ★ (2026-10-29) 북모드 펼침(1|2, 2|1): 한 슬라이드에 두 장을 가운데 맞대어 표시 */
+.lg-outer .lg-img-wrap.mc-spread {
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+}
+.lg-outer .lg-img-wrap.mc-spread:before {
+  display: none !important;
+}
+.lg-outer .lg-img-wrap.mc-spread > img {
+  flex: 0 1 auto;
+  max-width: 50% !important;
+  max-height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  width: auto !important;
+  height: auto !important;
+  margin: 0 !important;
+  object-fit: contain !important;
+}
+
+/* ★ (2026-11-04 18:00) 북모드 화면 맞춤 — 보기 메뉴 '화면 맞춤'(기본 '화면' = 위 규칙 그대로)
+   · 너비(mcv-fit-w): 폭에 꽉 — 쪽이 화면보다 길면 위아래로 밀어 봄(쪽을 넘기면 맨 위부터) · 짧으면 가운데
+   · 높이(mcv-fit-h): 높이에 꽉 — 화면보다 넓으면 좌우로 밀어 봄 · 좁으면 가운데
+   · 펼침(두 장)은 두 장을 합친 크기로 같은 규칙 · 쪽 넘김은 그대로(좌우 끝 누르기·키·휠 — 휠은 끝까지 내린 다음에 넘김) */
+body.mcv-fit-w .lg-outer .lg-img-wrap,
+body.mcv-fit-h .lg-outer .lg-img-wrap {
+  display: flex !important;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+body.mcv-fit-w .lg-outer .lg-img-wrap:before,
+body.mcv-fit-h .lg-outer .lg-img-wrap:before { display: none !important; }
+body.mcv-fit-w .lg-outer .lg-img-wrap { flex-direction: row; align-items: flex-start !important; justify-content: center !important; overflow-x: hidden !important; overflow-y: auto !important; touch-action: pan-y pinch-zoom; }
+body.mcv-fit-w .lg-outer .lg-img-wrap > img.lg-image,
+body.mcv-fit-w .lg-outer .lg-img-wrap > img {
+  flex: 0 0 100%;
+  width: 100% !important; max-width: 100% !important;
+  height: auto !important; max-height: none !important;
+  margin: auto 0 !important; /* 쪽이 짧으면 가운데, 길면 맨 위부터(잘리지 않게) */
+}
+body.mcv-fit-w .lg-outer .lg-img-wrap.mc-spread > img { flex: 0 0 50%; width: 50% !important; max-width: 50% !important; }
+body.mcv-fit-h .lg-outer .lg-img-wrap { flex-direction: row; align-items: stretch !important; justify-content: flex-start !important; overflow-x: auto !important; overflow-y: hidden !important; touch-action: pan-x pinch-zoom; }
+body.mcv-fit-h .lg-outer .lg-img-wrap > img.lg-image,
+body.mcv-fit-h .lg-outer .lg-img-wrap > img {
+  flex: 0 0 auto;
+  height: 100% !important; max-height: 100% !important;
+  width: auto !important; max-width: none !important;
+  margin: 0 !important;
+}
+body.mcv-fit-h .lg-outer .lg-img-wrap > img:first-child { margin-left: auto !important; }
+body.mcv-fit-h .lg-outer .lg-img-wrap > img:last-child { margin-right: auto !important; }
 
 .lg-outer,
 .lg-outer * {
@@ -2349,112 +2776,124 @@ function run_gallery() {
   const initBtnBg = initReversed ? 'rgba(0,123,255,0.5)' : 'rgba(255,255,255,0.2)';
 
   const dynamicEl = [];
-  
-  // ✅ pageOrder에 따라 다르게 생성
-  if (pageOrder === '3') {
-    // 세로분할 좌→우: left, right 순서
-    let slideNum = 0;
-    const totalSlides = total * 2;
+
+  // ★ (2026-10-29) 북모드 페이지 구성 통합
+  //   - 0: 1장씩 / 1: 1|2 펼침 / 2: 2|1 펼침(툰모드와 같은 짝: 1-2, 3-4 …, 홀수 마지막 장은 1장) / 3: ▤← / 4: →▤
+  //   - 세로분할(3/4): 서버가 분할하지 않는 세로 페이지(가로 < 세로*1.3)는 1장만 → 같은 그림이 좌/우로 2번 나오던 중복 수정
+  //     (판정 불가 null이면 기존처럼 좌/우 2장 — 무회귀)
+  //   - 슬라이드 ↔ 페이지 매핑(window._mcBook): 위치 저장/복원(#imageN)은 항상 "페이지 번호" 기준(툰모드와 동일)
+  // ★ (2026-11-04 22:07) 펼침(1|2·2|1)에서 '표지·가로 그림은 혼자'(쿠키 mcv_solo, 기본 켬)면 같은 크기 정보로 가로 그림을 알아냄(ZIP 은 판정 캐시 그대로 씀)
+  <?php $_mcv_solo_on = ($mode == "book" && in_array((string)($pageorder['page_order'] ?? '0'), ['1', '2'], true) && (($_COOKIE['mcv_solo'] ?? '') !== '0')); ?>
+  const splitMap = <?php echo ($mode == "book" && (in_array((string)($pageorder['page_order'] ?? '0'), ['3', '4'], true) || $_mcv_solo_on)) ? json_encode(mc_book_split_map($base_file, $type, mc_split_cache_dir($base_file, $user_id ?? ''))) : '[]'; ?>;
+  const mcSolo = <?php echo $_mcv_solo_on ? 'true' : 'false'; ?>;
+  // 이 책만 '짝 한 쪽 밀기'(이 기기에 책마다 기억 — localStorage 'mcv_off:' + 파일 경로)
+  const mcOff = (function () { try { return localStorage.getItem('mcv_off:' + <?php echo json_encode((string)$getfile, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>) === '1'; } catch (e) { return false; } })();
+  const activeOrder = ['0', '1', '2', '3', '4'].indexOf(pageOrder) !== -1 ? pageOrder : '0';
+  function orderBtns(active) {
+    const list = [['0', '-'], ['1', '1|2'], ['2', '2|1'], ['3', '▤←'], ['4', '→▤']];
+    return '<span class="lg-pageorder-btns" style="display:inline-flex; gap:2px; margin-left:5px;">' +
+      list.map(function (o) {
+        return '<button type="button" class="lg-pageorder-btn" data-order="' + o[0] + '" style="font-size:12px; padding:2px 6px; background:' +
+          (o[0] === active ? 'rgba(0,123,255,0.5)' : 'rgba(255,255,255,0.2)') +
+          '; border:none; border-radius:3px; color:#fff; cursor:pointer;">' + o[1] + '</button>';
+      }).join('') + '</span>';
+  }
+
+  const imgBase = `viewer.php?file=${file}&bidx=${bidx}&img=`;
+  // ★ (2026-11-04 18:00) '세로 화면은 한 쪽'(보기 메뉴, 이 기기 쿠키 mcv_port1=1)을 켰고 펼침(1|2·2|1)이면 세로 화면에서만 한 쪽씩 — 고른 보기 방식은 그대로 두고 그리는 것만
+  //   (화면을 돌려 세로↔가로가 바뀌면 js/viewer-bar.js 가 보던 쪽 그대로 다시 엶) / 끄면(기본) 지금과 똑같음
+  const mcPortSingle = (pageOrder === '1' || pageOrder === '2') && /(?:^|;\s*)mcv_port1=1(?:;|$)/.test(document.cookie) && window.innerHeight > window.innerWidth;
+  const views = []; // { src, second, thumb, pages:[페이지 인덱스], detail }
+  if (pageOrder === '3' || pageOrder === '4') {
+    const firstSide = (pageOrder === '3') ? 'left' : 'right';
+    const secondSide = (pageOrder === '3') ? 'right' : 'left';
+    const sideLabel = function (s) { return s === 'left' ? _vi18n.page_left : _vi18n.page_right; };
     for (let i = 0; i < total; i++) {
-      // Left half
-      slideNum++;
-      dynamicEl.push({
-        src: `viewer.php?file=${file}&bidx=${bidx}&img=${i}&split=left`,
-        thumb: `viewer.php?file=${file}&bidx=${bidx}&img=${i}`,
-        subHtml: `<div style="display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;">
-          <span class="lg-counter">${slideNum}&nbsp;/&nbsp;${totalSlides}</span>
-          <span style="opacity:0.5; font-size:0.85em;">(${i+1}p ${_vi18n.page_left})</span>
-          <span class="lg-nav-hint" style="opacity: 0.7; font-size: 0.95em;">${initNavText}</span>
-          <button type="button" class="lg-reverse-btn" style="font-size:14px; padding:4px 10px; background:${initBtnBg}; border:none; border-radius:4px; color:#fff; cursor:pointer;">${initBtnText}</button>
-          <span class="lg-pageorder-btns" style="display:inline-flex; gap:2px; margin-left:5px;">
-            <button type="button" class="lg-pageorder-btn" data-order="0" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">-</button>
-            <button type="button" class="lg-pageorder-btn" data-order="3" style="font-size:12px; padding:2px 6px; background:rgba(0,123,255,0.5); border:none; border-radius:3px; color:#fff; cursor:pointer;">▤←</button>
-            <button type="button" class="lg-pageorder-btn" data-order="4" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">→▤</button>
-          </span>
-        </div>`
-      });
-      // Right half
-      slideNum++;
-      dynamicEl.push({
-        src: `viewer.php?file=${file}&bidx=${bidx}&img=${i}&split=right`,
-        thumb: `viewer.php?file=${file}&bidx=${bidx}&img=${i}`,
-        subHtml: `<div style="display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;">
-          <span class="lg-counter">${slideNum}&nbsp;/&nbsp;${totalSlides}</span>
-          <span style="opacity:0.5; font-size:0.85em;">(${i+1}p ${_vi18n.page_right})</span>
-          <span class="lg-nav-hint" style="opacity: 0.7; font-size: 0.95em;">${initNavText}</span>
-          <button type="button" class="lg-reverse-btn" style="font-size:14px; padding:4px 10px; background:${initBtnBg}; border:none; border-radius:4px; color:#fff; cursor:pointer;">${initBtnText}</button>
-          <span class="lg-pageorder-btns" style="display:inline-flex; gap:2px; margin-left:5px;">
-            <button type="button" class="lg-pageorder-btn" data-order="0" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">-</button>
-            <button type="button" class="lg-pageorder-btn" data-order="3" style="font-size:12px; padding:2px 6px; background:rgba(0,123,255,0.5); border:none; border-radius:3px; color:#fff; cursor:pointer;">▤←</button>
-            <button type="button" class="lg-pageorder-btn" data-order="4" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">→▤</button>
-          </span>
-        </div>`
-      });
+      if (splitMap[i] === 0) {
+        // 분할 대상 아님(세로 페이지) → 원본 1장
+        views.push({ src: imgBase + i, thumb: imgBase + i, pages: [i], detail: `(${i+1}p)` });
+        continue;
+      }
+      views.push({ src: imgBase + i + '&split=' + firstSide, thumb: imgBase + i, pages: [i], detail: `(${i+1}p ${sideLabel(firstSide)})` });
+      views.push({ src: imgBase + i + '&split=' + secondSide, thumb: imgBase + i, pages: [i], detail: `(${i+1}p ${sideLabel(secondSide)})` });
     }
-  } else if (pageOrder === '4') {
-    // 세로분할 우→좌: right, left 순서 (일본 만화 스타일)
-    let slideNum = 0;
-    const totalSlides = total * 2;
-    for (let i = 0; i < total; i++) {
-      // Right half first
-      slideNum++;
-      dynamicEl.push({
-        src: `viewer.php?file=${file}&bidx=${bidx}&img=${i}&split=right`,
-        thumb: `viewer.php?file=${file}&bidx=${bidx}&img=${i}`,
-        subHtml: `<div style="display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;">
-          <span class="lg-counter">${slideNum}&nbsp;/&nbsp;${totalSlides}</span>
-          <span style="opacity:0.5; font-size:0.85em;">(${i+1}p ${_vi18n.page_right})</span>
-          <span class="lg-nav-hint" style="opacity: 0.7; font-size: 0.95em;">${initNavText}</span>
-          <button type="button" class="lg-reverse-btn" style="font-size:14px; padding:4px 10px; background:${initBtnBg}; border:none; border-radius:4px; color:#fff; cursor:pointer;">${initBtnText}</button>
-          <span class="lg-pageorder-btns" style="display:inline-flex; gap:2px; margin-left:5px;">
-            <button type="button" class="lg-pageorder-btn" data-order="0" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">-</button>
-            <button type="button" class="lg-pageorder-btn" data-order="3" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">▤←</button>
-            <button type="button" class="lg-pageorder-btn" data-order="4" style="font-size:12px; padding:2px 6px; background:rgba(0,123,255,0.5); border:none; border-radius:3px; color:#fff; cursor:pointer;">→▤</button>
-          </span>
-        </div>`
-      });
-      // Left half
-      slideNum++;
-      dynamicEl.push({
-        src: `viewer.php?file=${file}&bidx=${bidx}&img=${i}&split=left`,
-        thumb: `viewer.php?file=${file}&bidx=${bidx}&img=${i}`,
-        subHtml: `<div style="display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;">
-          <span class="lg-counter">${slideNum}&nbsp;/&nbsp;${totalSlides}</span>
-          <span style="opacity:0.5; font-size:0.85em;">(${i+1}p ${_vi18n.page_left})</span>
-          <span class="lg-nav-hint" style="opacity: 0.7; font-size: 0.95em;">${initNavText}</span>
-          <button type="button" class="lg-reverse-btn" style="font-size:14px; padding:4px 10px; background:${initBtnBg}; border:none; border-radius:4px; color:#fff; cursor:pointer;">${initBtnText}</button>
-          <span class="lg-pageorder-btns" style="display:inline-flex; gap:2px; margin-left:5px;">
-            <button type="button" class="lg-pageorder-btn" data-order="0" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">-</button>
-            <button type="button" class="lg-pageorder-btn" data-order="3" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">▤←</button>
-            <button type="button" class="lg-pageorder-btn" data-order="4" style="font-size:12px; padding:2px 6px; background:rgba(0,123,255,0.5); border:none; border-radius:3px; color:#fff; cursor:pointer;">→▤</button>
-          </span>
-        </div>`
-      });
+  } else if ((pageOrder === '1' || pageOrder === '2') && !mcPortSingle) {
+    // ★ (2026-11-04 22:07) 펜닐 결정(3-2차 A+B): 표지(첫 쪽)는 혼자 · 가로로 넓은 그림(원래 두 쪽짜리)은 혼자 · 이 책만 짝 한 쪽 밀기
+    //   둘 다 끄면(mcv_solo=0, 밀기 없음) 예전과 똑같이 1-2, 3-4 …
+    const one = function (i) { views.push({ src: imgBase + i, thumb: imgBase + i, pages: [i], detail: `(${i+1}p)` }); };
+    const wide = function (i) { return mcSolo && splitMap[i] === 1; };
+    let i = 0;
+    if (mcSolo && total > 0) { one(0); i = 1; }
+    if (mcOff && i < total) { one(i); i++; }
+    while (i < total) {
+      if (wide(i) || i + 1 >= total || wide(i + 1)) { one(i); i++; continue; }
+      const L = (pageOrder === '1') ? i : i + 1;
+      const R = (pageOrder === '1') ? i + 1 : i;
+      views.push({ src: imgBase + L, second: imgBase + R, thumb: imgBase + i, pages: [i, i + 1], detail: `(${L+1}|${R+1}p)` });
+      i += 2;
     }
   } else {
-    // 기본 (0, 1, 2): 이미지 그대로
-    const activeOrder = pageOrder === '0' ? '0' : (pageOrder === '1' ? '1' : (pageOrder === '2' ? '2' : '0'));
     for (let i = 0; i < total; i++) {
-      dynamicEl.push({
-        src: `viewer.php?file=${file}&bidx=${bidx}&img=${i}`,
-        thumb: `viewer.php?file=${file}&bidx=${bidx}&img=${i}`,
-        subHtml: `<div style="display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;">
-          <span class="lg-counter">${i+1}&nbsp;/&nbsp;${total}</span>
-          <span class="lg-nav-hint" style="opacity: 0.7; font-size: 0.95em;">${initNavText}</span>
-          <button type="button" class="lg-reverse-btn" style="font-size:14px; padding:4px 10px; background:${initBtnBg}; border:none; border-radius:4px; color:#fff; cursor:pointer;">${initBtnText}</button>
-          <span class="lg-pageorder-btns" style="display:inline-flex; gap:2px; margin-left:5px;">
-            <button type="button" class="lg-pageorder-btn" data-order="0" style="font-size:12px; padding:2px 6px; background:${activeOrder === '0' ? 'rgba(0,123,255,0.5)' : 'rgba(255,255,255,0.2)'}; border:none; border-radius:3px; color:#fff; cursor:pointer;">-</button>
-            <button type="button" class="lg-pageorder-btn" data-order="3" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">▤←</button>
-            <button type="button" class="lg-pageorder-btn" data-order="4" style="font-size:12px; padding:2px 6px; background:rgba(255,255,255,0.2); border:none; border-radius:3px; color:#fff; cursor:pointer;">→▤</button>
-          </span>
-        </div>`
-      });
+      views.push({ src: imgBase + i, thumb: imgBase + i, pages: [i], detail: '' });
     }
   }
+
+  const nViews = views.length;
+  const slidePage = [];
+  const pageSlide = [];
+  views.forEach(function (v, k) {
+    slidePage.push(v.pages[0]);
+    v.pages.forEach(function (p) { if (pageSlide[p] === undefined) pageSlide[p] = k; });
+    const el = {
+      src: v.src,
+      thumb: v.thumb,
+      subHtml: `<div style="display:inline-flex; align-items:center; gap:10px; flex-wrap:wrap; justify-content:center;">
+          <span class="lg-counter">${k+1}&nbsp;/&nbsp;${nViews}</span>${v.detail ? `
+          <span style="opacity:0.5; font-size:0.85em;">${v.detail}</span>` : ''}
+          <span class="lg-nav-hint" style="opacity: 0.7; font-size: 0.95em;">${initNavText}</span>
+          <button type="button" class="lg-reverse-btn" style="font-size:14px; padding:4px 10px; background:${initBtnBg}; border:none; border-radius:4px; color:#fff; cursor:pointer;">${initBtnText}</button>
+          ${orderBtns(activeOrder)}
+        </div>`
+    };
+    if (v.second) el.mcSecond = v.second; // 펼침(1|2, 2|1)의 두 번째 이미지 (lightGallery는 무시하는 사용자 속성)
+    dynamicEl.push(el);
+  });
+  // ★ (2026-11-02 21:22) 마지막 슬라이드의 마지막 쪽 — 펼침(1|2·2|1)은 슬라이드 첫 쪽만 저장돼 짝수 쪽 책을 끝까지 넘겨도 '다 읽음'이 안 됐음
+  const lastViewPage = nViews ? Math.max.apply(null, views[nViews - 1].pages) : 0;
+  window._mcBook = { slidePage: slidePage, pageSlide: pageSlide, order: pageOrder, lastPage: lastViewPage, portSingle: mcPortSingle };
+
+  // ★ (2026-10-29) 시작 위치: #imageN(페이지 번호) → 현재 구성의 슬라이드 번호
+  //   (동적 갤러리는 초기화 즉시 열려 auto_open_gallery()의 이동이 실행되지 않던 문제 → index 옵션으로 직접 지정)
+  let startIndex = 0;
+  const _hm = (window.location.hash || '').match(/image(\d+)/i);
+  if (_hm && pageSlide.length) {
+    const _pg = parseInt(_hm[1], 10) || 0;
+    if (pageSlide[_pg] !== undefined) startIndex = pageSlide[_pg];
+    else if (_pg >= pageSlide.length) startIndex = pageSlide[pageSlide.length - 1];
+  }
+  if (!(startIndex >= 0 && startIndex < dynamicEl.length)) startIndex = 0;
+
+  // ★ (2026-10-29) 펼침(1|2, 2|1): 슬라이드 생성 직후 두 번째 이미지를 같은 슬라이드에 나란히 추가
+  //   (첫 이미지는 lightGallery 기본 .lg-object 그대로 → 로드/프리로드/카운터 등 기존 흐름 유지)
+  $('#lightgallery').off('onAferAppendSlide.lg.mcspread').on('onAferAppendSlide.lg.mcspread', function (e, index) {
+    const it = dynamicEl[index];
+    if (!it || !it.mcSecond) return;
+    const inst = $('#lightgallery').data('lightGallery');
+    const $slide = (inst && inst.$slide) ? inst.$slide.eq(index) : $('.lg-outer .lg-item').eq(index);
+    const $wrap = $slide.find('.lg-img-wrap').first();
+    if (!$wrap.length || $wrap.hasClass('mc-spread')) return;
+    $wrap.addClass('mc-spread');
+    const img2 = document.createElement('img');
+    img2.className = 'lg-image mc-spread-2nd';
+    img2.alt = '';
+    img2.src = it.mcSecond;
+    $wrap.append(img2); // 밝기(change_bright)는 .lg-image 클래스로 첫 이미지와 동일하게 적용됨
+  });
 
   $('#lightgallery').lightGallery({
     dynamic: true,
     dynamicEl: dynamicEl,
+    index: startIndex,
     loop: false,
     hideBarsDelay: 1000,
     controls: true,
@@ -2478,6 +2917,13 @@ function auto_open_gallery() {
   var hash = window.location.hash || '';
   var m = hash.match(/image(\d+)/i);
   var targetIndex = m ? (parseInt(m[1], 10) || 0) : 0;
+  // ★ (2026-10-29) #imageN은 "페이지 번호" → 현재 구성(분할/펼침)의 슬라이드 번호로 변환
+  //   (0 기본 모드는 페이지 = 슬라이드라 값 그대로)
+  if (window._mcBook && window._mcBook.pageSlide && window._mcBook.pageSlide.length) {
+    var _ps = window._mcBook.pageSlide;
+    if (_ps[targetIndex] !== undefined) targetIndex = _ps[targetIndex];
+    else if (targetIndex >= _ps.length) targetIndex = _ps[_ps.length - 1];
+  }
 
   setTimeout(function () {
     if (document.querySelector('.lg-outer.lg-visible')) return;
@@ -2600,7 +3046,9 @@ $(document).on('onAfterOpen.lg', function () {
     var file = $('#lightgallery').data('file');
     var bidx = <?php echo $current_bidx; ?>;
     // 페이지오더 변경하여 페이지 새로고침
-    location.replace('./viewer.php?mode=book&file=' + file + '&bidx=' + bidx + '&pageorder=' + newOrder);
+    // ★ (2026-10-29) 지금 보던 페이지 유지: img_counter(페이지 번호)를 #imageN으로 넘김 → 새 구성에서 해당 페이지 슬라이드로 열림
+    var _keepPage = (typeof img_counter === 'number' && img_counter >= 0) ? Math.floor(img_counter) : 0;
+    location.replace('./viewer.php?<?php echo ($_param_filetype === 'images' || $type === 'images') ? 'filetype=images&' : ''; ?>mode=book&file=' + file + '&bidx=' + bidx + '&pageorder=' + newOrder + '#image' + _keepPage); // ★ (2026-10-30) 이미지 폴더는 filetype=images 를 유지해야 순서 버튼이 먹음
   });
 
   if (outer.__lgTapBound) return;
@@ -2664,12 +3112,14 @@ $(document).on('onAfterOpen.lg', function () {
   var lastDownAt = 0, lastX = 0, lastY = 0, armed = false;
 
   function inGallery() {
+    // ★ (2026-11-04 18:00) 화면 맞춤 너비·높이(밀어서 보는 상태)에서는 쪽 넘김을 '짧게 누르고 뗐을 때(click)'만 → 여기서 막지 않음(아래 tapHandler 가 click 으로 처리)
+    if (document.body && /\bmcv-fit-[wh]\b/.test(document.body.className)) return false;
     return !!document.querySelector('.lg-outer.lg-visible');
   }
 
   function isUiControl(el) {
     return !!(el && el.closest && el.closest(
-      '.lg-close, .lg-toolbar, .lg-actions, .lg-prev, .lg-next, .lg-thumb-outer, .lg-sub-html'
+      '.lg-close, .lg-toolbar, .lg-actions, .lg-prev, .lg-next, .lg-thumb-outer, .lg-sub-html, .mcv-bar, .mcv-pop' // ★ (2026-11-01) 위 막대·메뉴
     ));
   }
 
@@ -2784,7 +3234,9 @@ function keyCaptureHandler(e) {
   var outer = document.querySelector('.lg-outer.lg-visible');
   if (!outer) return;
   var tag = (e.target && e.target.tagName) ? e.target.tagName.toLowerCase() : '';
-  if (tag === 'input' || tag === 'textarea' || tag === 'select' || tag === 'button' || e.isComposing) return;
+  // ★ (2026-11-02 19:06) 위 막대 단추(보기·톱니·쪽 번호)는 제외하지 않음 — 누르거나 Esc 로 메뉴를 닫으면 초점이 단추에 남아 ←→·PageUp/Down 이 안 먹었음
+  //   (여기서 처리하는 키는 방향·Page·Home/End 뿐이라 단추 동작(Space·Enter)과 안 겹침)
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || (tag === 'button' && !(e.target.closest && e.target.closest('.mcv-bar'))) || e.isComposing) return;
 
   var code = e.key || e.code || '';
   var kc = e.keyCode || 0;
@@ -2902,12 +3354,40 @@ function tapHandler(ev) {
 
   if (ev.changedTouches && ev.changedTouches.length > 1) return;
 
+  // ★ (2026-11-04 18:00) 화면 맞춤 너비·높이: 그림을 밀어(스크롤) 보므로 누르는 순간(touchstart·pointerdown)에 넘기지 않고,
+  //   밀지 않고 짧게 눌렀을 때 오는 click 에서만 판단 · 좌우 끝 20% 는 그림이 아니라 화면 폭 기준(그림이 화면보다 커서)
+  const fitScroll = !!(document.body && /\bmcv-fit-[wh]\b/.test(document.body.className));
+  if (fitScroll && ev.type !== 'click') return;
+
   const t = ev.changedTouches?.[0] || ev;
   const x = t?.clientX ?? 0;
 
   if (ev.type === 'click' || ev.type === 'touchend') {
     ev.preventDefault();
     ev.stopPropagation();
+  }
+
+  if (fitScroll) {
+    const cr = getContainerRect();
+    if (x < cr.left + cr.width * 0.20) return goLeft();
+    if (x > cr.left + cr.width * 0.80) return goRight();
+    return showToolbar();
+  }
+
+  // ★ (2026-10-29) 펼침(두 장) 슬라이드: 두 이미지 전체 영역 기준으로 좌/우 20% 탭 판정
+  const spreadWrap = document.querySelector('.lg-item.lg-current .lg-img-wrap.mc-spread');
+  if (spreadWrap) {
+    let sl = Infinity, sr = -Infinity;
+    spreadWrap.querySelectorAll('img').forEach(function (m) {
+      const b = m.getBoundingClientRect();
+      if (b.width > 0 && b.height > 0) { sl = Math.min(sl, b.left); sr = Math.max(sr, b.right); }
+    });
+    if (sr > sl) {
+      const sw2 = sr - sl;
+      if (x < sl + sw2 * 0.20) return goLeft();  // ✅ 좌우반전 적용
+      if (x > sr - sw2 * 0.20) return goRight(); // ✅ 좌우반전 적용
+      return showToolbar();
+    }
   }
 
   const contRect = getContainerRect();
@@ -2975,6 +3455,8 @@ $(document).on('onCloseAfter.lg', function () {
   var $el = $('#lightgallery');
 
   var inst = $el.data('lightGallery');
+  // ★ (2026-10-30) 아래(위치 저장) 핸들러가 이 다음에 실행되는데 인스턴스를 먼저 지워 늘 image0 이 저장되던 문제 — 지우기 전에 위치 보관
+  if (inst && typeof inst.index === 'number') window.__mcLgCloseIdx = inst.index;
   if (inst && typeof inst.destroy === 'function') {
     inst.destroy(true);
   }
@@ -2992,7 +3474,7 @@ $(document).on('onCloseAfter.lg', function () {
   }, 0);
 
   var safeFile = <?php echo js(encode_url($getfile)); ?>;
-  location.replace("./viewer.php?mode=toon&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>");
+  location.replace("./viewer.php?<?php echo ($_param_filetype === 'images' || $type === 'images') ? 'filetype=images&' : ''; ?>mode=toon&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>");
 });
 
 // 보던 위치(toon URL#bookmark)를 히스토리에 반영.
@@ -3006,12 +3488,18 @@ $(document).one('onCloseAfter.lg', function () {
   var idx = 0;
   var inst = $('#lightgallery').data('lightGallery');
   if (inst && typeof inst.index === 'number') idx = inst.index;
+  else if (typeof window.__mcLgCloseIdx === 'number') idx = window.__mcLgCloseIdx;
+  var _sp = window._mcBook && window._mcBook.slidePage; // 세로 분할이면 슬라이드 번호 → 페이지 번호
+  var _last = _sp && idx === _sp.length - 1 && typeof window._mcBook.lastPage === 'number'; // ★ (2026-11-02 21:22) 마지막 슬라이드면 그 마지막 쪽(위 onAfterSlide 와 같게)
+  if (_sp && _sp[idx] !== undefined) idx = _sp[idx];
+  if (_last) idx = window._mcBook.lastPage;
   var bookmark = 'image' + idx;
 
   var safeFile = <?php echo js(encode_url($getfile)); ?>;
   const user_id = <?php echo js($user_id); ?>;  // ✅ 세션 닫기 전에 저장한 변수 사용
 
   const qs = "viewer=toon"
+    + "&page_order=<?php echo (int)($pageorder['page_order'] ?? 0); ?>" // ★ (2026-11-05 15:40) 이 책의 보기 방식도 그대로 기록(빠져 있어 닫을 때마다 '한 쪽'으로 초기화됐음 — 모드 기억 '책마다')
     + "&file=" + safeFile
     + "&bookmark=" + encodeURIComponent(bookmark)
     + "&user_id=" + encodeURIComponent(user_id)
@@ -3024,10 +3512,12 @@ $(document).one('onCloseAfter.lg', function () {
     $.get(url);
   }
 
-  send("bookmark.php?" + qs);
+  // ★ (2026-11-03 17:20) 직접 찍은 북마크(책갈피)는 건드리지 않음 — 종전엔 북모드를 닫을 때마다 북마크도 보던 쪽으로 덮어써 따로 기억해 둔 쪽이 사라졌고,
+  //   안 찍은 책도 북마크 목록에 저절로 생겼음(펜닐 제보). 이어 읽기는 자동 저장으로(툰모드와 같게)
+  try { window.mcAsViewer = 'toon'; } catch(e){} // ★ (2026-11-05 15:40) 이어서 이 화면이 떠날 때의 자동 저장도 툰모드로(예전엔 '북'으로 다시 덮어씀)
   send("bookmark.php?mode=autosave&" + qs);
 
-  const toonUrl = "./viewer.php?mode=toon&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>#" + bookmark;
+  const toonUrl = "./viewer.php?<?php echo ($_param_filetype === 'images' || $type === 'images') ? 'filetype=images&' : ''; ?>mode=toon&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>#" + bookmark;
   setTimeout(function(){ location.replace(toonUrl); }, 80);
 });
 
@@ -3045,26 +3535,63 @@ if($type != "pdf") {
 function set_cover() {
 	document.getElementById("info").value = _vi18n.setting;
 	var safeFile = <?php echo js(encode_url($getfile)); ?>;
-	$.get("bookmark.php?mode=set_cover&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>", function( data ) {
+	// ★ (2026-10-30) bookmark.php 가 set_cover 에 삭제 토큰을 요구하는데 안 붙여서 늘 403 이던 문제
+	$.get("bookmark.php?mode=set_cover&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>&token=<?php echo urlencode($_viewer_delete_token); ?>", function( data ) {
 		document.getElementById("info").value = data;
-	});
+	}).fail(function (x) { document.getElementById("info").value = (x && x.responseText) ? String(x.responseText).slice(0, 80) : '✕'; }); // ★ (2026-11-04 09:43) 실패(쓸 그림 없음·권한)도 알림
 }
+<?php if ($_viewer_is_admin): ?>
+/* ★ (2026-11-08 fix80, 펜닐 요청) 보고 있는 장면(동영상)·쪽(PDF)을 이 폴더의 표지로 — 화면 그림을 JPEG 로 보내 bookmark.php?mode=set_cover_img 가 [cover].jpg 로 저장(관리자·CSRF) */
+function mcCoverPost(dataUrl, done) {
+	try {
+		var fd = new FormData();
+		fd.append('mode', 'set_cover_img'); fd.append('file', <?php echo js((string)$getfile); ?>);
+		fd.append('csrf_token', <?php echo js((string)$_viewer_csrf); ?>); fd.append('image', dataUrl);
+		fetch('bookmark.php?bidx=<?php echo (int)$current_bidx; ?>', { method: 'POST', body: fd, credentials: 'same-origin' })
+			.then(function (r) { return r.text().then(function (t) { done(r.ok ? t : String(t || '✕').slice(0, 80), r.ok); }); })
+			.catch(function () { done('✕', false); });
+	} catch (e) { done('✕', false); }
+}
+function mcCoverFromVideo() {
+	var inf = document.getElementById('info'), v = document.getElementById('videoPlayer');
+	if (inf) inf.value = _vi18n.setting;
+	// 장면이 아직 없으면(재생 전·변환 중) 예전 방식 — 서버가 영상 썸네일·같은 이름 그림으로
+	if (!v || v.readyState < 2 || !v.videoWidth) { if (typeof set_cover === 'function') set_cover(); return; }
+	try {
+		var sc = Math.min(1, 1280 / v.videoWidth), c = document.createElement('canvas');
+		c.width = Math.max(1, Math.round(v.videoWidth * sc)); c.height = Math.max(1, Math.round(v.videoHeight * sc));
+		c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
+		mcCoverPost(c.toDataURL('image/jpeg', 0.88), function (t) { if (inf) inf.value = t; });
+	} catch (e) { if (typeof set_cover === 'function') set_cover(); }
+}
+<?php endif; ?>
 <?php
 }
 ?>
 </script>
-<body>
+<?php
+// ★ (2026-11-01) 위 막대(시안 S2) — 압축 파일·이미지 폴더의 툰모드·북모드만(PDF·동영상은 그대로). 막대 파일이 없으면 예전 화면 그대로
+$_mcv_on = ($type === 'zip' || $type === 'images') && ($mode === 'toon' || $mode === 'book') && is_file(__DIR__ . '/viewer_bar.php');
+?>
+<?php
+// ★ (2026-11-04 18:00) 북모드 화면 맞춤(이 기기 쿠키 mcv_fit: 없음=화면(지금 동작) / width=너비 / height=높이) — 그리기 전에 class 로 넣어 깜빡임 없게
+$_mcv_fitc = ($_mcv_on && $mode === 'book') ? (($_COOKIE['mcv_fit'] ?? '') === 'width' ? ' mcv-fit-w' : ((($_COOKIE['mcv_fit'] ?? '') === 'height') ? ' mcv-fit-h' : '')) : '';
+?>
+<?php
+// ★ (2026-11-07 fix56) 동영상 화면에도 위 막대(← · 제목 · ⚙) — 막대 파일이 없으면 예전 화면 그대로
+$_mcvv_on = !$_mcv_on && ($type === 'video' || $type === 'video_archive') && is_file(__DIR__ . '/viewer_video_bar.php');
+?>
+<body<?php echo $_mcv_on ? ' class="mcv2 mcv2-' . ($mode === 'book' ? 'book' : 'toon') . $_mcv_fitc . '"' : ($_mcvv_on ? ' class="mcvv"' : ''); ?>>
+<?php if ($_mcv_on) include __DIR__ . '/viewer_bar.php'; ?>
+<?php if ($_mcvv_on) include __DIR__ . '/viewer_video_bar.php'; ?>
 
 <?php if($type != "pdf"): ?>
 <nav class="navbar navbar-light fixed-top bg-white p-1 m-0">
 <table class="table table-borderless mb-2 p-0" width=100%>
 <tr>
 <td class="m-0 p-0 align-middle">
-<?php if(($_branding['logo_type'] ?? 'text') === 'image' && !empty($_branding['logo_image']) && file_exists($_branding['logo_image'])): ?>
-<a href="./index.php?dir=<?php echo encode_url($link_dir); ?>&page=<?php echo intval($page); ?>&bidx=<?php echo $current_bidx; ?>" class="logo-link"><img src="<?php echo h($_branding['logo_image']); ?>" alt="<?php echo h($_branding['logo_text']); ?>" style="max-height:2em; max-width:150px;"></a><span style="font-size:10px; color:#999; margin-left:4px; position:relative; top:-15px;"><?php echo MYCOMIX_VERSION; ?></span><?php render_lang_badge('lg'); ?>
-<?php else: ?>
-<a href="./index.php?dir=<?php echo encode_url($link_dir); ?>&page=<?php echo intval($page); ?>&bidx=<?php echo $current_bidx; ?>" class="logo-link"><font style="font-family: 'Gugi'; font-size: 2em;"><?php echo h($_branding['logo_text'] ?? '마이코믹스'); ?></font></a><span style="font-size:10px; color:#999; margin-left:4px; position:relative; top:-15px;"><?php echo MYCOMIX_VERSION; ?></span><?php render_lang_badge('lg'); ?>
-<?php endif; ?>
+<?php // ★ (2026-11-03 22:32) [로고][로고 문구][버전] 한 줄(FileStation 처럼) ?>
+<span style="font-family: 'Gugi'; font-size: 2em; display:inline-flex; align-items:flex-start; vertical-align:middle;"><?php echo mc_brand_logo($_branding, './index.php?dir=' . encode_url($link_dir) . '&page=' . intval($page) . '&bidx=' . $current_bidx, 'white-space:normal;min-width:0;'); /* ★ (2026-11-03 23:34) 긴 문구는 줄바꿈(예전처럼) */ ?><span style="font-size:10px; color:#999; margin:3px 0 0 4px; font-family:system-ui,sans-serif; line-height:1;"><?php echo MYCOMIX_VERSION; ?></span></span><?php render_lang_badge('lg'); ?>
 </td>
 <td class="m-0 p-0 align-middle" align="right">
 <button class="btn btn-sm" onclick="sub_toggle();">
@@ -3122,11 +3649,16 @@ function set_cover() {
 	</div>
 </td></tr>
 <?php
-if($type != "pdf"){
+if(($type === 'zip' || $type === 'images' || $type === 'video') && $_viewer_is_admin){ // ★ (2026-11-08 fix80) 동영상도(지금 장면 → 폴더 표지)
+    // ★ (2026-11-04 07:44) 표지 지정은 관리자만 / ★ (2026-11-04 09:43) 압축·이미지 폴더만(동영상엔 쓸 그림이 없어 '설정됨'만 떴음)
 ?>
 <tr><td align="right">
 <br>
+<?php if ($type === 'video'): ?>
+<button class="btn btn-sm btn-success mt-2 p-0" onclick="mcCoverFromVideo();"><?php echo __h("viewer_cover_frame"); ?></button>
+<?php else: ?>
 <button class="btn btn-sm btn-success mt-2 p-0" onclick="set_cover();"><?php echo __h("viewer_set_cover"); ?></button>
+<?php endif; ?>
 </td></tr>
 <?php
 }
@@ -3171,7 +3703,7 @@ $title_safe = preg_replace_callback('/\((\d{6,11})\)/', function($m) {
 <table width="100%">
 <tr><td align="left">
 <div class="btn-group justify-content-center" style="font-family: 'Gugi';">
-<button type="button" class="btn btn-outline-secondary btn-sm" OnClick="location.replace('./index.php?dir=<?php echo encode_url($link_dir); ?>&page=<?php echo intval($page) . $bidx_param; ?>')">
+<button type="button" class="btn btn-outline-secondary btn-sm" OnClick="var u=(window.mcBackUrl ? window.mcBackUrl(this.getAttribute('data-def')) : this.getAttribute('data-def')); if (window.mcBackGo) window.mcBackGo(u, 'replace'); else location.replace(u);" data-def="./index.php?dir=<?php echo h(encode_url($link_dir)); ?>&amp;page=<?php echo intval($page) . h($bidx_param); ?>">
 <svg width="3em" height="1em" viewBox="0 0 16 16" class="bi bi-list" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
   <path fill-rule="evenodd" d="M2.5 11.5A.5.5 0 0 1 3 11h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4A.5.5 0 0 1 3 7h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4A.5.5 0 0 1 3 3h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
 </svg>
@@ -3205,7 +3737,7 @@ $title_safe = preg_replace_callback('/\((\d{6,11})\)/', function($m) {
 			 <?php
          }
 ?>
-<button type="button" class="btn btn-outline-secondary btn-sm mr-1" OnClick="location.replace('./index.php?dir=<?php echo encode_url($link_dir); ?>&page=<?php echo intval($page); ?>&bidx=<?php echo $current_bidx; ?>')">
+<button type="button" class="btn btn-outline-secondary btn-sm mr-1" OnClick="var u=(window.mcBackUrl ? window.mcBackUrl(this.getAttribute('data-def')) : this.getAttribute('data-def')); if (window.mcBackGo) window.mcBackGo(u, 'replace'); else location.replace(u);" data-def="./index.php?dir=<?php echo h(encode_url($link_dir)); ?>&amp;page=<?php echo intval($page); ?>&amp;bidx=<?php echo (int)$current_bidx; ?>">
 <svg width="3em" height="1em" viewBox="0 0 16 16" class="bi bi-list" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
   <path fill-rule="evenodd" d="M2.5 11.5A.5.5 0 0 1 3 11h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4A.5.5 0 0 1 3 7h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5zm0-4A.5.5 0 0 1 3 3h10a.5.5 0 0 1 0 1H3a.5.5 0 0 1-.5-.5z"/>
 </svg>
@@ -3213,7 +3745,7 @@ $title_safe = preg_replace_callback('/\((\d{6,11})\)/', function($m) {
 <?php 
 // ✅ 즐겨찾기 버튼
 $_viewer_fav_path = $getfile;
-$_viewer_is_fav = isset($_favorites_arr[$_viewer_fav_path]);
+$_viewer_is_fav = mc_rec_find($_favorites_arr, $current_bidx, $_viewer_fav_path) !== null; // ★ (2026-11-06 00:50) 이 콘텐츠 폴더의 즐겨찾기
 ?>
 <button type="button" id="favBtn" class="btn btn-sm mr-1 <?php echo $_viewer_is_fav ? 'btn-warning' : 'btn-outline-warning'; ?>" 
         onclick="toggleViewerFavorite(this)" title="<?php echo $_viewer_is_fav ? __('viewer_fav_remove') : __('viewer_fav_add'); ?>">
@@ -3244,7 +3776,7 @@ function toggleViewerFavorite(btn) {
             } catch(e) { console.error(e); }
         }
     };
-    xhr.send('file=' + encodeURIComponent('<?php echo addslashes($_viewer_fav_path); ?>') + '&bidx=<?php echo $current_bidx; ?>');
+    xhr.send('file=' + encodeURIComponent(<?php echo js($_viewer_fav_path); ?>) + '&bidx=<?php echo $current_bidx; ?>');
 }
 </script>
 <?php
@@ -3274,7 +3806,7 @@ function toggleViewerFavorite(btn) {
 <?php
 if($type != "pdf" && $type != "video"){
 $page_order = $pageorder['page_order'] ?? '0';
-$filetype_param = ($_param_filetype === 'images') ? 'filetype=images&' : '';
+$filetype_param = ($_param_filetype === 'images' || $type === 'images') ? 'filetype=images&' : '';
 
 if($mode == "toon"){
 ?>
@@ -3361,6 +3893,30 @@ if($mode == "toon"){
 </div>
 <?php
 if($type == "video"){
+    // ★ (2026-10-31) 동영상 플레이어 보강(js/mc-video.js) 번역
+    echo '<script>window.MC_VIDEO_T = ' . json_encode([
+        'back5' => __('mcv_back5'), 'fwd5' => __('mcv_fwd5'), 'back5_help' => __('mcv_back5_help'), 'fwd5_help' => __('mcv_fwd5_help'),
+        'speed' => __('mcv_speed'), 'loop' => __('mcv_loop'), 'loop_on' => __('mcv_loop_on'), 'loop_off' => __('mcv_loop_off'),
+        'ab_set_a' => __('mcv_ab_set_a'), 'ab_set_b' => __('mcv_ab_set_b'), 'ab_clear' => __('mcv_ab_clear'), 'ab_off' => __('mcv_ab_off'),
+        'autonext' => __('mcv_autonext'), 'autonext_on' => __('mcv_autonext_on'), 'autonext_off' => __('mcv_autonext_off'),
+        'list' => __('mcv_list'), 'list_title' => __('mcv_list_title'),
+        'resume_q' => __('mcv_resume_q'), 'resume' => __('mcv_resume'), 'resume_no' => __('mcv_resume_no'),
+        'center_play' => __('mcfs_center_play'),
+        // ★ (2026-10-31) 자동 재생·변환 재생·배지·자막·정보 창
+        'resume_from' => __('mcv_resume_from'), 'autoplay_muted' => __('mcv_autoplay_muted'), 'unmute' => __('mcv_unmute'),
+        'tc_fallback' => __('mcv_tc_fallback'), 'tc_error' => __('mcv_tc_error'), 'mode_native' => __('mcv_mode_native'), 'mode_tc' => __('mcv_mode_tc'),
+        'q_orig' => __('mcv_q_orig'), 'badge_native' => __('mcv_badge_native'), 'badge_tc' => __('mcv_badge_tc'),
+        'sub_file' => __('mcv_sub_file'), 'sub_on' => __('mcv_sub_on'), 'sub_off' => __('mcv_sub_off'),
+        'info_title' => __('mcv_info_title'), 'info_mode' => __('mcv_info_mode'), 'close' => __('mcv_close'),
+    ], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>' . "\n";
+    // ★ (2026-10-31) FileStation 동영상 플레이어(js/fs-video-skin.js·fs-eq.js) 화면 글자 — 그 파일들은 window.LANG_STRINGS 에서 읽음
+    $_mcfs_keys = ['audio_track', 'close', 'eq_custom', 'eq_note_music', 'eq_note_video', 'eq_off', 'eq_on', 'eq_p_classical', 'eq_p_club', 'eq_p_dance', 'eq_p_flat', 'eq_p_fullbass', 'eq_p_fullbasstreble', 'eq_p_fulltreble', 'eq_p_headphones', 'eq_p_largehall', 'eq_p_live', 'eq_p_party', 'eq_p_pop', 'eq_p_reggae', 'eq_p_rock', 'eq_p_ska', 'eq_p_soft', 'eq_p_softrock', 'eq_p_techno', 'eq_preset', 'eq_reset', 'eq_title', 'fsvs_ab_clear', 'fsvs_ab_set_a', 'fsvs_ab_set_b', 'fsvs_back', 'fsvs_default', 'fsvs_muted', 'fsvs_normal', 'fsvs_osd_ab_a', 'fsvs_osd_ab_off', 'fsvs_sub_file', 'fsvs_sub_pos', 'fsvs_sub_settings', 'fsvs_sub_size', 'fsvs_sub_sync', 'fsvs_sync_reset', 'fullscreen', 'mute', 'next_video', 'pause', 'pip', 'play', 'playback_mode', 'playback_speed', 'prev_video', 'quality', 'sec', 'seek', 'settings', 'sub_toggle_off', 'sub_toggle_on', 'vi_dlg_title', 'video_ab', 'video_ab_clear', 'video_ab_set_a', 'video_ab_set_b', 'video_loop_one', 'video_loop_one_off', 'video_loop_one_on', 'video_loop_one_on_s', 'volume'];
+    $_mcfs_t = [];
+    foreach ($_mcfs_keys as $_k) $_mcfs_t[$_k] = __('mcfs_' . $_k);
+    echo '<script>window.LANG_STRINGS = Object.assign(window.LANG_STRINGS || {}, ' . json_encode($_mcfs_t, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ');</script>' . "\n";
+    $_mcfs_v = function ($f) { return (int)@filemtime(__DIR__ . '/' . $f); };
+    echo '<link rel="stylesheet" href="css/fs-video-skin.css?v=' . $_mcfs_v('css/fs-video-skin.css') . '">' . '<link rel="stylesheet" href="css/fs-eq.css?v=' . $_mcfs_v('css/fs-eq.css') . '">' . "\n";
+    echo '<script src="js/fs-eq.js?v=' . $_mcfs_v('js/fs-eq.js') . '"></script><script src="js/fs-video-skin.js?v=' . $_mcfs_v('js/fs-video-skin.js') . '"></script>' . "\n";
     // 동영상 뷰어
     $is_zip_video = preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $base_file);
     $video_files = [];
@@ -3370,7 +3926,7 @@ if($type == "video"){
         $zip = new ZipArchive;
         if ($zip->open($base_file) === TRUE) {
             for ($i = 0; $i < $zip->numFiles; $i++) {
-                $name = $zip->getNameIndex($i);
+                $name = mc_zip_name($zip, $i);
                 if (is_video_file($name)) {
                     $stat = $zip->statIndex($i);
                     $video_files[] = [
@@ -3436,9 +3992,17 @@ if($type == "video"){
                 <?php endforeach; ?>
             </div>
             
+            <script src="js/mc-video.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-video.js'); ?>"></script>
             <script>
             var safeFile = <?php echo js(encode_url($getfile)); ?>;
             var currentVideoItem = null;
+            // ★ (2026-10-31) 플레이어 보강 — 목록은 아래 기존 목록을 그대로 씀(showList:false), 끝났을 때 다음 영상은 기존 처리(manageEnded:false)
+            var mcZipV = (window.MCVideo && document.getElementById('zipVideoPlayer')) ? MCVideo.init(document.getElementById('zipVideoPlayer'), {
+                list: Array.prototype.map.call(document.querySelectorAll('.zip-video-item'), function (it) { return { title: it.getAttribute('data-video'), playable: it.getAttribute('data-playable') === '1' }; }),
+                showList: false, manageEnded: false, t: window.MC_VIDEO_T,
+                // ★ (2026-10-31) FileStation 플레이어의 이전·다음 버튼 → 아래 기존 목록의 그 항목 재생
+                onPick: function (i) { var its = document.querySelectorAll('.zip-video-item'); if (its[i]) playZipVideo(its[i]); }
+            }) : null;
             
             function playZipVideo(item) {
                 var videoName = item.getAttribute('data-video');
@@ -3456,6 +4020,7 @@ if($type == "video"){
                 });
                 item.classList.add('active');
                 currentVideoItem = item;
+                if (mcZipV) { var _ix = Array.prototype.indexOf.call(document.querySelectorAll('.zip-video-item'), item); if (_ix >= 0) mcZipV.setCurrent(_ix); } // ★ (2026-10-31) 이전·다음 버튼 기준
                 
                 // 비디오 재생
                 var player = document.getElementById('zipVideoPlayer');
@@ -3463,6 +4028,15 @@ if($type == "video"){
                 
                 player.src = videoUrl;
                 player.load();
+                if (mcZipV) mcZipV.setKey(<?php echo js($current_bidx . '|' . $getfile . '|'); ?> + videoName); // ★ 이어보기: 압축 파일 속 영상마다
+                // ★ (2026-10-31) 자막: 압축 파일 속 같은 폴더의 srt·smi·vtt·ass(영상마다 새로 읽음)
+                if (mcZipV && mcZipV.setSubs) {
+                    mcZipV.setSubs([]);
+                    fetch('viewer.php?filetype=zipvideo&vapi=zsubs&file=' + safeFile + '&video=' + encodeURIComponent(videoName) + '&bidx=<?php echo $current_bidx; ?>', { credentials: 'same-origin' })
+                        .then(function (r) { return r.ok ? r.json() : []; })
+                        .then(function (a) { if (currentVideoItem === item && Array.isArray(a) && a.length) mcZipV.setSubs(a); })
+                        .catch(function () {});
+                }
                 player.play().catch(function(e) {
                     console.log('자동 재생 실패:', e);
                 });
@@ -3485,6 +4059,7 @@ if($type == "video"){
             
             // 동영상 종료 시 다음 동영상 재생
             document.getElementById('zipVideoPlayer').addEventListener('ended', function() {
+                if (mcZipV && !mcZipV.shouldAutoNext()) return; // ★ (2026-10-31) 자동 다음 꺼짐·반복·A-B 중이면 넘어가지 않음
                 if (currentVideoItem) {
                     var next = currentVideoItem.nextElementSibling;
                     while (next && next.getAttribute('data-playable') !== '1') {
@@ -3508,10 +4083,20 @@ if($type == "video"){
         $video_info = null;
         $ffprobe_path = $ffprobe_path ?? '';
         if (!empty($ffprobe_path) && is_file($base_file)) {
-            $cmd = escape_shell_arg_safe($ffprobe_path) . ' -v quiet -print_format json -show_format -show_streams ' . escape_shell_arg_safe($base_file) . ' 2>&1';
-            $json_output = @shell_exec($cmd);
-            if ($json_output) {
-                $video_info = @json_decode($json_output, true);
+            // ★ (2026-11-04 00:31) ffprobe 결과를 src/video/vprobe 에 저장해 다시 열 때 재사용(파일 크기·수정시각이 바뀌면 새로) — 전엔 열 때마다 실행
+            require_once __DIR__ . '/video_lib.php';
+            $_ffc = (function_exists('mcv_file_key') && function_exists('mcv_cache_dir') && ($_ffd = mcv_cache_dir('vprobe'))) ? $_ffd . '/' . mcv_file_key($base_file) . '.ff.json' : '';
+            if ($_ffc !== '' && is_file($_ffc)) {
+                $video_info = @json_decode((string)@file_get_contents($_ffc), true);
+                if (!is_array($video_info) || !isset($video_info['streams'])) $video_info = null;
+            }
+            if ($video_info === null) {
+                $cmd = escape_shell_arg_safe($ffprobe_path) . ' -v quiet -print_format json -show_format -show_streams ' . escape_shell_arg_safe($base_file) . ' 2>&1';
+                $json_output = @shell_exec($cmd);
+                if ($json_output) {
+                    $video_info = @json_decode($json_output, true);
+                    if ($_ffc !== '' && is_array($video_info) && isset($video_info['streams'])) @file_put_contents($_ffc, json_encode($video_info), LOCK_EX);
+                }
             }
         }
         
@@ -3529,8 +4114,9 @@ if($type == "video"){
             if (isset($video_info['format']['duration'])) {
                 $dur = (float)$video_info['format']['duration'];
                 $hours = floor($dur / 3600);
-                $mins = floor(($dur % 3600) / 60);
-                $secs = floor($dur % 60);
+                $_di = (int)$dur; // ★ (2026-10-30) 실수에 % 하면 PHP 8.1+ 경고
+                $mins = floor(($_di % 3600) / 60);
+                $secs = $_di % 60;
                 if ($hours > 0) {
                     $duration_str = sprintf(__('viewer_time_hm'), $hours, $mins);
                 } else {
@@ -3599,14 +4185,93 @@ if($type == "video"){
         }
         ?>
         
-        <?php if ($is_playable): ?>
+        <?php
+        // ★ (2026-10-31) 실시간 변환 재생(FFmpeg 설정 시) — 브라우저가 못 여는 형식도 재생, 음성 트랙·화질 고르기(video_lib.php)
+        require_once __DIR__ . '/video_lib.php';
+        $mcv_ff = (mcv_ffmpeg() !== '');
+        $mcv_tc_auto = (!$is_playable && $mcv_ff);
+        // 같은 폴더의 동영상 목록(재생 목록·자동 다음 재생용) — 같은 폴더라 권한은 지금 파일과 같음, 많아도 500개까지
+        $mc_vlist = [];
+        $_vdir_real = rtrim(dirname($base_file), '/\\');
+        $_vnames = @scandir($_vdir_real) ?: [];
+        $_vnames = array_values(array_filter($_vnames, function ($n) use ($_vdir_real) {
+            return $n !== '' && $n[0] !== '.' && is_video_file($n) && @is_file($_vdir_real . '/' . $n);
+        }));
+        natcasesort($_vnames);
+        $_vnames = array_slice(array_values($_vnames), 0, 500);
+        foreach ($_vnames as $_vn) {
+            $_vrel = rtrim($link_dir, '/') . '/' . $_vn;
+            $mc_vlist[] = [
+                'title' => $_vn,
+                'url' => 'viewer.php?filetype=video&file=' . encode_url($_vrel) . $bidx_param,
+                'playable' => (bool)is_browser_playable_video($_vn) || $mcv_ff,   // ★ FFmpeg 가 있으면 변환 재생으로 모두 재생
+                'current' => ($_vn === basename($base_file)),
+            ];
+        }
+        ?>
+        <?php
+        // ★ (2026-10-31) 플레이어에 넘길 것 — 재생 방식 배지·동영상 정보 창·자막·변환 재생·장면 미리보기·자동 재생
+        $mcv_opts = [];
+        if ($is_playable || $mcv_tc_auto) {
+            $_mp = mcv_probe($base_file, is_array($video_info) ? $video_info : null);
+            $_src = trim(strtoupper((string)$_mp['vcodec']) . (($_mp['w'] && $_mp['h']) ? ' ' . $_mp['w'] . 'x' . $_mp['h'] : ''));
+            if ($_src === '') $_src = $video_ext;
+            $_alabels = [];
+            foreach ($_mp['audio'] as $_ai => $_a) {
+                $_parts = array_filter([$_a['title'] !== '' ? $_a['title'] : '', $_a['lang'] !== '' && $_a['lang'] !== 'und' ? $_a['lang'] : '', $_a['codec'], $_a['ch'] ? $_a['ch'] . 'ch' : '']);
+                $_alabels[] = ['label' => ($_ai + 1) . '. ' . (implode(' · ', $_parts) ?: ('Track ' . ($_ai + 1))), 'def' => (bool)$_a['def']];
+            }
+            $_info = [
+                [__('mcv_info_name'), basename($base_file)],
+                [__('viewer_format'), $video_ext],
+                [__('viewer_size'), $format_size($file_size)],
+                [__('viewer_duration'), $duration_str ?: ''],
+                [__('viewer_video'), trim($video_codec . ' ' . $video_resolution . ' ' . $video_fps . ' ' . $video_bitrate) ?: $_src],
+                [__('viewer_audio'), trim($audio_codec . ' ' . $audio_channels)],
+            ];
+            if (count($_alabels) > 1) $_info[] = [__('mcv_info_audio_tracks'), implode("\n", array_column($_alabels, 'label'))];
+            $_subs = [];
+            foreach (mcv_sidecar_subs($base_file) as $_s) $_subs[] = ['name' => $_s['name'], 'ext' => $_s['ext'], 'content' => $_s['content']];
+            $_vurl = 'viewer.php?filetype=video&file=' . encode_url($getfile) . $bidx_param;
+            $mcv_opts = [
+                'native' => $is_playable ? 'viewer.php?filetype=video&stream=1&file=' . encode_url($getfile) . $bidx_param : '',
+                'badge' => ['src' => $_src],
+                'info' => $_info,
+                'subs' => $_subs,
+                'autoplay' => !empty($_GET['autoplay']),
+                'nextParam' => '&autoplay=1',
+            ];
+            if ($mcv_ff) {
+                $mcv_opts['tc'] = ['url' => $_vurl . '&vapi=tc', 'dur' => (float)$_mp['dur'], 'h' => (int)$_mp['h'], 'audio' => $_alabels];
+                $mcv_opts['frameUrl'] = $_vurl . '&vapi=frame';
+            }
+        }
+        ?>
+        <?php if ($is_playable || $mcv_tc_auto): ?>
             <div class="video-wrapper">
                 <div class="video-container">
-                    <video id="videoPlayer" controls playsinline>
+                    <video id="videoPlayer" controls playsinline<?php echo $mcv_tc_auto ? ' preload="none"' : ''; ?>>
+                        <?php if ($is_playable): ?>
                         <source src="viewer.php?filetype=video&stream=1&file=<?php echo encode_url($getfile) . $bidx_param; ?>" type="<?php echo h(mime_type($base_file)); ?>">
+                        <?php endif; ?>
                         <?php echo __h("viewer_browser_no_video"); ?>
                     </video>
                 </div>
+                <script src="js/mc-video.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-video.js'); ?>"></script>
+                <script>
+                // ★ (2026-10-31) 동영상 플레이어 보강(±5초·속도·반복·A-B·자동 다음·재생 목록·이어보기·단축키)
+                (function () {
+                    var v = document.getElementById('videoPlayer');
+                    if (!v || !window.MCVideo) return;
+                    var o = <?php echo json_encode($mcv_opts, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}'; ?> || {};
+                    o.key = <?php echo js($current_bidx . '|' . $getfile); ?>;
+                    o.list = <?php echo json_encode($mc_vlist, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) ?: '[]'; ?>;   // ★ (2026-10-31) UTF-8 아닌 파일 이름(옛 리눅스·시놀로지)이 있어도 스크립트가 깨지지 않게
+                    o.t = window.MC_VIDEO_T;
+                    // ★ (2026-10-31) 자동 다음 재생으로 열린 페이지 — 주소의 autoplay 는 지움(새로 고침·즐겨찾기 때 다시 자동 재생하지 않게)
+                    if (o.autoplay) { try { history.replaceState(history.state, '', location.href.replace(/([?&])autoplay=1(&|$)/, function (m, a, b) { return b ? a : ''; })); } catch (e) {} }
+                    MCVideo.init(v, o);
+                })();
+                </script>
                 
                 <div class="video-info">
                     <div class="video-title">🎬 <?php echo h($title); ?></div>
@@ -3640,6 +4305,7 @@ if($type == "video"){
                     $ext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
                     $ffmpeg_configured = !empty($ffmpeg_path) && file_exists($ffmpeg_path);
                     ?>
+                    <?php if ($_viewer_is_admin): // ★ (2026-10-30) 변환 버튼은 관리자에게만 ?>
                     <button type="button" class="btn btn-<?php echo $ffmpeg_configured ? 'success' : 'secondary'; ?>" 
                             id="convertBtn" 
                             <?php if ($ffmpeg_configured): ?>
@@ -3659,6 +4325,7 @@ if($type == "video"){
                     </button>
                     <?php if (!$ffmpeg_configured): ?>
                     <small class="d-block text-warning mt-1"><?php echo __h("viewer_ffmpeg_notice"); ?></small>
+                    <?php endif; ?>
                     <?php endif; ?>
                 </div>
                 
@@ -3743,7 +4410,7 @@ if($type == "video"){
                 }, 1000);
                 
                 // 변환 요청
-                fetch('viewer.php?action=convert_to_mp4&file=' + file + '&bidx=<?php echo $current_bidx; ?>')
+                fetch('viewer.php?action=convert_to_mp4&file=' + file + '&bidx=<?php echo $current_bidx; ?>&token=<?php echo urlencode($_viewer_delete_token); ?>')
                     .then(function(res) { 
                         return res.text().then(function(text) {
                             try {
@@ -3832,6 +4499,7 @@ if($type == "video"){
                     $ext = strtolower(pathinfo($base_file, PATHINFO_EXTENSION));
                     $ffmpeg_configured = !empty($ffmpeg_path) && file_exists($ffmpeg_path);
                     ?>
+                    <?php if ($_viewer_is_admin): // ★ (2026-10-30) 변환 버튼은 관리자에게만 ?>
                     <button type="button" class="btn btn-<?php echo $ffmpeg_configured ? 'success' : 'secondary'; ?>" 
                             id="convertBtn" 
                             <?php if ($ffmpeg_configured): ?>
@@ -3851,6 +4519,7 @@ if($type == "video"){
                     </button>
                     <?php if (!$ffmpeg_configured): ?>
                     <small class="d-block text-warning mt-1"><?php echo __h("viewer_ffmpeg_notice"); ?></small>
+                    <?php endif; ?>
                     <?php endif; ?>
                 </div>
                 
@@ -3917,7 +4586,7 @@ if($type == "video"){
                 }, 2000);
                 
                 // 변환 요청
-                fetch('viewer.php?action=convert_to_mp4&file=' + file + '&bidx=<?php echo $current_bidx; ?>')
+                fetch('viewer.php?action=convert_to_mp4&file=' + file + '&bidx=<?php echo $current_bidx; ?>&token=<?php echo urlencode($_viewer_delete_token); ?>')
                     .then(function(res) { 
                         return res.text().then(function(text) {
                             try {
@@ -3968,7 +4637,7 @@ if($type == "video"){
     
     if ($zip->open($base_file) === TRUE) {
         for ($i = 0; $i < $zip->numFiles; $i++) {
-            $filename = $zip->getNameIndex($i);
+            $filename = mc_zip_name($zip, $i);
             if (is_video_file($filename)) {
                 $stat = $zip->statIndex($i);
                 $video_list[] = [
@@ -3997,7 +4666,7 @@ if($type == "video"){
         return $bytes . ' B';
     };
 ?>
-<div class="container-fluid m-0 p-3" style="margin-top: 50px !important;">
+<div class="container-fluid m-0 p-3" style="margin-top: <?php echo !empty($_mcvv_on) ? '0' : '50px'; /* ★ fix56 위 막대가 있으면 그 높이로 대신 */ ?> !important;">
     <div class="video-wrapper">
         <div class="video-unsupported" style="margin-top: 30px;">
             <h4 style="font-size: 1.5em;">📦 <?php echo __h("viewer_video_archive"); ?></h4>
@@ -4006,6 +4675,9 @@ if($type == "video"){
                 <?php echo __("viewer_archive_extract_hint"); ?>
             </p>
             
+            <?php if (empty($video_list) && archive_is_encrypted($base_file)): // ★ (2026-10-31) 헤더까지 암호인 압축은 목록이 비어 이 화면으로 옴 ?>
+            <div class="alert alert-warning mt-3 mc-noico" role="alert" style="text-align:left"><?php echo __h('viewer_archive_locked'); ?></div>
+            <?php endif; ?>
             <?php if (!empty($video_list)): ?>
             <div class="video-info mt-3">
                 <div class="video-title">📁 <?php echo h($title); ?></div>
@@ -4415,8 +5087,14 @@ function downloadFile(url) {
                 <button class="pdf-toolbar-btn" onclick="printPdf()" title="<?php echo __h('hwp_print'); ?>">
                     🖨️<span class="btn-text"> <?php echo __h("hwp_print"); ?></span>
                 </button>
+                <?php if ($_viewer_is_admin): /* ★ (2026-11-08 fix80, 펜닐 요청) 보고 있는 쪽을 이 폴더의 표지로(관리자) */ ?>
                 <div class="pdf-toolbar-divider"></div>
-                <button class="pdf-toolbar-btn" onclick="location.href='./index.php?dir=<?php echo encode_url($link_dir); ?>&page=<?php echo intval($page); ?>&bidx=<?php echo $current_bidx; ?>'" title="<?php echo __h('viewer_back_to_list'); ?>">
+                <button class="pdf-toolbar-btn" id="mcPdfCoverBtn" onclick="mcPdfCover(this)" title="<?php echo __h('pdf_cover_page'); ?>">
+                    🖼️<span class="btn-text"> <?php echo __h("pdf_cover_page_short"); ?></span>
+                </button>
+                <?php endif; ?>
+                <div class="pdf-toolbar-divider"></div>
+                <button class="pdf-toolbar-btn" onclick="var u=(window.mcBackUrl ? window.mcBackUrl(this.getAttribute('data-def')) : this.getAttribute('data-def')); if (window.mcBackGo) window.mcBackGo(u, 'push'); else location.href=u;" data-def="./index.php?dir=<?php echo h(encode_url($link_dir)); ?>&amp;page=<?php echo intval($page); ?>&amp;bidx=<?php echo (int)$current_bidx; ?>" title="<?php echo __h('viewer_back_to_list'); ?>">
                     📋<span class="btn-text"> <?php echo __h("back"); ?></span>
                 </button>
             </div>
@@ -4431,6 +5109,29 @@ function downloadFile(url) {
 let pdfDoc = null;
 let totalPages = 0;
 let current_page = 1;
+<?php if ($_viewer_is_admin): ?>
+// ★ (2026-11-08 fix80, 펜닐 요청) 지금 보고 있는 쪽을 높이 약 1000px JPEG 로 다시 그려 폴더 표지로(bookmark.php?mode=set_cover_img — 관리자·CSRF)
+function mcPdfCover(btn) {
+    if (!pdfDoc || !btn || btn.disabled) return;
+    // ★ (2026-11-08 fix81) 결과를 ✓/✕ 로도 보임 — 휴대폰은 글자(.btn-text)가 숨겨져 '설정됨'이 안 보였음. 끝나면 원래 모양(innerHTML) 그대로
+    var h0 = btn.innerHTML, t0 = btn.title;
+    var mark = function (m, t) { btn.textContent = m; if (t) { var sp = document.createElement('span'); sp.className = 'btn-text'; sp.textContent = ' ' + t; btn.appendChild(sp); } };
+    var show = function (t, ok) { mark(ok ? '✓' : '✕', t); btn.title = t; setTimeout(function () { btn.innerHTML = h0; btn.title = t0; btn.disabled = false; }, 2500); };
+    btn.disabled = true; mark('…', '');
+    pdfDoc.getPage(Math.max(1, Math.min(totalPages || 1, current_page || 1))).then(function (page) {
+        var v1 = page.getViewport({ scale: 1 }), sc = Math.max(0.2, Math.min(3, 1000 / (v1.height || 1000))), vp = page.getViewport({ scale: sc });
+        var c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+        var ctx = c.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, c.width, c.height);
+        return page.render({ canvasContext: ctx, viewport: vp }).promise.then(function () {
+            var fd = new FormData();
+            fd.append('mode', 'set_cover_img'); fd.append('file', <?php echo js((string)$getfile); ?>);
+            fd.append('csrf_token', <?php echo js((string)$_viewer_csrf); ?>); fd.append('image', c.toDataURL('image/jpeg', 0.88));
+            return fetch('bookmark.php?bidx=<?php echo (int)$current_bidx; ?>', { method: 'POST', body: fd, credentials: 'same-origin' })
+                .then(function (r) { return r.text().then(function (t) { show(r.ok ? t : String(t || '✕').slice(0, 40), r.ok); }); });
+        });
+    }).catch(function () { show('✕', false); });
+}
+<?php endif; ?>
 let currentScale = 1.5;
 const isMobile = window.innerWidth <= 768;
 
@@ -4439,7 +5140,7 @@ if (isMobile) {
     currentScale = 1.0;
 }
 
-const safeFile = <?php echo js($getfile); ?>;
+const safeFile = <?php echo js(encode_url($getfile)); ?>; // ★ (2026-10-30) 인코딩 — 이름에 & # % 가 있으면 파일 주소가 잘려 PDF 가 안 열렸음
 const pdfUrl = "viewer.php?filetype=pdf&file=" + safeFile + "&imgfile=pdf&bidx=<?php echo $current_bidx; ?>";
 
 // 사이드바 토글 (모바일 지원)
@@ -4509,12 +5210,37 @@ function zoomOut() {
 
 function updateZoom() {
     document.getElementById('pdf-zoom-level').textContent = Math.round(currentScale * 100) + '%';
+    // ★ (2026-11-04 07:45) 화면 근처 쪽만 다시 그리고, 나머지는 새 크기의 빈 그림판으로(전엔 전 쪽을 다시 그림)
     for (let i = 1; i <= totalPages; i++) {
         const canvas = document.getElementById('page_' + i);
-        if (canvas) {
-            renderPage(i, canvas, currentScale);
-        }
+        if (!canvas) continue;
+        if (_mcPdfNear.has(i)) renderPage(i, canvas, currentScale);
+        else mcPdfBlank(i);
     }
+}
+
+// ★ (2026-11-04 07:45) PDF 화면 근처 쪽만 그림(펜닐) — 전엔 열자마자 모든 쪽 본문·썸네일을 그려 200쪽 휴대폰에서 그림판 400개·약 416MB
+//   · 쪽 크기는 먼저 모두 정해 둠(빈 그림판 — 스크롤 길이·쪽 위치·이어 보기 복원은 그대로)
+//   · 보이는 곳 위아래 1.5화면 안의 쪽만 그리고, 멀어지면 빈 그림판으로 바꿔 메모리를 놓음(다시 오면 다시 그림)
+//   · 썸네일도 썸네일 칸에서 보이는 근처만
+var _mcPdfBase = {};       // 쪽 번호 → 배율 1 크기 {w, h}
+var _mcPdfNear = new Set(); // 지금 화면 근처 쪽
+var _mcThumbNear = new Set();
+function mcPdfSize(i, scale) { var b = _mcPdfBase[i]; return b ? { w: Math.floor(b.w * scale), h: Math.floor(b.h * scale) } : null; }
+function mcPdfSwap(old, w, h) { // 그린 적 없는 새 그림판으로 바꿈(옛 그림판 메모리는 놓아짐)
+    if (old._mcTask) { try { old._mcTask.cancel(); } catch (e) {} old._mcTask = null; }
+    var c = document.createElement('canvas');
+    c.id = old.id; c.className = old.className;
+    if (w && h) { c.width = w; c.height = h; c.dataset.sz = '1'; }
+    if (old.parentNode) old.parentNode.replaceChild(c, old);
+    return c;
+}
+function mcPdfBlank(i) {
+    var old = document.getElementById('page_' + i);
+    if (!old) return null;
+    var s = mcPdfSize(i, currentScale);
+    if (!old.dataset.drawn && s && old.width === s.w && old.height === s.h) return old; // 이미 빈 그림판이고 크기도 맞음
+    return mcPdfSwap(old, s ? s.w : 0, s ? s.h : 0);
 }
 
 // 페이지 이동
@@ -4560,94 +5286,217 @@ function updateCurrentPage() {
     }
 }
 
-// 썸네일 렌더링
+// 썸네일 렌더링 — ★ (2026-11-04 07:45) 칸(item)은 순서대로 바로 만들고(전엔 그리기가 끝나는 순서로 붙어 순서가 뒤섞일 수 있었음), 그림은 보일 때만
 function renderThumbnail(pageNum) {
-    pdfDoc.getPage(pageNum).then(function(page) {
-        const thumbScale = 0.3;
-        const viewport = page.getViewport({ scale: thumbScale });
-        
-        const item = document.createElement('div');
-        item.className = 'pdf-thumbnail-item' + (pageNum === 1 ? ' active' : '');
-        item.onclick = function() { goToPage(pageNum); };
-        
-        const canvas = document.createElement('canvas');
-        canvas.className = 'pdf-thumb-canvas';
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        
-        const ctx = canvas.getContext('2d');
-        page.render({ canvasContext: ctx, viewport: viewport });
-        
-        const number = document.createElement('div');
-        number.className = 'pdf-thumb-number';
-        number.textContent = pageNum;
-        
-        item.appendChild(canvas);
-        item.appendChild(number);
-        document.getElementById('pdf-thumbnail-container').appendChild(item);
-    });
+    const item = document.createElement('div');
+    item.className = 'pdf-thumbnail-item' + (pageNum === 1 ? ' active' : '');
+    item.dataset.pg = pageNum;
+    item.onclick = function() { goToPage(pageNum); };
+    
+    const canvas = document.createElement('canvas');
+    canvas.className = 'pdf-thumb-canvas';
+    canvas.id = 'thumb_' + pageNum;
+    canvas.width = 120; canvas.height = 160; // 크기를 알기 전 자리
+    
+    const number = document.createElement('div');
+    number.className = 'pdf-thumb-number';
+    number.textContent = pageNum;
+    
+    item.appendChild(canvas);
+    item.appendChild(number);
+    document.getElementById('pdf-thumbnail-container').appendChild(item);
+    return item;
+}
+function mcThumbDraw(pageNum) {
+    var cv = document.getElementById('thumb_' + pageNum);
+    if (!cv || cv.dataset.drawn) return;
+    cv.dataset.drawn = '1';
+    pdfDoc.getPage(pageNum).then(function (page) {
+        if (!cv.isConnected || !_mcThumbNear.has(pageNum)) { delete cv.dataset.drawn; return; }
+        const viewport = page.getViewport({ scale: 0.3 });
+        cv.width = viewport.width;
+        cv.height = viewport.height;
+        const task = page.render({ canvasContext: cv.getContext('2d'), viewport: viewport });
+        cv._mcTask = task;
+        if (task && task.promise) task.promise.then(function () { if (cv._mcTask === task) cv._mcTask = null; }, function () { if (cv._mcTask === task) cv._mcTask = null; });
+    }).catch(function () { delete cv.dataset.drawn; });
+}
+function mcThumbBlank(pageNum) {
+    var cv = document.getElementById('thumb_' + pageNum);
+    if (!cv || !cv.dataset.drawn) return;
+    var s = mcPdfSize(pageNum, 0.3);
+    mcPdfSwap(cv, s ? s.w : cv.width, s ? s.h : cv.height);
 }
 
 // 페이지 렌더링
 function renderPage(pageNum, canvas, scale) {
+    canvas.dataset.drawn = String(scale); // ★ (2026-11-04 07:45) 그림 — 화면 근처를 벗어나면 mcPdfBlank 가 비움
     pdfDoc.getPage(pageNum).then(function(page) {
+        if (!canvas.isConnected) return; // 그사이 빈 그림판으로 바뀜(멀어짐)
         const viewport = page.getViewport({ scale: scale });
         const ctx = canvas.getContext('2d');
+        // ★ (2026-11-02 08:59) 확대·축소를 빨리 누르면 같은 그림판에 그리기가 겹쳐 오류·깨진 그림 — 앞의 그리기를 멈추고 새로
+        if (canvas._mcTask) { try { canvas._mcTask.cancel(); } catch (e) {} canvas._mcTask = null; }
         
         canvas.width = viewport.width;
         canvas.height = viewport.height;
+        canvas.dataset.sz = '1'; // ★ (2026-11-02 01:01) 크기 정해짐 — 이어 보기 복원이 앞쪽들 크기가 다 정해진 뒤 맞추게
         
-        page.render({ canvasContext: ctx, viewport: viewport });
+        const task = page.render({ canvasContext: ctx, viewport: viewport });
+        canvas._mcTask = task;
+        if (task && task.promise) task.promise.then(function () { if (canvas._mcTask === task) canvas._mcTask = null; }, function (e) { if (canvas._mcTask === task) canvas._mcTask = null; if (!e || e.name !== 'RenderingCancelledException') console.error('페이지 ' + pageNum + ' 렌더링 실패:', e); });
     }).catch(function(error) {
         console.error('페이지 ' + pageNum + ' 렌더링 실패:', error);
     });
 }
 
-// PDF 로드
-if (typeof window['pdfjs-dist/build/pdf'] === 'undefined') {
-    document.getElementById('pdf-pages-container').innerHTML = 
-        '<div class="alert alert-danger m-3">' + _vi18n.pdfjs_load_fail + '</div>';
-} else {
-    const pdfjsLib = window['pdfjs-dist/build/pdf'];
-    pdfjsLib.GlobalWorkerOptions.workerSrc = './js/pdf.worker.min.js';
-    
-    pdfjsLib.getDocument(pdfUrl).promise.then(function(doc) {
-        pdfDoc = doc;
-        totalPages = doc.numPages;
-        document.getElementById('pdf-total-pages').textContent = totalPages;
-        document.getElementById('pdf-page-input').max = totalPages;
-        
-        const container = document.getElementById('pdf-pages-container');
-        
-        // 각 페이지 렌더링
-        for (let i = 1; i <= totalPages; i++) {
-            // 썸네일 렌더링
-            renderThumbnail(i);
-            
-            // 메인 페이지 래퍼
-            const wrapper = document.createElement('div');
-            wrapper.className = 'pdf-page-wrapper';
-            wrapper.id = 'page_wrapper_' + i;
-            
-            const canvas = document.createElement('canvas');
-            canvas.id = 'page_' + i;
-            wrapper.appendChild(canvas);
-            container.appendChild(wrapper);
-            
-            renderPage(i, canvas, currentScale);
+// ★ (2026-11-02 01:01) PDF 지금 위치 — 보기 칸 맨 위 줄이 걸친 쪽(1부터)과 그 쪽 안 위치(천분율 0~999). 아직 쪽이 없으면 null
+//   (자동 저장·사생활 보호 복귀가 씀 / 쪽 사이 틈이면 다음 쪽 맨 위)
+window.mcPdfHere = function () {
+    try {
+        var c = document.getElementById('pdf-pages-container');
+        if (!c || !totalPages) return null;
+        var cTop = c.getBoundingClientRect().top;
+        for (var i = 1; i <= totalPages; i++) {
+            var w = document.getElementById('page_wrapper_' + i);
+            if (!w) break;
+            var r = w.getBoundingClientRect();
+            if (r.bottom > cTop + 1) {
+                var f = (r.height > 20 && r.top < cTop) ? Math.max(0, Math.min(999, Math.round((cTop - r.top) / r.height * 1000))) : 0;
+                return { page: i, f: f, n: totalPages }; // ★ (2026-11-02 20:10) n = 총 쪽수(서재 진행률용)
+            }
         }
-        
-        // 스크롤 이벤트
-        container.addEventListener('scroll', function() {
-            requestAnimationFrame(updateCurrentPage);
-        });
-        
-    }).catch(function(error) {
-        console.error('PDF 로드 실패:', error);
-        document.getElementById('pdf-pages-container').innerHTML = 
-            '<div class="alert alert-danger m-3">' + _vi18n.pdf_load_fail + '<br>' + _vi18n.pdf_error + ' ' + error.message + '</div>';
-    });
+        return { page: totalPages, f: 0, n: totalPages }; // ★ (2026-11-02 20:22) 여기도 총 쪽수
+    } catch (e) { return null; }
+};
+
+// ★ (2026-11-02 01:01) PDF 이어 보기 — 주소의 #pdf_N(fM) 쪽·줄로. 쪽 크기는 비동기로 정해져서(앞쪽들이 커지면 밀림)
+//   앞쪽들 크기가 다 정해질 때까지 기다렸다가 맞추고, 안정될 때까지 잠깐 다시 맞춤. 사용자가 스크롤하면 바로 멈춤(최대 15초)
+function mcPdfRestore() {
+    var m = (location.hash || '').match(/^#pdf_(\d{1,6})(?:f(\d{1,3}))?$/);
+    if (!m) return;
+    var pg = Math.max(1, Math.min(parseInt(m[1], 10) || 1, totalPages || 1));
+    var fr = m[2] ? Math.min(999, parseInt(m[2], 10)) : 0;
+    if (pg <= 1 && fr <= 0) return;
+    var c = document.getElementById('pdf-pages-container');
+    if (!c) return;
+    var t0 = Date.now(), stable = 0, stop = false;
+    function onUser() { if (Date.now() - t0 > 600) stop = true; }
+    c.addEventListener('wheel', onUser, { passive: true });
+    c.addEventListener('touchmove', onUser, { passive: true });
+    window.addEventListener('keydown', onUser, true);
+    function done() { clearInterval(tm); c.removeEventListener('wheel', onUser); c.removeEventListener('touchmove', onUser); window.removeEventListener('keydown', onUser, true); }
+    var tm = setInterval(function () {
+        if (stop || Date.now() - t0 > 15000) { done(); return; }
+        for (var i = 1; i <= pg; i++) { var cv = document.getElementById('page_' + i); if (!cv || cv.dataset.sz !== '1') return; } // 앞쪽들 크기 대기
+        var w = document.getElementById('page_wrapper_' + pg);
+        if (!w) { done(); return; }
+        var r = w.getBoundingClientRect(), d = Math.round(r.top + r.height * fr / 1000 - c.getBoundingClientRect().top);
+        if (Math.abs(d) > 1) { var b0 = c.scrollTop; c.scrollTop += d; if (c.scrollTop === b0) { if (++stable >= 3) done(); } else stable = 0; } // 끝이라 더 못 내려가면(막힘) 그대로 끝
+        else if (++stable >= 3) done();
+    }, 100);
 }
+
+// PDF 로드
+// ★ (2026-10-31) PDF.js 6.4.299 — 모듈(ESM)이라 import() 로 읽음(파일 이름은 .js 그대로: .mjs 는 Windows Apache 에 MIME 이 없을 수 있음)
+//   종전 2.6.347 은 악성 PDF 로 스크립트가 실행되는 취약점(CVE-2024-4367, 4.2.67 에서 고침)이 있었음
+//   한중일 글꼴 문자표(cmaps)·기본 글꼴·JPEG2000/JBIG2 그림 풀기(wasm)·색 프로필(iccs) 경로를 함께 넘김 — 글꼴을 안 품은 한글 PDF 도 글자가 보이게
+(function () {
+    var PDFJS_BASE = new URL('js/pdfjs/', document.baseURI).href, PDFJS_V = '6.4.299';
+    function showErr(html) { document.getElementById('pdf-pages-container').innerHTML = '<div class="alert alert-danger m-3">' + html + '</div>'; }
+    var load;
+    try { load = import(PDFJS_BASE + 'pdf.min.js?v=' + PDFJS_V); } catch (e) { load = Promise.reject(e); } // import() 를 모르는 아주 옛 브라우저
+    load.then(function (mod) {
+        var pdfjsLib = (mod && mod.getDocument) ? mod : (globalThis.pdfjsLib || mod);
+        if (!pdfjsLib || !pdfjsLib.getDocument) throw new Error('pdfjsLib not found');
+        pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_BASE + 'pdf.worker.min.js?v=' + PDFJS_V;
+        return pdfjsLib.getDocument({
+            url: new URL(pdfUrl, document.baseURI).href,
+            cMapUrl: PDFJS_BASE + 'cmaps/', cMapPacked: true,
+            standardFontDataUrl: PDFJS_BASE + 'standard_fonts/',
+            wasmUrl: PDFJS_BASE + 'wasm/',
+            iccUrl: PDFJS_BASE + 'iccs/',
+            enableXfa: false
+        }).promise.then(function (doc) {
+                pdfDoc = doc;
+                totalPages = doc.numPages;
+                document.getElementById('pdf-total-pages').textContent = totalPages;
+                document.getElementById('pdf-page-input').max = totalPages;
+        
+                const container = document.getElementById('pdf-pages-container');
+                const thumbBox = document.getElementById('pdf-thumbnail-container');
+        
+                // ★ (2026-11-04 07:45) 화면 근처만 그리기 — 위아래 1.5화면 안에 들어오면 그리고, 벗어나면 비움
+                const pageObs = ('IntersectionObserver' in window) ? new IntersectionObserver(function (ents) {
+                    ents.forEach(function (en) {
+                        const i = parseInt(en.target.dataset.pg, 10);
+                        const cv = document.getElementById('page_' + i);
+                        if (!cv) return;
+                        if (en.isIntersecting) {
+                            _mcPdfNear.add(i);
+                            if (cv.dataset.drawn !== String(currentScale)) renderPage(i, cv, currentScale);
+                        } else {
+                            _mcPdfNear.delete(i);
+                            if (cv.dataset.drawn) mcPdfBlank(i);
+                        }
+                    });
+                }, { root: container, rootMargin: '150% 0px' }) : null;
+                const thumbObs = ('IntersectionObserver' in window) ? new IntersectionObserver(function (ents) {
+                    ents.forEach(function (en) {
+                        const i = parseInt(en.target.dataset.pg, 10);
+                        if (en.isIntersecting) { _mcThumbNear.add(i); mcThumbDraw(i); }
+                        else { _mcThumbNear.delete(i); mcThumbBlank(i); }
+                    });
+                }, { root: thumbBox, rootMargin: '200% 0px' }) : null;
+        
+                // 각 페이지 자리 — 크기는 먼저 1쪽 크기로 두고, 쪽마다 실제 크기를 알면 바로 맞춤(그리지는 않음)
+                for (let i = 1; i <= totalPages; i++) {
+                    // 썸네일 칸
+                    const titem = renderThumbnail(i);
+            
+                    // 메인 페이지 래퍼
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'pdf-page-wrapper';
+                    wrapper.id = 'page_wrapper_' + i;
+                    wrapper.dataset.pg = i;
+            
+                    const canvas = document.createElement('canvas');
+                    canvas.id = 'page_' + i;
+                    wrapper.appendChild(canvas);
+                    container.appendChild(wrapper);
+            
+                    if (!pageObs) { _mcPdfNear.add(i); renderPage(i, canvas, currentScale); } // 아주 옛 브라우저는 예전처럼 전부
+                    if (!thumbObs) { _mcThumbNear.add(i); }
+                    pdfDoc.getPage(i).then(function (page) {
+                        const vp = page.getViewport({ scale: 1 });
+                        _mcPdfBase[i] = { w: vp.width, h: vp.height };
+                        const cv = document.getElementById('page_' + i);
+                        if (cv && !cv.dataset.drawn) { const s = mcPdfSize(i, currentScale); cv.width = s.w; cv.height = s.h; cv.dataset.sz = '1'; }
+                        const tv = document.getElementById('thumb_' + i);
+                        if (tv && !tv.dataset.drawn) { const s = mcPdfSize(i, 0.3); tv.width = s.w; tv.height = s.h; }
+                        if (pageObs) pageObs.observe(wrapper);
+                        if (thumbObs) thumbObs.observe(titem); else mcThumbDraw(i);
+                    }).catch(function () {
+                        if (pageObs) pageObs.observe(wrapper);
+                        if (thumbObs) thumbObs.observe(titem);
+                    });
+                }
+        
+                // 스크롤 이벤트
+                container.addEventListener('scroll', function() {
+                    requestAnimationFrame(updateCurrentPage);
+                });
+                mcPdfRestore(); // ★ (2026-11-02 01:01) 이어 보기·사생활 보호 복귀·책갈피 위치
+        
+        }, function (error) {
+            console.error('PDF 로드 실패:', error);
+            showErr(_vi18n.pdf_load_fail + '<br>' + _vi18n.pdf_error + ' ' + String((error && error.message) || error).replace(/[<>&"]/g, ''));
+        });
+    }).catch(function (e) {
+        console.error('PDF.js 로드 실패:', e);
+        showErr(_vi18n.pdfjs_load_fail);
+    });
+})();
 
 // 페이지 입력 처리
 document.getElementById('pdf-page-input').addEventListener('change', function() {
@@ -4740,7 +5589,7 @@ if($type != "pdf" && $type != "video"){
 								try {
 									$_h = new ArchiveHandler($base_file);
 									$_i = 0;
-									foreach ($_h->getImageFiles() as $name) { $list[$_i++] = $name; }
+									foreach ($_h->getImageFiles() as $name) { if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $name)) $list[$_i++] = $name; } // ★ (2026-10-30) 이미지 요청 쪽 목록과 같은 확장자
 								} catch (Exception $e) {}
 							}
 						} else {
@@ -4748,7 +5597,7 @@ if($type != "pdf" && $type != "video"){
 							$zip = new ZipArchive;
 							if ($zip->open($base_file) == TRUE) {
 								for ($i = 0; $i < $zip->numFiles; $i++) {
-									$name = $zip->getNameIndex($i);
+									$name = mc_zip_name($zip, $i);
 									if(preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $name)){
 										$list[$i] = $name;
 									}
@@ -4763,7 +5612,7 @@ if($type != "pdf" && $type != "video"){
 							if (is_array($cached_files) && !empty($cached_files)) {
 								$counter = 0;
 								foreach ($cached_files as $fname) {
-									if (is_string($fname)) {
+									if (is_string($fname) && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $fname) && !preg_match('#(^|[/\\\\])\.\.([/\\\\]|$)#', $fname)) { /* ★ (2026-11-09 14:14) '..' 조각이 든 이름은 건너뜀 — 손으로 만든 목록 파일로 폴더 밖·막힌 폴더 그림이 나왔음(앱은 폴더 맨 위 이름만 씀) */ /* ★ (2026-11-02 20:27) 그림 이름만 — 이 파일이 목록 대신 메타(totalpage·page_order·thumbnail…)로 덮여 있는 경우가 있어, 'toon'·'3' 같은 이름의 하위 폴더·파일이 쪽으로 잡힐 수 있었음 */
 										$full_path = realpath($base_file . DIRECTORY_SEPARATOR . $fname);
 										if ($full_path !== false) {
 											$list[$counter] = $full_path;
@@ -4778,7 +5627,7 @@ if($type != "pdf" && $type != "video"){
 							$counter = 0;
 							$iterator = new DirectoryIterator($base_file);
 							foreach ($iterator as $jpgfile) {
-								if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $jpgfile)) {
+								if (preg_match('/\.(jpg|jpeg|png|webp|gif)$/i', $jpgfile) && !mc_folder_nonpage((string)$jpgfile)) {
 									$list[$counter] = $base_file."/".$jpgfile;
 									$counter++;
 								}
@@ -4789,6 +5638,10 @@ if($type != "pdf" && $type != "video"){
 
 $total = count($list);
 $list = n_sort($list);
+// ★ (2026-10-31) 암호 걸린 압축이면 안내 — 전에는 빈 화면(헤더 암호)이나 안 보이는 쪽만 나왔음
+if ($type == "zip" && archive_is_encrypted($base_file)) {
+    echo "<div class='alert alert-warning mx-auto my-3 mc-noico' role='alert' style='max-width:640px;text-align:left;margin-top:90px !important'>" . __h('viewer_archive_locked') . "</div>";
+}
 
 $page_order = $pageorder['page_order'] ?? '0';
 
@@ -4807,7 +5660,16 @@ $safe_type = h($type);
 $safe_user_id = h($user_id);
 $safe_hash = h($hash);
 
+// ★ (2026-10-29) 세로분할(3/4): 분할 대상이 아닌 세로 페이지는 1장만 표시(같은 그림 좌/우 2번 중복 방지)
+//   판정 불가(null)·RAR/7Z는 기존처럼 좌/우 2장. JS 추가 로딩(appendImages)도 data-split-map으로 같은 판정 사용
+$_mc_split_map = [];
+if ($page_order === "3" || $page_order === "4") {
+    $_mc_split_map = mc_book_split_map($base_file, $type, mc_split_cache_dir($base_file, $user_id ?? ''));
+}
+$safe_split_map = h(json_encode(array_values($_mc_split_map)) ?: '[]');
+
 echo "<div class=\"text-center\" id=\"lightgallery\"
+       data-split-map=\"{$safe_split_map}\"
        data-total=\"{$total}\"
        data-file=\"{$safe_file}\"
        data-page-order=\"{$page_order}\"
@@ -4875,6 +5737,18 @@ if ($page_order === "0") {
 } elseif ($page_order === "3") {
     // ✅ 세로 분할 (좌→우): 각 이미지를 left, right 순서로 표시
     for ($i = 0; $i < $initial; $i++) {
+        if (($_mc_split_map[$i] ?? null) === 0) {
+            // 분할 대상 아님(세로 페이지) → 원본 1장 (기본 모드와 같은 마크업·id)
+            $img_src = h("viewer.php?file=" . encode_url($_GET['file'] ?? '') . "&bidx=" . $current_bidx . "&img={$i}");
+            echo "<div class='image-row d-flex justify-content-center'>";
+            echo "<div class='image-wrapper position-relative d-inline-block'>";
+            echo "<img class='lazyload img-fluid lg-item' id=\"image{$i}\" data-src=\"{$img_src}\" ";
+            echo "src=\"data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==\" height=\"250px\" />";
+            echo "<div class='img-overlay-page text-white small'>" . ($i + 1) . " / {$total}</div>";
+            echo "</div>";
+            echo "</div>";
+            continue;
+        }
         // Left half
         $img_srcL = h("viewer.php?file=" . encode_url($_GET['file'] ?? '') . "&bidx=" . $current_bidx . "&img={$i}&split=left");
         echo "<div class='image-row d-flex justify-content-center'>";
@@ -4898,6 +5772,18 @@ if ($page_order === "0") {
 } elseif ($page_order === "4") {
     // ✅ 세로 분할 (우→좌): 각 이미지를 right, left 순서로 표시 (일본 만화 스타일)
     for ($i = 0; $i < $initial; $i++) {
+        if (($_mc_split_map[$i] ?? null) === 0) {
+            // 분할 대상 아님(세로 페이지) → 원본 1장 (기본 모드와 같은 마크업·id)
+            $img_src = h("viewer.php?file=" . encode_url($_GET['file'] ?? '') . "&bidx=" . $current_bidx . "&img={$i}");
+            echo "<div class='image-row d-flex justify-content-center'>";
+            echo "<div class='image-wrapper position-relative d-inline-block'>";
+            echo "<img class='lazyload img-fluid lg-item' id=\"image{$i}\" data-src=\"{$img_src}\" ";
+            echo "src=\"data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==\" height=\"250px\" />";
+            echo "<div class='img-overlay-page text-white small'>" . ($i + 1) . " / {$total}</div>";
+            echo "</div>";
+            echo "</div>";
+            continue;
+        }
         // Right half first
         $img_srcR = h("viewer.php?file=" . encode_url($_GET['file'] ?? '') . "&bidx=" . $current_bidx . "&img={$i}&split=right");
         echo "<div class='image-row d-flex justify-content-center'>";
@@ -4989,7 +5875,7 @@ $('#lightgallery').on('onAfterSlide.lg',function(event){
 
 function save_bookmark() {
   	document.getElementById("info").value = _vi18n.saving;
-  	try{ sessionStorage.setItem('mycomix_marks_dirty','1'); }catch(e){}
+  	try{ sessionStorage.setItem('mycomix_marks_dirty','1'); }catch(e){} try{ sessionStorage.setItem('mc_lib_dirty','1'); sessionStorage.setItem('mc_lib_dirty_b','1'); }catch(e){} /* ★ (2026-11-02 01:43) 서재 화면 읽은 기록 바로 반영(series.php = mc_lib_dirty · ★ 03:04 browse.php = mc_lib_dirty_b — 따로 써서 한쪽이 먼저 지워도 다른 쪽이 갱신) */
 <?php
 if ($mode == "toon"){
 ?>
@@ -4998,11 +5884,15 @@ if ($mode == "toon"){
 bookmark = (function(){
 	var imgs = document.querySelectorAll("#lightgallery img[id^='image']");
 	var cur = "image0";
+	// ★ (2026-11-02 09:00) 위 막대 아래를 기준으로(자동 저장과 같은 기준) — 막대에 가려진 쪽 경계에서 한 쪽 앞을 저장하던 문제
+	var _bt = 0; try { var _bb = document.getElementById('mcvBar'); if (_bb) _bt = Math.max(0, _bb.getBoundingClientRect().bottom); } catch(e){}
+	var _rowT = null, _curN = -1; // ★ (2026-11-09 11:40) 펼침(1|2)은 같은 줄에서 앞 쪽 번호로 — 위 막대 쪽 표시(js/viewer-bar.js current())와 같게. 전엔 뒤 쪽이 저장돼 북모드 이어 보기에서 한 쪽 건너뜀
 	for (var k = 0; k < imgs.length; k++){
 		var r = imgs[k].getBoundingClientRect();
-		if (r.top <= 5) {
+		if (r.top <= _bt + 5) {
 			var mm = imgs[k].id.match(/image(\d+)/i);
-			if (mm) cur = "image" + mm[1];
+			if (mm && _rowT !== null && Math.abs(r.top - _rowT) < 1 && parseInt(mm[1], 10) > _curN) continue;
+			if (mm) { cur = "image" + mm[1]; _rowT = r.top; _curN = parseInt(mm[1], 10); }
 		} else {
 			break;
 		}
@@ -5042,7 +5932,7 @@ if($type == "pdf"){
 bookmark = "pdf_" + current_page;
 
 var pdfBookmarkUrl = <?php echo js("bookmark.php?viewer=pdf&page_order=pdf&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
-$.get(pdfBookmarkUrl + bookmark, function( data ) {
+$.get(pdfBookmarkUrl + bookmark + (typeof totalPages === 'number' && totalPages > 0 ? "&total=" + totalPages : ""), function( data ) { // ★ (2026-11-02 20:50) 총 쪽수도 — 없으면 서재 진행률이 다음 자동 저장 전까지 '모름'으로 덮였음
 document.getElementById("info").value = data;
 });
 <?php
@@ -5054,12 +5944,15 @@ document.getElementById("info").value = data;
 <?php
 if ($mode == "book"){
 ?>
-$("body").on('DOMSubtreeModified', "#lg-counter-current", function() {
-	var new_counter = document.getElementById("lg-counter-current").innerHTML - 1;
-	if (new_counter == 0 || new_counter == null){
-	} else {
-		img_counter = new_counter;
-	}
+// ★ (2026-10-29) 현재 위치 추적: DOMSubtreeModified(최신 Chrome에서 더 이상 발생 안 함 → 항상 image0 저장되던 문제)
+//   대신 lightGallery의 onAfterSlide 이벤트 사용. 슬라이드 번호가 아니라 "페이지 번호"로 기록
+//   (세로분할은 슬라이드가 페이지의 2배라 그대로 저장하면 이어보기 위치가 2배로 어긋났음)
+$('#lightgallery').on('onAfterSlide.lg', function(event, prevIndex, index) {
+	var idx = parseInt(index, 10);
+	if (isNaN(idx) || idx < 0) return;
+	var sp = window._mcBook && window._mcBook.slidePage;
+	img_counter = (sp && sp[idx] !== undefined) ? sp[idx] : idx;
+	if (sp && idx === sp.length - 1 && typeof window._mcBook.lastPage === 'number') img_counter = window._mcBook.lastPage; // ★ (2026-11-02 21:22) 마지막 슬라이드면 그 마지막 쪽
 });
 <?php
 }
@@ -5080,6 +5973,17 @@ function sendDims(){
 		if (navigator && navigator.sendBeacon) { navigator.sendBeacon(_durl, new Blob([_body], {type:'application/json'})); }
 	} catch(e){}
 }
+// ★ (2026-11-05 15:40) 위 막대에서 모드(툰↔북)·보기 방식을 바꿔 이 화면을 떠나는 중이면, 떠날 때 자동 저장도 '바꾼 값'으로(펜닐 제보 — 모드 기억 '책마다')
+//   전에는 바꾼 값을 저장한 직후 이 화면의 자동 저장(예전 모드·보기 방식)이 뒤따라 덮어써 다음에 열 때 예전 모드로 열렸음
+//   window.mcAsViewer('toon'·'book')·window.mcAsOrder('0'~'4')는 js/viewer-bar.js·아래 북모드 닫기가 이동 직전에만 정함(정해진 값만 씀)
+function mcAsUrl(u){
+	try{
+		var v = window.mcAsViewer, o = window.mcAsOrder;
+		if (v === 'toon' || v === 'book') u = u.replace(/([?&]viewer=)[^&]*/, '$1' + v);
+		if (typeof o === 'string' && /^[0-4]$/.test(o)) u = u.replace(/([?&]page_order=)[^&]*/, '$1' + o);
+	}catch(e){}
+	return u;
+}
 function sendAutosave(u){
 	// ✅ 페이지 이탈/숨김 시점 호출: sendBeacon으로 확실히 전송(비동기 $.get가 이탈로 취소되는 race 방지).
 	//    sendBeacon은 같은 출처라 세션 쿠키를 함께 보내고, bookmark.php의 autosave는 토큰 없이 세션만으로 허용됨.
@@ -5090,27 +5994,53 @@ function sendAutosave(u){
 	$.get(u, function(data){ try{ document.getElementById("info").value = data; }catch(e){} });
 }
 function autosave(){	
-	try{ sessionStorage.setItem('mycomix_marks_dirty','1'); }catch(e){}
-<?php if ($mode == "toon"){ ?>
+	try{ sessionStorage.setItem('mycomix_marks_dirty','1'); }catch(e){} try{ sessionStorage.setItem('mc_lib_dirty','1'); sessionStorage.setItem('mc_lib_dirty_b','1'); }catch(e){} /* ★ (2026-11-02 01:43) 서재 화면 읽은 기록 바로 반영(series.php = mc_lib_dirty · ★ 03:04 browse.php = mc_lib_dirty_b — 따로 써서 한쪽이 먼저 지워도 다른 쪽이 갱신) */
+<?php if ($type != "pdf" && $mode == "toon"){ // ★ (2026-10-30) PDF 는 아래 PDF 분기만 — 같은 함수 안 const bookmark 때문에 ReferenceError 로 자동저장·크기 저장이 늘 실패했음 ?>
 	// ✅ 점진 로딩(지연/무한스크롤) 대응: 고정 범위 루프 대신 현재 DOM에 존재하는 이미지만
 	//    스캔해 뷰포트 상단에 걸친 마지막 이미지를 현재 위치로 기록(없는 요소 .position() 크래시 방지)
+	var _frac = -1; // ★ (2026-11-02 01:01) 그 그림 안에서 얼마나 내려왔는지(천분율) — 이어 보기가 그림 맨 위가 아니라 보던 줄에서 열리게
 	bookmark = (function(){
 		var imgs = document.querySelectorAll("#lightgallery img[id^='image']");
 		var cur = "image0";
+		// ★ (2026-11-01 23:42) 위 막대(viewer_bar)가 있으면 그 아래를 화면 맨 위로 봄 — 막대 바로 아래 그림을 보고 있어도 앞 그림으로 저장돼 이어 보기가 한 쪽 앞에서 열렸음(막대 없으면 예전과 같음)
+		var _top0 = 0; try { var _bar = document.getElementById('mcvBar'); if (_bar) _top0 = Math.max(0, _bar.getBoundingClientRect().bottom); } catch(e){}
+		var _rowT = null, _curN = -1; // ★ (2026-11-09 11:40) 펼침(1|2)은 같은 줄에서 앞 쪽 번호로(위 책갈피 저장과 같은 이유)
 		for (var k = 0; k < imgs.length; k++){
 			var r = imgs[k].getBoundingClientRect();
-			if (r.top <= 5) {
+			if (r.top <= _top0 + 5) {
 				var mm = imgs[k].id.match(/image(\d+)/i);
-				if (mm) cur = "image" + mm[1];
+				if (mm && _rowT !== null && Math.abs(r.top - _rowT) < 1 && parseInt(mm[1], 10) > _curN) continue;
+				if (mm) {
+					cur = "image" + mm[1]; _rowT = r.top; _curN = parseInt(mm[1], 10);
+					// 다 불러온 그림만(자리표시 높이로 재면 엉뚱한 값) — 막대 아래 줄이 그림 안 어디인지
+					_frac = (imgs[k].classList.contains('loaded') && r.height > 20) ? Math.max(0, Math.min(999, Math.round((_top0 - r.top) / r.height * 1000))) : -1; // -1 = 모름(안 보냄)
+					if (/_(left|right)$/i.test(imgs[k].id)) _frac = -1; // ★ (2026-11-02 02:48) 세로 분할(좌·우 반쪽)은 어느 반쪽 기준인지 복원과 어긋날 수 있어 예전처럼 쪽 맨 위로
+				}
 			} else {
 				break;
 			}
 		}
+		// ★ (2026-11-02 20:21) 맨 아래까지 내려 마지막 쪽이 다 보이면 마지막 쪽으로 — 짧은 그림·펼침은 끝 화면에 여러 쪽이 보여
+		//   맨 위 쪽만 저장하면 끝까지 읽어도 서재에서 '다 읽음'이 안 됐음(js/viewer-bar.js 끝 판정과 같은 조건)
+		try {
+			var _se = document.scrollingElement || document.documentElement, _lb = document.getElementById('lightgallery');
+			var _tot = _lb ? (parseInt(_lb.getAttribute('data-total'), 10) || 0) : 0;
+			if (_tot > 0 && (window.innerHeight + (window.scrollY || _se.scrollTop)) >= _se.scrollHeight - 60) {
+				var _n = _tot - 1, _ids = ['image' + _n, 'image' + _n + '_left', 'image' + _n + '_right'], _seen = false, _ok = true;
+				for (var q = 0; q < _ids.length; q++) {
+					var _el = document.getElementById(_ids[q]); if (!_el) continue;
+					var _r = _el.getBoundingClientRect();
+					if (!_el.classList.contains('loaded') || _r.height <= 20 || _r.bottom > window.innerHeight + 60) { _ok = false; break; }
+					_seen = true;
+				}
+				if (_seen && _ok && cur !== 'image' + _n) { cur = 'image' + _n; _frac = -1; }
+			}
+		} catch(e){}
 		return cur;
 	})();
-	var autosaveUrl = <?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
-	sendAutosave(autosaveUrl + bookmark);
-<?php } elseif($mode == "book") { ?>
+	var autosaveUrl = mcAsUrl(<?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>); // ★ (2026-11-05 15:40) mcAsUrl — 위 설명
+	sendAutosave(autosaveUrl + bookmark + (_frac >= 0 ? "&f=" + _frac : ""));
+<?php } elseif($type != "pdf" && $mode == "book") { ?>
 	for (var i = 0; i <= <?php echo $image_counter; ?>; i++) {
 		var j = <?php echo $image_counter; ?> - i;
 		var scroll_top = $(this).scrollTop();
@@ -5126,27 +6056,31 @@ function autosave(){
 		bookmark = "image" + img_counter;
 		location.replace('#' + bookmark);
 	}
-	var autosaveUrl = <?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
+	var autosaveUrl = mcAsUrl(<?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>); // ★ (2026-11-05 15:40) mcAsUrl — 위 설명
 	sendAutosave(autosaveUrl + bookmark);
 <?php } ?>
 
 <?php if($type == "pdf") { ?>
-	let visiblePage = 1;
-	const canvases = document.querySelectorAll("canvas[id^='page_']");
-	const scrollY = window.scrollY;
-
-	for (let i = 0; i < canvases.length; i++) {
-		const top = canvases[i].offsetTop;
-		const height = canvases[i].offsetHeight;
-		if (scrollY >= top - height / 2) {
-			visiblePage = i + 1;
-		}
-	}
-
-	const bookmark = "pdf_" + visiblePage;
-
+	// ★ (2026-11-02 01:01) PDF 는 창이 아니라 #pdf-pages-container 안에서 스크롤 — 예전엔 window.scrollY(늘 0)로 재서 늘 1쪽,
+	//   게다가 bookmark.php 가 'pdf_N' 을 'image0' 으로 바꿔 저장해 PDF 이어 보기가 늘 처음이었음.
+	//   → 보기 칸 맨 위 줄이 걸친 쪽 + 그 쪽 안 위치(천분율)를 저장(window.mcPdfHere — 아래 PDF 스크립트)
+	if (typeof window.mcPdfHere !== 'function') return;
+	const _ph = window.mcPdfHere();
+	if (!_ph) return; // 아직 PDF 를 못 읽었으면 저장 안 함(예전 기록을 1쪽으로 덮지 않게)
 	var pdfAutosaveUrl = <?php echo js("bookmark.php?mode=autosave&viewer=pdf&page_order=pdf&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
-	sendAutosave(pdfAutosaveUrl + bookmark);
+	// ★ (2026-11-02 20:22) 보기 칸 맨 아래까지 내렸으면 마지막 쪽으로 — 휴대폰 세로처럼 끝 화면에 2쪽 넘게 보이면 맨 위 쪽만 저장돼 '다 읽음'이 안 됐음
+	//   (쪽 안 위치는 마지막 쪽 기준으로 다시 재서, 다시 열어도 같은 자리)
+	try {
+		var _pc = document.getElementById('pdf-pages-container'), _lw = _ph.n ? document.getElementById('page_wrapper_' + _ph.n) : null;
+		if (_pc && _lw && _ph.page < _ph.n && _pc.scrollTop + _pc.clientHeight >= _pc.scrollHeight - 2) {
+			var _lr = _lw.getBoundingClientRect(), _ct = _pc.getBoundingClientRect().top;
+			if (_lr.height > 20 && _lr.bottom <= _pc.getBoundingClientRect().bottom + 2) {
+				_ph.page = _ph.n;
+				_ph.f = (_lr.top < _ct) ? Math.max(0, Math.min(999, Math.round((_ct - _lr.top) / _lr.height * 1000))) : 0;
+			}
+		}
+	} catch(e){}
+	sendAutosave(pdfAutosaveUrl + "pdf_" + _ph.page + "&f=" + _ph.f + (_ph.n ? "&total=" + _ph.n : "")); // ★ (2026-11-02 20:10) 총 쪽수도 — PDF 는 쪽수 캐시가 없어 서재 진행률이 늘 1%·다 읽음이 안 됐음
 <?php } ?>
 }
 
@@ -5154,7 +6088,7 @@ function autosave(){
 //    뷰어 URL 자체는 바꾸지 않고, privacy_shield가 blank 복귀 URL에 이 위치만 실어 보내도록 제공.
 window.myComixCurrentHash = function(){
 	try {
-<?php if ($mode == "toon"){ ?>
+<?php if ($type != "pdf" && $mode == "toon"){ // ★ (2026-11-02 01:01) PDF 는 아래 분기(PDF 도 주소가 mode=toon 이라 예전엔 여기로 와서 늘 빈 값) ?>
 		var imgs = document.querySelectorAll("#lightgallery img[id^='image']");
 		var cur = ""; var off = 0;
 		for (var k = 0; k < imgs.length; k++){
@@ -5167,6 +6101,11 @@ window.myComixCurrentHash = function(){
 		var _docH = Math.max(document.documentElement.scrollHeight || 0, document.body ? document.body.scrollHeight : 0);
 		var atBottom = (window.innerHeight + _sy) >= (_docH - 4);
 		return cur ? ("#" + cur + (off > 0 ? ("o" + off) : "") + (atBottom ? "e" : "")) : "";
+<?php } elseif ($type == "pdf") { // ★ (2026-11-02 01:01) PDF 도 사생활 보호 복귀 때 보던 쪽·줄로(예전엔 위치 없이 돌아와 1쪽) ?>
+		var _ph = (typeof window.mcPdfHere === 'function') ? window.mcPdfHere() : null;
+		return _ph ? ("#pdf_" + _ph.page + (_ph.f > 0 ? ("f" + _ph.f) : "")) : "";
+<?php } elseif ($mode == "book") { // ★ (2026-11-02 09:58) 북모드도 지금 보는 쪽으로 복귀(전에는 처음 연 주소의 쪽으로 돌아갔음) ?>
+		return (typeof img_counter === 'number' && img_counter >= 0) ? ("#image" + img_counter) : ""; // 1쪽(0)도 그 쪽으로
 <?php } else { ?>
 		return "";
 <?php } ?>
@@ -5209,7 +6148,7 @@ window.addEventListener("visibilitychange", function(e) {
   };
 </script>
 
-<script src="./js/crypto-js.min.js"></script>
+<?php /* ★ (2026-11-08 전체 점검 fix71) crypto-js(4.2.0 미만 — CVE-2023-46233 해당 버전)는 불러오기만 하고 CryptoJS 를 어디서도 쓰지 않아(원본부터) 불러오지 않음 — 파일(js/crypto-js.min.js)은 그대로 둠 */ ?>
 <?php if ($type !== "pdf" && $type !== "video") { ?>
 <script>
 
@@ -5223,6 +6162,9 @@ document.addEventListener("DOMContentLoaded", function () {
   const total = parseInt(container.dataset.total);
   const file = container.dataset.file;
   const pageOrder = container.dataset.pageOrder || "0";
+  // ★ (2026-10-29) 세로분할 페이지별 판정(1=분할, 0=1장, null=판정불가→좌/우 2장). 파싱 실패 시 빈 배열(기존 동작)
+  let splitMap = [];
+  try { splitMap = JSON.parse(container.dataset.splitMap || "[]"); if (!Array.isArray(splitMap)) splitMap = []; } catch (e) { splitMap = []; }
   const bidx = <?php echo $current_bidx; ?>;
 
   let currentIndex = 0;
@@ -5247,6 +6189,9 @@ document.addEventListener("DOMContentLoaded", function () {
   const loadQueue = [];
   const loadingImages = new Map();
   const imageStatus = new Map();
+  // ★ (2026-11-02 09:59) 세로 분할(image3_left·image3_right)은 반쪽이 같은 쪽 번호라 '로딩 중'·대기열을 쪽 번호로만 보면 두 번째 반쪽이 버려져 3초 복구 루프로만 떴음
+  //   → 로딩 중·대기열 중복은 그림 요소(id)로 보고, 앞 쪽 순서 확인은 전처럼 쪽 번호로
+  const idStatus = new Map();
   let activeLoads = 0;
 
   function loadLazyImage(img, force) {
@@ -5254,14 +6199,14 @@ document.addEventListener("DOMContentLoaded", function () {
     
     const imgIndex = parseInt(img.id.replace("image", ""), 10);
     
-    if (imageStatus.get(imgIndex) === 'loading' || img.classList.contains('loaded')) {
+    if (idStatus.get(img.id) === 'loading' || img.classList.contains('loaded')) {
       return;
     }
 
     if (!force && imgIndex > 0) {
       const prevStatus = imageStatus.get(imgIndex - 1);
       if (prevStatus !== 'loaded' && prevStatus !== 'failed') {
-        if (!loadQueue.some(item => item.index === imgIndex)) {
+        if (!loadQueue.some(item => item.img === img)) {
           loadQueue.push({ img, index: imgIndex });
         }
         return;
@@ -5269,7 +6214,7 @@ document.addEventListener("DOMContentLoaded", function () {
     }
 
     if (activeLoads >= MAX_CONCURRENT) {
-      if (!loadQueue.some(item => item.index === imgIndex)) {
+      if (!loadQueue.some(item => item.img === img)) {
         loadQueue.push({ img, index: imgIndex });
       }
       return;
@@ -5279,10 +6224,11 @@ document.addEventListener("DOMContentLoaded", function () {
   }
 
   function startImageLoad(img, imgIndex, retryCount = 0) {
-    if (imageStatus.get(imgIndex) === 'loading') return;
+    if (idStatus.get(img.id) === 'loading') return;
     
     activeLoads++;
-    imageStatus.set(imgIndex, 'loading');
+    idStatus.set(img.id, 'loading');
+    if (imageStatus.get(imgIndex) !== 'loaded') imageStatus.set(imgIndex, 'loading'); // 다른 반쪽이 이미 떴으면 그대로(다음 쪽을 막지 않게)
     
     console.log(`🖼️ image${imgIndex} 로딩 (재시도:${retryCount})`);
 
@@ -5303,6 +6249,7 @@ document.addEventListener("DOMContentLoaded", function () {
       img.classList.add('loaded');
       img.classList.remove('lazyload');
       imageStatus.set(imgIndex, 'loaded');
+      idStatus.set(img.id, 'loaded');
       // ✅ [B단계1] 로드된 실제 이미지 크기 캡처(높이 예약용). 추가비용 거의 0, 실패 무시.
       //    단일모드(pageOrder 0)의 깨끗한 인덱스(^image\d+$)만 저장 → 세로분할 반쪽크롭이 캐시를 오염시키는 것 방지.
       try {
@@ -5335,14 +6282,16 @@ document.addEventListener("DOMContentLoaded", function () {
 
     if (retryCount < 3) {
       console.log(`🔄 image${imgIndex} 재시도 ${retryCount + 1}/3`);
-      imageStatus.delete(imgIndex);
+      if (imageStatus.get(imgIndex) !== 'loaded') imageStatus.delete(imgIndex);
+      idStatus.delete(img.id);
       
       setTimeout(() => {
         startImageLoad(img, imgIndex, retryCount + 1);
       }, 1000 * (retryCount + 1));
     } else {
       img.classList.add('load-failed');
-      imageStatus.set(imgIndex, 'failed');
+      if (imageStatus.get(imgIndex) !== 'loaded') imageStatus.set(imgIndex, 'failed');
+      idStatus.set(img.id, 'failed');
       console.error(`💀 image${imgIndex} 최종 실패`);
       
       processQueue();
@@ -5352,13 +6301,15 @@ document.addEventListener("DOMContentLoaded", function () {
 
   function triggerNextImage(currentImgIndex) {
     const nextIndex = currentImgIndex + 1;
-    const nextImg = document.getElementById(`image${nextIndex}`);
-    
-    if (nextImg && !nextImg.classList.contains('loaded')) {
-      setTimeout(() => {
-        loadLazyImage(nextImg);
-      }, 100);
-    }
+    // ★ (2026-11-02 09:59) 세로 분할이면 같은 쪽의 다른 반쪽·다음 쪽 반쪽들도(전에는 image{n+1} 만 찾아 분할 모드에서는 아무것도 안 했음)
+    [`image${nextIndex}`, `image${currentImgIndex}_left`, `image${currentImgIndex}_right`, `image${nextIndex}_left`, `image${nextIndex}_right`].forEach(function (id) {
+      const nextImg = document.getElementById(id);
+      if (nextImg && !nextImg.classList.contains('loaded')) {
+        setTimeout(() => {
+          loadLazyImage(nextImg);
+        }, 100);
+      }
+    });
   }
 
   function processQueue() {
@@ -5480,6 +6431,15 @@ document.addEventListener("DOMContentLoaded", function () {
     } else if (pageOrder === "3") {
       // ✅ 세로 분할 (좌→우): 각 이미지를 left, right 순서로 표시
       for (let i = 0; i < batchSize && currentIndex < total; i++) {
+        if (splitMap[currentIndex] === 0) {
+          // ★ (2026-10-29) 분할 대상 아님(세로 페이지) → 원본 1장
+          const rowOne = document.createElement("div");
+          rowOne.className = "image-row d-flex justify-content-center";
+          rowOne.appendChild(createImageElement(currentIndex));
+          fragment.appendChild(rowOne);
+          currentIndex++;
+          continue;
+        }
         // Left half
         const rowLeft = document.createElement("div");
         rowLeft.className = "image-row d-flex justify-content-center";
@@ -5497,6 +6457,15 @@ document.addEventListener("DOMContentLoaded", function () {
     } else if (pageOrder === "4") {
       // ✅ 세로 분할 (우→좌): 각 이미지를 right, left 순서로 표시 (일본 만화 스타일)
       for (let i = 0; i < batchSize && currentIndex < total; i++) {
+        if (splitMap[currentIndex] === 0) {
+          // ★ (2026-10-29) 분할 대상 아님(세로 페이지) → 원본 1장
+          const rowOne = document.createElement("div");
+          rowOne.className = "image-row d-flex justify-content-center";
+          rowOne.appendChild(createImageElement(currentIndex));
+          fragment.appendChild(rowOne);
+          currentIndex++;
+          continue;
+        }
         // Right half first
         const rowRight = document.createElement("div");
         rowRight.className = "image-row d-flex justify-content-center";
@@ -5513,12 +6482,14 @@ document.addEventListener("DOMContentLoaded", function () {
       }
     }
 
+    // ★ (2026-11-02 14:27) 붙이기 전에 잡아 둠 — 붙인 뒤 fragment 는 비어서 새 그림이 지연 로딩·무한 스크롤 감시에 안 걸렸음
+    const newImgs = fragment.querySelectorAll("img.lazyload");
+    const lastImg = newImgs.length ? newImgs[newImgs.length - 1] : null;
     container.appendChild(fragment);
-    fragment.querySelectorAll("img.lazyload").forEach(observeLazyImage);
+    newImgs.forEach(observeLazyImage);
 
     loading = false;
 
-    const lastImg = fragment.querySelector("img:last-child");
     if (lastImg && scrollTriggerObserver) {
       scrollTriggerObserver.observe(lastImg);
     }
@@ -5566,7 +6537,7 @@ document.addEventListener("DOMContentLoaded", function () {
       const imgIndex = parseInt(img.id.replace("image", ""), 10);
       const status = imageStatus.get(imgIndex);
       
-      if (!img.classList.contains('loaded') && status !== 'loading') {
+      if (!img.classList.contains('loaded') && idStatus.get(img.id) !== 'loading' && (status !== 'loading' || !/_(left|right)$/.test(img.id))) { // ★ (2026-11-02 09:59) 반쪽은 요소별로
         const rect = img.getBoundingClientRect();
         const isVisible = rect.top < window.innerHeight + 600 && rect.bottom > -300;
         
@@ -5576,7 +6547,8 @@ document.addEventListener("DOMContentLoaded", function () {
           if (imgIndex === 0 || prevStatus === 'loaded' || prevStatus === 'failed') {
             console.log(`🔧 복구: image${imgIndex}`);
             img.classList.remove('load-failed');
-            imageStatus.delete(imgIndex);
+            if (imageStatus.get(imgIndex) !== 'loaded') imageStatus.delete(imgIndex);
+            idStatus.delete(img.id);
             loadLazyImage(img);
           }
         }
@@ -5671,15 +6643,17 @@ if (file) {
 
   (function restoreToonPosition(){
     try {
-      var m = (window.location.hash || '').match(/image(\d+)(?:o(\d+))?(e)?/i);
+      var m = (window.location.hash || '').match(/image(\d+)(?:o(\d+))?(?:f(\d{1,3}))?(e)?/i); // ★ (2026-11-02 01:01) f = 그림 안 위치(천분율, 이어 보기)
       // ✅ 이어보기 자동점프 비활성: URL 해시(#imageN)가 있을 때만 위치 복원한다(목록의 "눌러서 이어보기"·
       //    사생활 복귀·저장위치 버튼). 파일목록에서 그냥 열 때(해시 없음)는 localStorage 백업으로 자동
       //    점프하지 않고 처음부터 본다. 자동 저장(서버)과 자동저장 목록은 그대로 유지된다.
       if (!m) return;
       var targetIndex = parseInt(m[1], 10);
       var targetOffset = m[2] ? parseInt(m[2], 10) : 0;            // 이미지 내부 픽셀 오프셋(정밀 복원)
-      var atBottom = !!m[3];                                       // 저장 시 문서 맨 아래였음 → 바닥 고정 복원
-      if (targetIndex <= 0 && targetOffset <= 0 && !atBottom) return;  // 최상단이면 복원 불필요
+      var hasFrac = m[3] !== undefined && m[3] !== '';             // f0 = 그림 맨 위가 막대 바로 아래
+      var targetFrac = hasFrac ? Math.min(999, parseInt(m[3], 10)) : 0; // 그림 높이의 천분율 — 위 막대 아래 줄에 맞춤(자동 저장과 같은 기준)
+      var atBottom = !!m[4];                                       // 저장 시 문서 맨 아래였음 → 바닥 고정 복원
+      if (targetIndex <= 0 && targetOffset <= 0 && targetFrac <= 0 && !atBottom) return;  // 최상단이면 복원 불필요
       if (targetIndex < 0) targetIndex = 0;
       if (typeof total === 'number' && targetIndex >= total) targetIndex = total - 1;
 
@@ -5780,6 +6754,11 @@ if (file) {
         var _y0 = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
         el.scrollIntoView({ block: 'start' });                      // 대상 위치로 정렬(변동 대비 반복)
         if (targetOffset > 0) window.scrollBy(0, targetOffset);     // 이미지 내부 정밀 위치
+        else if (hasFrac) {                                         // 이어 보기: 그림 안 그 줄을 막대 아래에
+          var _bb0 = 0; try { var _bar0 = document.getElementById('mcvBar'); if (_bar0) _bb0 = Math.max(0, _bar0.getBoundingClientRect().bottom); } catch (e0) {}
+          var _eh = el.getBoundingClientRect().height;
+          if (el.classList.contains('loaded') && _eh > 20) window.scrollBy(0, Math.round(_eh * targetFrac / 1000) - _bb0);
+        }
         var _y1 = window.scrollY || window.pageYOffset || document.documentElement.scrollTop || 0;
 
         // 대상 로드 + 재정렬 이동이 거의 없음(±2px)이 2틱 연속 = 주변 레이아웃 안정 → 완료.
@@ -5792,6 +6771,34 @@ if (file) {
       }, 250);
     } catch (e) { /* 복원 실패는 무해: 최상단 유지 */ }
   })();
+
+  // ★ (2026-11-01) 위 막대 진행 줄을 누르면 그 쪽으로(js/viewer-bar.js) — 위 복원과 같은 방식: 아직 없는 쪽은 채우고, 주변 그림은 먼저 불러온 뒤,
+  //   위쪽 그림이 늦게 불러와져 밀려도 잠깐 다시 맞춤. 사용자가 스크롤하면 바로 멈춤
+  window.mcvToonJump = function (idx) {
+    try {
+      idx = Math.max(0, Math.min(parseInt(idx, 10) || 0, (typeof total === 'number' ? total : 1) - 1));
+      var find = function () { return document.getElementById('image' + idx) || document.getElementById('image' + idx + '_left') || document.getElementById('image' + idx + '_right'); };
+      var g = 0;
+      while (!find() && typeof appendImages === 'function' && currentIndex < total && g < 2000) { var b = currentIndex; appendImages(); if (currentIndex === b) break; g++; }
+      var el = find(); if (!el) return;
+      for (var d = -1; d <= 3; d++) {
+        var nb = document.getElementById('image' + (idx + d)) || document.getElementById('image' + (idx + d) + '_left');
+        if (nb && typeof loadLazyImage === 'function') loadLazyImage(nb, true);
+      }
+      var barEl = document.getElementById('mcvBar'), off = barEl ? barEl.getBoundingClientRect().bottom : 0;
+      var put = function () { var e2 = find(); if (!e2) return; window.scrollTo(0, (window.scrollY || window.pageYOffset || 0) + e2.getBoundingClientRect().top - off); };
+      put();
+      var stop = false, n = 0;
+      var halt = function () { stop = true; };
+      window.addEventListener('wheel', halt, { passive: true, once: true });
+      window.addEventListener('touchmove', halt, { passive: true, once: true });
+      // ★ (2026-11-02 20:25) 키·스크롤바(누름)로 움직여도 멈춤, 앞 타이머는 지움 — 3초 안에 Home·스크롤바·다시 누르기가 되돌려지거나 두 타이머가 서로 당겼음
+      window.addEventListener('keydown', halt, { once: true });
+      window.addEventListener('pointerdown', halt, { passive: true, once: true });
+      if (window._mcvJumpIv) clearInterval(window._mcvJumpIv);
+      var iv = window._mcvJumpIv = setInterval(function () { if (stop || ++n > 12) { clearInterval(iv); if (window._mcvJumpIv === iv) window._mcvJumpIv = 0; return; } put(); }, 250); // 3초 동안 다시 맞춤
+    } catch (e) {}
+  };
 });
 
 </script>
@@ -5816,6 +6823,7 @@ if (($auto_logout_settings['enabled'] ?? true) && $_is_target && !$_is_remember_
 window.SESSION_TIMEOUT = <?php echo $timeout; ?>;
 window.SESSION_REMAINING = <?php echo $remaining; ?>;
 </script>
+<?php echo mc_al_i18n_script(); ?>
 <script src="<?php echo $base_path; ?>/js/auto-logout.js?v=<?php echo @filemtime(__DIR__ . '/js/auto-logout.js') ?: '1'; ?>"></script>
 <?php endif; ?>
 
@@ -5835,8 +6843,10 @@ try {
         $_dims_raw = @file_get_contents(get_dims_file());
         if ($_dims_raw !== false) {
             $_dims_all = @json_decode($_dims_raw, true);
-            if (is_array($_dims_all) && isset($_dims_all[$getfile]) && is_array($_dims_all[$getfile]) && count($_dims_all[$getfile]) > 0) {
-                $_mc_dims = $_dims_all[$getfile];
+            $__dk = (int)$current_bidx . '|/' . ltrim((string)$getfile, '/'); // ★ (2026-11-06 01:05) 이 콘텐츠 폴더의 칸 먼저, 없으면 예전 칸(경로만)
+            if (is_array($_dims_all) && !isset($_dims_all[$__dk]) && isset($_dims_all[$getfile])) $__dk = $getfile;
+            if (is_array($_dims_all) && isset($_dims_all[$__dk]) && is_array($_dims_all[$__dk]) && count($_dims_all[$__dk]) > 0) {
+                $_mc_dims = $_dims_all[$__dk];
             }
         }
     }
@@ -5888,5 +6898,7 @@ window._mcDimsCache = <?php echo json_encode($_mc_dims); ?>;
 </script>
 <?php } ?>
 <?php require_once __DIR__ . '/privacy_shield.php'; ?>
+<?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
+<?php if (function_exists('mc_perf_script')) echo mc_perf_script('viewer'); // ★ (2026-11-03 14:10) 속도 기록(src/perf) ?>
 </body>
 </html>

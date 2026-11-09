@@ -12,6 +12,50 @@
  */
 
 class IPBlocker {
+    /**
+     * ★ (2026-10-30) JSON 저장 — 만들기에 실패하면(잘못된 UTF-8 아이디·브라우저 정보 등) 파일을 비우지 않음
+     *   (전에는 빈 파일로 덮어써, id=%FF 한 번으로 로그인 시도 기록이 0 으로 돌아가 시도 제한을 피할 수 있었음)
+     */
+    // ★ (2026-11-04 01:17) 차단 로그 잠금 읽기(LOCK_SH) / 잠금 안에서 고치기(LOCK_EX) — 기록하는 중에 읽으면 빈 내용으로 보여 지우기가 기록 전체를 날릴 수 있었음
+    private function mcReadLogLocked($file) {
+        $fp = @fopen($file, 'rb');
+        if (!$fp) return null;
+        @flock($fp, LOCK_SH);
+        $raw = stream_get_contents($fp);
+        @flock($fp, LOCK_UN);
+        fclose($fp);
+        if (!is_string($raw) || trim($raw) === '') return [];
+        $d = json_decode($raw, true);
+        return is_array($d) ? $d : null;
+    }
+    private function mcModifyLogLocked($file, callable $fn) {
+        $fp = @fopen($file, 'c+');
+        if (!$fp) return false;
+        if (!@flock($fp, LOCK_EX)) { fclose($fp); return false; }
+        $raw = stream_get_contents($fp);
+        $logs = [];
+        if (is_string($raw) && trim($raw) !== '') {
+            $logs = json_decode($raw, true);
+            if (!is_array($logs)) { @flock($fp, LOCK_UN); fclose($fp); error_log('[mycomix] ' . basename($file) . ' 이 깨져 기록하지 않음 — 관리자 보안 탭에서 전체 삭제하면 다시 쌓임'); return false; } // 깨진 파일은 덮어쓰지 않음 ★ (2026-11-04 01:50) 알림 한 줄
+        }
+        $logs = $fn(array_values($logs));
+        $json = json_encode(array_values($logs), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        $ok = false;
+        if ($json !== false) {
+            ftruncate($fp, 0);
+            rewind($fp);
+            $ok = fwrite($fp, $json) !== false;
+            fflush($fp);
+        }
+        @flock($fp, LOCK_UN);
+        fclose($fp);
+        return $ok;
+    }
+    private function mcWriteJson($file, $data, $flags = 0) {
+        $json = json_encode($data, $flags | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($json === false) return false;
+        return @file_put_contents($file, $json, LOCK_EX);
+    }
     private $settings;
     private $settingsFile;
     private $cacheDir;
@@ -558,7 +602,7 @@ class IPBlocker {
         $this->settings = array_merge($this->settings, $settings);
         $dir = dirname($this->settingsFile);
         if (!is_dir($dir)) mkdir($dir, 0755, true);
-        @file_put_contents($this->settingsFile, json_encode($this->settings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        $this->mcWriteJson($this->settingsFile, $this->settings, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
         return true;
     }
     
@@ -605,8 +649,47 @@ class IPBlocker {
     private function loadBruteforceAttempts() {
         $file = $this->getBruteforceFile();
         if (!file_exists($file)) return [];
-        $data = json_decode(file_get_contents($file), true);
+        // ★ (2026-11-02 08:49) 공유 잠금으로 읽음 — 쓰는 도중(비운 직후) 읽으면 빈 기록으로 보였음
+        $fp = @fopen($file, 'r');
+        if (!$fp) return [];
+        @flock($fp, LOCK_SH);
+        $raw = stream_get_contents($fp);
+        @flock($fp, LOCK_UN); fclose($fp);
+        $data = json_decode((string)$raw, true);
         return is_array($data) ? $data : [];
+    }
+
+    /**
+     * ★ (2026-11-02 08:49) 읽기→고치기→쓰기를 배타 잠금 하나 안에서 — 예전엔 따로 잠가서, 동시에 몰아 보내면(병렬 대입) 실패 횟수가
+     *   서로 덮어써져 거의 쌓이지 않아 잠금이 걸리지 않았음. $fn(&$attempts) 가 돌려준 값을 그대로 돌려줌.
+     *   저장할 때 오래된 기록(잠금 없이 시도 시간 창을 지난 IP)은 정리 — 파일이 끝없이 커지던 것
+     */
+    private function withBruteforceLock(callable $fn) {
+        $file = $this->getBruteforceFile();
+        $dir = dirname($file);
+        if (!is_dir($dir)) @mkdir($dir, 0755, true);
+        $fp = @fopen($file, 'c+');
+        if (!$fp) { $a = $this->loadBruteforceAttempts(); $r = $fn($a); $this->saveBruteforceAttempts($a); return $r; }
+        @flock($fp, LOCK_EX);
+        $raw = stream_get_contents($fp);
+        $attempts = json_decode((string)$raw, true);
+        if (!is_array($attempts)) $attempts = [];
+        $before = $attempts;
+        $result = $fn($attempts);
+        $now = time();
+        $win = max(60, (int)($this->settings['bruteforce_attempt_window'] ?? 300));
+        foreach ($attempts as $k => $rec) {
+            if (!is_array($rec)) { unset($attempts[$k]); continue; }
+            $lu = $rec['locked_until'] ?? null;
+            if ($lu !== null && ($lu == -1 || $lu > $now)) continue; // 잠금 중은 둠
+            if ((int)($rec['last_attempt'] ?? $rec['first_attempt'] ?? 0) < $now - $win) unset($attempts[$k]);
+        }
+        if ($attempts !== $before) {
+            $json = json_encode($attempts, JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+            if ($json !== false) { ftruncate($fp, 0); rewind($fp); fwrite($fp, $json); fflush($fp); }
+        }
+        @flock($fp, LOCK_UN); fclose($fp);
+        return $result;
     }
     
     /**
@@ -616,7 +699,7 @@ class IPBlocker {
         $file = $this->getBruteforceFile();
         $dir = dirname($file);
         if (!is_dir($dir)) mkdir($dir, 0755, true);
-        @file_put_contents($file, json_encode($attempts, JSON_PRETTY_PRINT), LOCK_EX);
+        $this->mcWriteJson($file, $attempts, JSON_PRETTY_PRINT);
     }
     
     /**
@@ -666,8 +749,9 @@ class IPBlocker {
         
         // 잠금 해제됨 - 기록 초기화 (무제한이 아닌 경우만)
         if (isset($record['locked_until']) && $record['locked_until'] > 0 && $record['locked_until'] <= $now) {
-            unset($attempts[$ip]);
-            $this->saveBruteforceAttempts($attempts);
+            $this->withBruteforceLock(function (&$a) use ($ip, $now) {
+                if (isset($a[$ip]['locked_until']) && $a[$ip]['locked_until'] > 0 && $a[$ip]['locked_until'] <= $now) unset($a[$ip]);
+            });
             return ['blocked' => false, 'remaining' => 0, 'attempts' => 0];
         }
         
@@ -688,7 +772,6 @@ class IPBlocker {
         }
         
         $ip = $ip ?: $this->getClientIP();
-        $attempts = $this->loadBruteforceAttempts();
         $now = time();
         
         // 화이트리스트 IP는 기록 안 함
@@ -699,71 +782,50 @@ class IPBlocker {
         $maxAttempts = $this->settings['bruteforce_max_attempts'] ?? 5;
         $attemptWindow = $this->settings['bruteforce_attempt_window'] ?? 300;
         $lockoutTime = $this->settings['bruteforce_lockout_time'] ?? 900;
+        $username = is_string($username) ? $username : '';
         
-        if (!isset($attempts[$ip])) {
-            $attempts[$ip] = [
-                'count' => 0,
-                'first_attempt' => $now,
-                'attempts' => []
-            ];
-        }
-        
-        $record = &$attempts[$ip];
-        
-        // 시도 기록 추가
-        $record['attempts'][] = [
-            'time' => $now,
-            'username' => $username
-        ];
-        
-        // 시간 윈도우 내 시도만 카운트
-        $record['attempts'] = array_filter($record['attempts'], function($a) use ($now, $attemptWindow) {
-            return ($now - $a['time']) <= $attemptWindow;
-        });
-        $record['attempts'] = array_values($record['attempts']); // 재인덱싱
-        $record['count'] = count($record['attempts']);
-        $record['last_attempt'] = $now;
-        
-        // 최대 시도 횟수 초과 시 잠금
-        if ($record['count'] >= $maxAttempts) {
-            // 무제한 잠금 (-1 또는 0)
-            if ($lockoutTime <= 0) {
-                $record['locked_until'] = -1; // 무제한 표시
-            } else {
-                $record['locked_until'] = $now + $lockoutTime;
+        // ★ (2026-11-02 08:49) 잠금 하나 안에서 셈(동시 요청에도 횟수가 빠지지 않게)
+        $res = $this->withBruteforceLock(function (&$attempts) use ($ip, $now, $username, $maxAttempts, $attemptWindow, $lockoutTime) {
+            if (!isset($attempts[$ip]) || !is_array($attempts[$ip])) {
+                $attempts[$ip] = ['count' => 0, 'first_attempt' => $now, 'attempts' => []];
             }
-            $this->saveBruteforceAttempts($attempts);
-            
-            // 로그 기록
-            $this->logBruteforce($ip, $username, $record['count']);
-            
-            return [
-                'blocked' => true,
-                'remaining' => $lockoutTime <= 0 ? -1 : $lockoutTime,
-                'attempts' => $record['count']
-            ];
-        }
-        
-        $this->saveBruteforceAttempts($attempts);
-        
-        return [
-            'blocked' => false,
-            'remaining' => 0,
-            'attempts' => $record['count']
-        ];
+            $record = &$attempts[$ip];
+            if (!isset($record['attempts']) || !is_array($record['attempts'])) $record['attempts'] = [];
+            // 시도 기록 추가
+            $record['attempts'][] = ['time' => $now, 'username' => $username];
+            // 시간 윈도우 내 시도만 카운트
+            $record['attempts'] = array_values(array_filter($record['attempts'], function($a) use ($now, $attemptWindow) {
+                return is_array($a) && ($now - (int)($a['time'] ?? 0)) <= $attemptWindow;
+            }));
+            $record['count'] = count($record['attempts']);
+            $record['last_attempt'] = $now;
+            if ($record['count'] >= $maxAttempts) {
+                $record['locked_until'] = ($lockoutTime <= 0) ? -1 : $now + $lockoutTime; // 무제한 잠금 (-1 또는 0)
+                return ['blocked' => true, 'remaining' => $lockoutTime <= 0 ? -1 : $lockoutTime, 'attempts' => $record['count']];
+            }
+            return ['blocked' => false, 'remaining' => 0, 'attempts' => $record['count']];
+        });
+        if (!empty($res['blocked'])) $this->logBruteforce($ip, $username, $res['attempts']); // 로그 기록
+        return $res;
     }
     
     /**
      * 로그인 성공 시 기록 초기화
      */
-    public function clearLoginAttempts($ip = null) {
+    public function clearLoginAttempts($ip = null, $username = null) {
         $ip = $ip ?: $this->getClientIP();
-        $attempts = $this->loadBruteforceAttempts();
-        
-        if (isset($attempts[$ip])) {
-            unset($attempts[$ip]);
-            $this->saveBruteforceAttempts($attempts);
-        }
+        // ★ (2026-11-02 08:49) 로그인에 성공한 그 아이디의 실패만 지움 — 예전엔 그 IP 의 기록을 통째로 지워서, 자기 계정으로 한 번 로그인하면
+        //   남의 계정에 틀린 횟수가 0 이 되어 무제한으로 맞혀 볼 수 있었음. 아이디를 안 넘기면(예전 호출) 예전처럼 통째로
+        $this->withBruteforceLock(function (&$attempts) use ($ip, $username) {
+            if (!isset($attempts[$ip])) return;
+            if ($username === null || !is_array($attempts[$ip]['attempts'] ?? null)) { unset($attempts[$ip]); return; }
+            if (!empty($attempts[$ip]['locked_until'])) return; // 잠긴 IP 는 그대로(잠금 중에는 성공할 수 없음)
+            $u = mb_strtolower((string)$username, 'UTF-8');
+            $left = array_values(array_filter($attempts[$ip]['attempts'], function ($a) use ($u) { return !is_array($a) || mb_strtolower((string)($a['username'] ?? ''), 'UTF-8') !== $u; }));
+            if (!$left) { unset($attempts[$ip]); return; }
+            $attempts[$ip]['attempts'] = $left;
+            $attempts[$ip]['count'] = count($left);
+        });
     }
     
     /**
@@ -773,26 +835,22 @@ class IPBlocker {
         if (!($this->settings['log_enabled'] ?? true)) return;
         
         $logFile = __DIR__ . '/src/bruteforce_log.json';
-        $logs = [];
-        
-        if (file_exists($logFile)) {
-            $logs = json_decode(file_get_contents($logFile), true) ?: [];
-        }
-        
-        // 최근 500개만 유지
-        if (count($logs) >= 500) {
-            $logs = array_slice($logs, -499);
-        }
-        
-        $logs[] = [
+        $entry = [
             'time' => date('Y-m-d H:i:s'),
             'ip' => $ip,
             'username' => $username,
             'attempts' => $attempts,
-            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? ''
+            'user_agent' => substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300)
         ];
-        
-        @file_put_contents($logFile, json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        // ★ (2026-11-04 01:17) 잠금 안에서 읽고-더하고-쓰기(차단 로그와 같게) — 동시 실패 때 기록이 빠지거나 통째로 덮일 수 있었음
+        $this->mcModifyLogLocked($logFile, function ($logs) use ($entry) {
+            // 최근 500개만 유지
+            if (count($logs) >= 500) {
+                $logs = array_slice($logs, -499);
+            }
+            $logs[] = $entry;
+            return $logs;
+        });
     }
     
     /**
@@ -810,7 +868,14 @@ class IPBlocker {
         $logFile = __DIR__ . '/src/bruteforce_log.json';
         if (!file_exists($logFile)) return ['logs' => [], 'total' => 0, 'pages' => 0];
         
-        $logs = json_decode(file_get_contents($logFile), true) ?: [];
+        $logs = $this->mcReadLogLocked($logFile) ?: []; // ★ (2026-11-04 01:17) 잠금 읽기
+        // ★ (2026-10-30) 각 로그에 저장 위치(_i)를 붙여 보냄 — 선택 삭제가 이 번호로 지움
+        //   (전에는 화면의 페이지 안 순번을 보내서 2페이지·날짜 필터에서 엉뚱한 로그가 지워졌음)
+        $logs = array_values(is_array($logs) ? $logs : []);
+        $__n = count($logs);
+        // 위치 대신 내용 지문(_i) — 새 로그가 쌓이거나 상한에서 오래된 것이 잘려도 같은 로그를 가리킴
+        foreach ($logs as $__k => &$__l) { if (is_array($__l)) $__l['_i'] = md5(json_encode($__l)); }
+        unset($__l);
         
         // 날짜 필터 적용
         if ($dateFrom || $dateTo) {
@@ -843,17 +908,15 @@ class IPBlocker {
         $logFile = __DIR__ . '/src/bruteforce_log.json';
         if (!file_exists($logFile)) return false;
         
-        $logs = json_decode(file_get_contents($logFile), true) ?: [];
-        $logs = array_reverse($logs); // 최신순으로
-        
-        // 인덱스 기준 삭제
-        foreach ($indices as $idx) {
-            unset($logs[$idx]);
-        }
-        
-        $logs = array_values(array_reverse($logs)); // 원래 순서로 복원
-        @file_put_contents($logFile, json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-        return true;
+        // 삭제 — ★ (2026-10-30) 화면이 보낸 내용 지문(_i)과 같은 로그만(번호로 지우면 새 로그가 쌓인 뒤 다른 로그가 지워졌음)
+        $__want = [];
+        foreach ((array)$indices as $idx) { if (is_string($idx) && preg_match('/^[a-f0-9]{32}$/', $idx)) $__want[$idx] = true; }
+        return $this->mcModifyLogLocked($logFile, function ($logs) use ($__want) { // ★ (2026-11-04 01:17) 잠금 안에서
+            foreach ($logs as $__k => $__l) {
+                if (is_array($__l) && isset($__want[md5(json_encode($__l))])) unset($logs[$__k]);
+            }
+            return array_values($logs);
+        });
     }
     
     /**
@@ -863,15 +926,13 @@ class IPBlocker {
         $logFile = __DIR__ . '/src/bruteforce_log.json';
         if (!file_exists($logFile)) return false;
         
-        $logs = json_decode(file_get_contents($logFile), true) ?: [];
-        $logs = array_filter($logs, function($log) use ($dateFrom, $dateTo) {
-            $logDate = substr($log['time'] ?? '', 0, 10);
-            if ($dateFrom && $logDate >= $dateFrom && (!$dateTo || $logDate <= $dateTo)) return false;
-            return true;
+        return $this->mcModifyLogLocked($logFile, function ($logs) use ($dateFrom, $dateTo) { // ★ (2026-11-04 01:17) 잠금 안에서
+            return array_values(array_filter($logs, function($log) use ($dateFrom, $dateTo) {
+                $logDate = substr((is_array($log) ? ($log['time'] ?? '') : ''), 0, 10);
+                if ($dateFrom && $logDate >= $dateFrom && (!$dateTo || $logDate <= $dateTo)) return false;
+                return true;
+            }));
         });
-        
-        @file_put_contents($logFile, json_encode(array_values($logs), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-        return true;
     }
     
     /**
@@ -948,6 +1009,12 @@ class IPBlocker {
     public function getClientIP() {
         // ✅ 프록시 헤더 신뢰 여부 확인
         $trust_proxy = $this->settings['trust_proxy_headers'] ?? true;
+        // ★ (2026-10-30) 프록시 헤더는 요청이 내부망·로컬(리버스 프록시 자리)에서 왔을 때만 믿음
+        //   — 직접 연결된 서버에서는 누구나 X-Forwarded-For 를 붙여 IP 를 바꿀 수 있어, 로그인 시도 제한·IP/국가 차단이 무력해졌음
+        $remote = (string)($_SERVER['REMOTE_ADDR'] ?? '');
+        if ($trust_proxy && filter_var($remote, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+            $trust_proxy = false; // 공인 IP 에서 바로 온 요청
+        }
         
         if ($trust_proxy) {
             // 프록시 환경: 헤더 순서대로 확인
@@ -962,9 +1029,15 @@ class IPBlocker {
             foreach ($headers as $header) {
                 if (!empty($_SERVER[$header])) {
                     $ip = $_SERVER[$header];
-                    // X-Forwarded-For는 쉼표로 구분된 IP 목록일 수 있음 (첫 번째가 실제 클라이언트)
+                    // X-Forwarded-For는 쉼표로 구분된 IP 목록일 수 있음
+                    // ★ (2026-11-08 fix83) 맨 앞 값은 접속자가 마음대로 써 넣을 수 있음(프록시는 뒤에 덧붙임) → 뒤에서부터 보며 내부망 프록시 주소를 건너뛴 첫 공인 IP 사용, 모두 내부망이면 예전처럼 맨 앞 값
                     if (strpos($ip, ',') !== false) {
-                        $ip = trim(explode(',', $ip)[0]);
+                        $parts = array_values(array_filter(array_map('trim', explode(',', $ip)), function ($p) { return filter_var($p, FILTER_VALIDATE_IP) !== false; }));
+                        $ip = '';
+                        for ($i = count($parts) - 1; $i >= 0; $i--) {
+                            if (filter_var($parts[$i], FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) { $ip = $parts[$i]; break; }
+                        }
+                        if ($ip === '' && $parts) $ip = $parts[0];
                     }
                     if (filter_var($ip, FILTER_VALIDATE_IP)) {
                         return $ip;
@@ -1015,8 +1088,13 @@ class IPBlocker {
             $country = $this->fetchCountryFromAPI($ip);
         }
         
+        // ★ (2026-11-02 11:39) 나라 코드 모양만(영문 2~12자) — 평문 HTTP 응답이 바뀌어도 화면에 HTML 이 들어가지 않게
+        if ($country && !preg_match('/^[A-Za-z][A-Za-z0-9]{1,11}$/', (string)$country)) $country = null; // A1·A2·O1 같은 특수 코드도
         if ($country) {
             $this->cacheCountry($ip, $country);
+        } else {
+            // ★ (2026-11-02 11:39) 못 찾은 것도 10분 기억 — 전에는 요청마다(썸네일 하나하나도) 외부 조회를 다시 해 한도(분당 45회)를 넘기고 느려졌음
+            $this->cacheCountry($ip, 'UNKNOWN', true);
         }
         
         return $country ?: 'UNKNOWN';
@@ -1040,7 +1118,8 @@ class IPBlocker {
         static $readerPath = null;
         
         if ($reader === null || $readerPath !== $mmdbPath) {
-            $readerFile = __DIR__ . '/src/MaxMindReader.php';
+            $readerFile = __DIR__ . '/MaxMindReader.php'; // ★ (2026-11-02 10:07) 실제 위치는 맨 위 폴더 — 전에는 src/ 에서 찾아 MMDB 를 골라도 늘 외부 조회로 넘어갔음
+            if (!file_exists($readerFile)) $readerFile = __DIR__ . '/src/MaxMindReader.php';
             if (!file_exists($readerFile)) {
                 return null;
             }
@@ -1272,7 +1351,8 @@ class IPBlocker {
         if (!$data) return null;
         
         $cacheHours = $this->settings['cache_hours'] ?? 24;
-        if (time() - ($data['time'] ?? 0) > $cacheHours * 3600) {
+        $__ttl = !empty($data['fail']) ? 600 : $cacheHours * 3600; // 실패 기억은 10분
+        if (time() - ($data['time'] ?? 0) > $__ttl) {
             @unlink($cacheFile);
             return null;
         }
@@ -1283,7 +1363,7 @@ class IPBlocker {
     /**
      * 국가 코드 캐시 저장
      */
-    private function cacheCountry($ip, $country) {
+    private function cacheCountry($ip, $country, $failed = false) {
         if (!is_dir($this->cacheDir)) {
             mkdir($this->cacheDir, 0755, true);
         }
@@ -1292,7 +1372,8 @@ class IPBlocker {
         @file_put_contents($cacheFile, json_encode([
             'ip' => $ip,
             'country' => $country,
-            'time' => time()
+            'time' => time(),
+            'fail' => $failed ? 1 : 0
         ]), LOCK_EX);
     }
     
@@ -1346,14 +1427,38 @@ class IPBlocker {
      */
     public function ipInRange($ip, $range) {
         if (strpos($range, '/') === false) {
-            return $ip === $range;
+            if ($ip === $range) return true;
+            // ★ (2026-11-08 전체 점검 4차 fix76) IPv6 는 같은 주소도 쓰는 법이 여럿(대소문자·앞자리 0·:: 줄임) — 글자가 달라도 같은 주소면 같다고 봄
+            if (strpos((string)$ip, ':') !== false && strpos((string)$range, ':') !== false) {
+                $a = @inet_pton((string)$ip); $c = @inet_pton(trim((string)$range));
+                return $a !== false && $c !== false && strlen($a) === 16 && $a === $c;
+            }
+            return false;
         }
         
-        list($subnet, $bits) = explode('/', $range);
+        list($subnet, $bits) = explode('/', $range, 2);
+        
+        // ★ (2026-11-08 전체 점검 4차 fix76) IPv6 대역(2001:db8::/32 등) — 전엔 늘 '아님'이라 차단·허용·화이트리스트에 넣어도 듣지 않았음(IPv4 는 아래 그대로)
+        if (strpos((string)$ip, ':') !== false && filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) {
+            $sub = trim($subnet);
+            if (!preg_match('/^\d{1,3}$/', trim($bits)) || (int)$bits > 128 || !filter_var($sub, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6)) return false;
+            $a = @inet_pton($ip); $c = @inet_pton($sub);
+            if ($a === false || $c === false || strlen($a) !== 16 || strlen($c) !== 16) return false;
+            $nb = (int)$bits; $full = intdiv($nb, 8); $rest = $nb % 8;
+            if ($full > 0 && substr($a, 0, $full) !== substr($c, 0, $full)) return false;
+            if ($rest > 0) {
+                $mask = (0xFF << (8 - $rest)) & 0xFF;
+                if ((ord($a[$full]) & $mask) !== (ord($c[$full]) & $mask)) return false;
+            }
+            return true;
+        }
         
         if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) {
+            // ★ (2026-10-30) 대역 값 검사 — '/33'·IPv6 대역('::/64')이 목록에 있으면 음수 시프트 ArithmeticError 로 모든 페이지가 500 이 됐음
+            if (!preg_match('/^\d{1,2}$/', trim($bits)) || (int)$bits > 32 || !filter_var(trim($subnet), FILTER_VALIDATE_IP, FILTER_FLAG_IPV4)) return false;
             $ip_long = ip2long($ip);
-            $subnet_long = ip2long($subnet);
+            $subnet_long = ip2long(trim($subnet));
+            if ((int)$bits === 0) return true;
             $mask = -1 << (32 - (int)$bits);
             return ($ip_long & $mask) === ($subnet_long & $mask);
         }
@@ -1473,10 +1578,15 @@ class IPBlocker {
      */
     private function logBlock($result) {
         $logFile = __DIR__ . '/src/ip_block_log.json';
+        // ★ (2026-11-04 00:47) 잠금(LOCK_EX) 안에서 읽고-더하고-쓰기 — 전엔 잠금 없이 읽어, 다른 요청이 쓰는 중이면 빈 내용으로 보고 기록 전체를 1건으로 덮어쓸 수 있었음
+        $fp = @fopen($logFile, 'c+');
+        if (!$fp) return;
+        if (!@flock($fp, LOCK_EX)) { fclose($fp); return; }
+        $raw = stream_get_contents($fp);
         $logs = [];
-        
-        if (file_exists($logFile)) {
-            $logs = json_decode(file_get_contents($logFile), true) ?: [];
+        if (is_string($raw) && trim($raw) !== '') {
+            $logs = json_decode($raw, true);
+            if (!is_array($logs)) { @flock($fp, LOCK_UN); fclose($fp); return; } // 깨진 파일은 덮어쓰지 않음
         }
         
         if (count($logs) >= 1000) {
@@ -1488,11 +1598,19 @@ class IPBlocker {
             'ip' => $result['ip'],
             'country' => $result['country'],
             'reason' => $result['reason'],
-            'uri' => $_SERVER['REQUEST_URI'] ?? '',
-            'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? ''
+            'uri' => substr((string)($_SERVER['REQUEST_URI'] ?? ''), 0, 500),
+            'user_agent' => substr((string)($_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 300)
         ];
         
-        @file_put_contents($logFile, json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+        $json = json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+        if ($json !== false) {
+            ftruncate($fp, 0);
+            rewind($fp);
+            fwrite($fp, $json);
+            fflush($fp);
+        }
+        @flock($fp, LOCK_UN);
+        fclose($fp);
     }
     
     /**
@@ -1510,7 +1628,14 @@ class IPBlocker {
         $logFile = __DIR__ . '/src/ip_block_log.json';
         if (!file_exists($logFile)) return ['logs' => [], 'total' => 0, 'pages' => 0];
         
-        $logs = json_decode(file_get_contents($logFile), true) ?: [];
+        $logs = $this->mcReadLogLocked($logFile) ?: []; // ★ (2026-11-04 01:17) 잠금 읽기
+        // ★ (2026-10-30) 각 로그에 저장 위치(_i)를 붙여 보냄 — 선택 삭제가 이 번호로 지움
+        //   (전에는 화면의 페이지 안 순번을 보내서 2페이지·날짜 필터에서 엉뚱한 로그가 지워졌음)
+        $logs = array_values(is_array($logs) ? $logs : []);
+        $__n = count($logs);
+        // 위치 대신 내용 지문(_i) — 새 로그가 쌓이거나 상한에서 오래된 것이 잘려도 같은 로그를 가리킴
+        foreach ($logs as $__k => &$__l) { if (is_array($__l)) $__l['_i'] = md5(json_encode($__l)); }
+        unset($__l);
         
         // 날짜 필터 적용
         if ($dateFrom || $dateTo) {
@@ -1543,17 +1668,15 @@ class IPBlocker {
         $logFile = __DIR__ . '/src/ip_block_log.json';
         if (!file_exists($logFile)) return false;
         
-        $logs = json_decode(file_get_contents($logFile), true) ?: [];
-        $logs = array_reverse($logs); // 최신순으로
-        
-        // 인덱스 기준 삭제
-        foreach ($indices as $idx) {
-            unset($logs[$idx]);
-        }
-        
-        $logs = array_values(array_reverse($logs)); // 원래 순서로 복원
-        @file_put_contents($logFile, json_encode($logs, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-        return true;
+        // 삭제 — ★ (2026-10-30) 화면이 보낸 내용 지문(_i)과 같은 로그만(번호로 지우면 새 로그가 쌓인 뒤 다른 로그가 지워졌음)
+        $__want = [];
+        foreach ((array)$indices as $idx) { if (is_string($idx) && preg_match('/^[a-f0-9]{32}$/', $idx)) $__want[$idx] = true; }
+        return $this->mcModifyLogLocked($logFile, function ($logs) use ($__want) { // ★ (2026-11-04 01:17) 잠금 안에서
+            foreach ($logs as $__k => $__l) {
+                if (is_array($__l) && isset($__want[md5(json_encode($__l))])) unset($logs[$__k]);
+            }
+            return array_values($logs);
+        });
     }
     
     /**
@@ -1563,15 +1686,13 @@ class IPBlocker {
         $logFile = __DIR__ . '/src/ip_block_log.json';
         if (!file_exists($logFile)) return false;
         
-        $logs = json_decode(file_get_contents($logFile), true) ?: [];
-        $logs = array_filter($logs, function($log) use ($dateFrom, $dateTo) {
-            $logDate = substr($log['time'] ?? '', 0, 10);
-            if ($dateFrom && $logDate >= $dateFrom && (!$dateTo || $logDate <= $dateTo)) return false;
-            return true;
+        return $this->mcModifyLogLocked($logFile, function ($logs) use ($dateFrom, $dateTo) { // ★ (2026-11-04 01:17) 잠금 안에서
+            return array_values(array_filter($logs, function($log) use ($dateFrom, $dateTo) {
+                $logDate = substr((is_array($log) ? ($log['time'] ?? '') : ''), 0, 10);
+                if ($dateFrom && $logDate >= $dateFrom && (!$dateTo || $logDate <= $dateTo)) return false;
+                return true;
+            }));
         });
-        
-        @file_put_contents($logFile, json_encode(array_values($logs), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
-        return true;
     }
     
     /**
@@ -1648,7 +1769,8 @@ class IPBlocker {
         
         http_response_code(429);
         header('Content-Type: text/html; charset=utf-8');
-        header('Retry-After: ' . $remaining);
+        // ★ (2026-10-30) 무기한 잠금(-1)이면 'Retry-After: -1'·'약 -0분' 대신 안내 문구
+        if ($remaining > 0) header('Retry-After: ' . (int)$remaining);
         
         echo '<!DOCTYPE html>
 <html lang="ko">
@@ -1674,7 +1796,7 @@ class IPBlocker {
         <h1>Too Many Login Attempts</h1>
         <p>' . __h('ip_brute_force') . '</p>
         <div class="timer">
-            ' . __('ip_try_again', $minutes) . '
+            ' . ($remaining > 0 ? __('ip_try_again', $minutes) : __('ip_try_again_admin')) . '
         </div>
     </div>
 </body>

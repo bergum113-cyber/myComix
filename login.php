@@ -25,10 +25,15 @@ require_once __DIR__ . '/bootstrap.php';
 // ✅ IP 차단 및 브루트포스 방지
 require_once __DIR__ . '/ip_block.php';
 $ipBlocker = new IPBlocker();
+// ★ (2026-11-02 09:07) 로그인·가입·찾기 입력은 문자열만(id[]=… 처럼 배열이 오면 trim 등에서 500)
+foreach (['mode', 'id', 'pass', 'pass_confirm', 'email', 'group', 'otp_code', 'agree_terms', 'remember_me', 'csrf_token'] as $_pk) {
+    if (isset($_POST[$_pk]) && !is_string($_POST[$_pk])) $_POST[$_pk] = '';
+}
 
 // 브루트포스 체크 (로그인 시도 전)
 $bruteforceCheck = $ipBlocker->checkBruteforce();
-if ($bruteforceCheck['blocked']) {
+// ★ (2026-11-09 14:10) 로그아웃·모든 기기 로그아웃·시간 초과(GET)는 잠금과 상관없이 처리 — 비밀번호를 받지 않는 요청인데, 같은 IP 가 잠기면(가족이 틀림 등) 로그아웃이 429 로 막혀 세션·로그인 유지 토큰이 남았음
+if ($bruteforceCheck['blocked'] && !(isset($_GET['mode']) && in_array($_GET['mode'], ['logout', 'logout_all', 'timeout'], true) && ($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'GET')) {
     $ipBlocker->showBruteForcePage($bruteforceCheck['remaining']);
 }
 
@@ -40,7 +45,7 @@ $bidx = init_bidx();
 //    안전한 리다이렉트 대상을 미리 계산. 오픈 리다이렉트 방지 위해 같은 호스트의
 //    경로+쿼리만 허용하고, 없거나 외부면 기본값(index.php)을 사용한다.
 $_ps_redirect = "index.php" . $bidx_query;
-if (!empty($_GET['return'])) {
+if (!empty($_GET['return']) && is_string($_GET['return'])) { // ★ (2026-11-02 09:06) 배열이면 parse_url 500
     $_ps_return = preg_replace('/[\r\n]/', '', $_GET['return']);
     $_ps_parts  = parse_url($_ps_return);
     $_ps_host   = $_SERVER['HTTP_HOST'] ?? '';
@@ -108,7 +113,8 @@ function render_find_links($find_id_enabled, $find_password_enabled, $registrati
 }
 
 function clearUserCache($user_id, $base = __DIR__ . "/cache") {
-    $safe_id = preg_replace('/[^a-zA-Z0-9_]/', '', $user_id);
+    $safe_id = preg_replace('/[^a-zA-Z0-9]/', '', $user_id); // ★ (2026-10-30) 실제 캐시 폴더와 같은 규칙(영문·숫자만)
+    if ($safe_id === '' || in_array(strtolower($safe_id), ['vframes', 'vprobe', 'vlock'], true)) return; // ★ (2026-11-02 14:26) 빈 이름이면 cache/ 자체·공용 캐시를 지우던 것
     $user_dir = $base . "/" . $safe_id;
     if (!is_dir($user_dir)) return;
     foreach (glob("$user_dir/*") as $zip_dir) {
@@ -125,7 +131,8 @@ function validatePassword($pass) { return strlen($pass) >= 8; }
 
 // ✅ 로그인 유지 토큰이 있으면 자동 로그인 후 index.php로 이동
 // (timeout으로 왔어도 토큰이 유효하면 자동 로그인)
-if (empty($_SESSION['user_id']) && isset($_COOKIE['remember_token'])) {
+// ★ (2026-11-09 11:37) 로그아웃·모든 기기 로그아웃 요청은 자동 로그인하지 않음 — 세션만 사라진 화면에서 로그아웃을 누르면 다시 로그인되고 토큰도 안 지워지던 것
+if (empty($_SESSION['user_id']) && isset($_COOKIE['remember_token']) && !(isset($_GET['mode']) && in_array($_GET['mode'], ['logout', 'logout_all'], true))) {
     $token = $_COOKIE['remember_token'];
     $user_id = verify_remember_token($token);
     
@@ -145,34 +152,31 @@ if (empty($_SESSION['user_id']) && isset($_COOKIE['remember_token'])) {
                 exit;
             }
             if ($user_status === 'suspended') {
-                // 정지 상태 - 정지 기간 체크
-                $suspend_end = $user['suspend_end'] ?? null;
-                if ($suspend_end) {
-                    $end_date = strtotime($suspend_end);
-                    if ($end_date && $end_date > time()) {
-                        // 아직 정지 기간
-                        delete_remember_token($token);
-                        setcookie('remember_token', '', time() - 3600, '/');
-                        $_SESSION['login_error'] = __('login_error_suspended', date('Y-m-d', $end_date));
-                        header("Location: login.php");
-                        exit;
-                    } else {
-                        // 정지 기간 만료 - 자동 해제
-                        $users[$user_id]['status'] = 'active';
-                        $users[$user_id]['suspend_reason'] = null;
-                        $users[$user_id]['suspend_start'] = null;
-                        $users[$user_id]['suspend_end'] = null;
-                        save_users($users);
-                        $user = $users[$user_id];
-                    }
+                // 정지 상태 - 정지 기간 체크 (★ 2026-10-30 mc_user_suspend_state 로 통일 — 무기한 정지도 막음)
+                $__sus = mc_user_suspend_state($user);
+                if ($__sus['blocked']) {
+                    delete_remember_token($token);
+                    setcookie('remember_token', '', time() - 3600, '/');
+                    $_SESSION['login_error'] = ($__sus['until'] !== '' ? __('login_error_suspended', $__sus['until']) : __('login_error_suspended_indef'));
+                    header("Location: login.php");
+                    exit;
+                } elseif ($__sus['expired']) {
+                    // 정지 기간 만료 - 자동 해제
+                    mc_user_clear_suspend($users[$user_id]);
+                    mc_users_modify(function (&$u) use ($user_id) { if (!isset($u[$user_id])) return false; mc_user_clear_suspend($u[$user_id]); return true; }); // ★ (2026-11-04 09:34) 잠금 안에서(그 사람 것만)
+                    $user = $users[$user_id];
                 }
             }
             
             // 자동 로그인 성공
-            $ipBlocker->clearLoginAttempts(); // 브루트포스 기록 초기화
+            $ipBlocker->clearLoginAttempts(null, $user_id); // 브루트포스 기록 초기화 — ★ (2026-11-02 08:49) 이 아이디 것만
+            session_regenerate_id(true); // ★ (2026-10-30) 세션 고정 방지(init.php 의 자동 로그인과 같게)
             $_SESSION['user_id'] = $user_id;
             $_SESSION['user_pass'] = '';
             $_SESSION['user_group'] = $user['group'] ?? 'group2';
+            // ★ (2026-11-04 00:47) 비밀번호 변경·'모든 기기 로그아웃' 기준값을 로그인할 때 바로 기억 — 전엔 첫 확인 때 그 시점 값으로 채워, 그 사이 바뀐 것을 놓치고 살아남았음
+            $_SESSION['mc_pw_seen'] = (string)($user['password_changed_at'] ?? '');
+            $_SESSION['mc_rev_seen'] = (string)($user['sessions_revoked_at'] ?? '');
             $_SESSION['last_action'] = time();
             $_SESSION['auto_login'] = true;
             $_SESSION['remember_me'] = true;
@@ -193,9 +197,34 @@ if (empty($_SESSION['user_id']) && isset($_COOKIE['remember_token'])) {
     }
 }
 
+// ★ (2026-11-02 21:35) 지금도 관리자인지 사용자 파일로 다시 확인 — login.php 는 init.php 의 주기 상태 확인을 건너뛰어,
+//   등급이 내려가거나 삭제·정지·대기가 된 관리자의 열린 세션으로 계정 만들기(관리자 포함)가 계속 됐음
+function mc_login_admin_now(): bool {
+    $uid = $_SESSION['user_id'] ?? '';
+    if (!is_string($uid) || $uid === '' || trim((string)($_SESSION['user_group'] ?? '')) !== 'admin') return false;
+    $us = function_exists('load_users') ? load_users() : [];
+    $me = $us[$uid] ?? null;
+    if (!is_array($me) || trim((string)($me['group'] ?? '')) !== 'admin') return false;
+    if ((string)($me['status'] ?? 'active') === 'pending') return false;
+    if (function_exists('mc_user_suspend_state') && mc_user_suspend_state($me)['blocked']) return false;
+    // ★ (2026-11-02 21:48) 비밀번호 변경·'모든 기기 로그아웃' 뒤 남은 세션도 거절(init.php 와 같은 기억값 비교)
+    if (isset($_SESSION['mc_pw_seen']) && (string)$_SESSION['mc_pw_seen'] !== (string)($me['password_changed_at'] ?? '')) return false;
+    if (isset($_SESSION['mc_rev_seen']) && (string)$_SESSION['mc_rev_seen'] !== (string)($me['sessions_revoked_at'] ?? '')) return false;
+    return true;
+}
+
 // POST: 사용자 생성
 if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
-    $id = trim($_POST['id'] ?? '');
+    // ★ (2026-10-30) 보안: 처음 설치(사용자 파일 없음)이거나, 로그인한 관리자 + CSRF 토큰일 때만 계정 생성
+    //   (전에는 로그인하지 않은 사람도 POST 로 관리자 계정을 만들거나 기존 계정 비밀번호를 덮어쓸 수 있었음)
+    $__mk_setup = !users_file_exists();
+    $__mk_admin = !$__mk_setup && mc_login_admin_now()
+        && verify_csrf_token($_POST['csrf_token'] ?? '');
+    if (!$__mk_setup && !$__mk_admin) {
+        header("Location: login.php");
+        exit;
+    }
+    $id = trim(is_string($_POST['id'] ?? '') ? ($_POST['id'] ?? '') : '');
     $pass = $_POST['pass'] ?? '';
     $email = trim($_POST['email'] ?? '');
     $group = $_POST['group'] ?? 'group2';
@@ -228,6 +257,12 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     
     // ✅ users.json 사용 (순수 JSON)
     $user_arr = load_users();
+    // ★ (2026-10-30) 관리자 화면의 "사용자 추가"는 새 계정만 — 이미 있는 아이디를 덮어쓰지 않음(비밀번호·2단계 인증 등이 초기화되던 문제)
+    if (!$__mk_setup && (isset($user_arr[$id]) || mc_user_id_unavailable($user_arr, $id))) { // ★ (2026-11-02 14:26) 대소문자만 다른 아이디·예약 이름도 거절
+        echo "<div style='padding:50px;text-align:center;'><div style='background:#f8d7da;color:#721c24;padding:20px;border-radius:10px;max-width:400px;margin:0 auto;'>" . __h('signup_error_id_exists') . "</div></div>";
+        echo "<meta http-equiv='refresh' content='3; url=login.php?mode=adduser'>";
+        exit;
+    }
     $user_arr[$id] = [
         'pass' => password_hash(hash("sha256", $pass), PASSWORD_DEFAULT), 
         'group' => $group,
@@ -295,8 +330,15 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     
     // 중복 확인
     $user_arr = load_users();
-    if (isset($user_arr[$id])) {
+    if (isset($user_arr[$id]) || mc_user_id_unavailable($user_arr, $id)) { // ★ (2026-11-02 14:26) 대소문자만 다른 아이디·예약 이름도 거절
         $_SESSION['signup_error'] = __('signup_error_id_exists');
+        header("Location: login.php?mode=signup");
+        exit;
+    }
+    
+    // ★ (2026-11-02 16:16) 관리자가 정한 가입 금지 아이디
+    if (mc_signup_id_blocked($id)) {
+        $_SESSION['signup_error'] = __('signup_error_id_reserved');
         header("Location: login.php?mode=signup");
         exit;
     }
@@ -321,14 +363,26 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     
     // 사용자 생성
     $require_approval = $reg_settings['require_approval'] ?? true;
-    $user_arr[$id] = [
+    $__new_user = [
         'pass' => password_hash(hash("sha256", $pass), PASSWORD_DEFAULT),
         'group' => 'group2',
         'email' => $email,
         'status' => $require_approval ? 'pending' : 'active',
         'created_at' => date('Y-m-d H:i:s')
     ];
-    save_users($user_arr);
+    // ★ (2026-11-04 09:33) 잠금 안에서 다시 확인하고 더함 — 동시에 가입하면 서로 덮어써 '가입 완료'인데 계정이 없었음
+    $__su = function_exists('mc_users_modify') ? mc_users_modify(function (&$ua) use ($id, $email, $__new_user) {
+        if (isset($ua[$id]) || mc_user_id_unavailable($ua, $id)) return 'dup_id';
+        if ($email !== '') foreach ($ua as $__u) { if (!empty($__u['email']) && strtolower((string)$__u['email']) === strtolower($email)) return 'dup_email'; }
+        $ua[$id] = $__new_user;
+        return 'ok';
+    }) : null;
+    if ($__su === null) $__su = (!is_file(get_users_file_path()) && !function_exists('mc_users_modify') && save_users($user_arr + [$id => $__new_user])) ? 'ok' : 'fail'; // 고치기 실패(깨진 파일 등)면 덮어쓰지 않음
+    if ($__su !== 'ok') {
+        $_SESSION['signup_error'] = $__su === 'dup_email' ? __('signup_error_email_exists') : ($__su === 'dup_id' ? __('signup_error_id_exists') : __('adm_blk_fail'));
+        header("Location: login.php?mode=signup");
+        exit;
+    }
     
     // 로그인 로그 기록
     if (function_exists('log_login_attempt')) {
@@ -344,6 +398,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     exit;
 
 } elseif (isset($_POST['mode']) && $_POST['mode'] === "login") {
+    // ★ (2026-11-02 11:39) 다른 사이트에서 보낸 로그인은 받지 않음(남의 계정으로 몰래 로그인시키는 것 방지 — 브라우저가 알려 주는 Sec-Fetch-Site)
+    if (($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'cross-site') { header("Location: login.php"); exit; }
     // ✅ users.json 사용 (순수 JSON)
     if (!users_file_exists()) { $_SESSION['login_error'] = __('login_error_no_user_file'); header("Location: login.php"); exit; }
     
@@ -361,6 +417,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     
     $hashed = hash("sha256", $pass);
     if (password_verify($hashed, $user_arr[$id]['pass'])) {
+        // ★ (2026-11-04 00:47) 맞힌 뒤 한 번 더 잠금 확인 — 동시 요청이면 맨 위 확인을 모두 지나 한도보다 많이 맞혀 볼 수 있었고, 이미 잠긴 뒤 맞힌 것도 통과했음
+        $__bf2 = $ipBlocker->checkBruteforce();
+        if ($__bf2['blocked']) {
+            $ipBlocker->showBruteForcePage($__bf2['remaining']);
+        }
         
         // ✅ 사용자 상태 체크 (정지/대기)
         $user_status = $user_arr[$id]['status'] ?? 'active';
@@ -370,21 +431,16 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
             exit;
         }
         if ($user_status === 'suspended') {
-            $suspend_end = $user_arr[$id]['suspend_end'] ?? null;
-            if ($suspend_end) {
-                $end_date = strtotime($suspend_end);
-                if ($end_date && $end_date > time()) {
-                    $_SESSION['login_error'] = __('login_error_suspended', date('Y-m-d', $end_date));
-                    header("Location: login.php");
-                    exit;
-                } else {
-                    // 정지 기간 만료 - 자동 해제
-                    $user_arr[$id]['status'] = 'active';
-                    $user_arr[$id]['suspend_reason'] = null;
-                    $user_arr[$id]['suspend_start'] = null;
-                    $user_arr[$id]['suspend_end'] = null;
-                    save_users($user_arr);
-                }
+            // ★ (2026-10-30) mc_user_suspend_state 로 통일 — 관리자 화면이 저장한 정지(무기한 포함)를 실제로 막음
+            $__sus = mc_user_suspend_state($user_arr[$id]);
+            if ($__sus['blocked']) {
+                $_SESSION['login_error'] = ($__sus['until'] !== '' ? __('login_error_suspended', $__sus['until']) : __('login_error_suspended_indef'));
+                header("Location: login.php");
+                exit;
+            } elseif ($__sus['expired']) {
+                // 정지 기간 만료 - 자동 해제
+                mc_user_clear_suspend($user_arr[$id]);
+                mc_users_modify(function (&$u) use ($id) { if (!isset($u[$id])) return false; mc_user_clear_suspend($u[$id]); return true; }); // ★ (2026-11-04 09:34) 잠금 안에서(그 사람 것만)
             }
         }
         
@@ -393,7 +449,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
             // 2FA 필요 - 임시 세션에 저장하고 OTP 입력 화면으로
             $_SESSION['2fa_pending'] = true;
             $_SESSION['2fa_user_id'] = $id;
-            $_SESSION['2fa_user_pass'] = $hashed;
+            $_SESSION['2fa_user_pass'] = ''; // ★ (2026-11-02 09:06) 비밀번호 해시(소금 없는 sha256)는 세션 파일에 남기지 않음 — 읽는 곳 없음
             $_SESSION['2fa_remember_me'] = isset($_POST['remember_me']) && $_POST['remember_me'] === '1';
             $_SESSION['2fa_timestamp'] = time();
             header("Location: login.php?mode=2fa");
@@ -401,8 +457,15 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
         }
         
         clearUserCache($id);
-        $ipBlocker->clearLoginAttempts(); // 브루트포스 기록 초기화
+        $ipBlocker->clearLoginAttempts(null, $id); // 브루트포스 기록 초기화 — ★ (2026-11-02 08:49) 이 아이디 것만
         
+        // ★ (2026-11-02 10:08) 나라 조회(외부 조회면 몇 초)는 로그 파일을 잠그기 전에 — 전에는 잠근 채 기다려 그동안 다른 로그인이 멈췄음
+        $__pre_ip = filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP) ?: 'unknown';
+        $__pre_country = 'UNKNOWN';
+        if (file_exists(__DIR__ . '/ip_block.php')) {
+            require_once __DIR__ . '/ip_block.php';
+            $__pre_country = (new IPBlocker(__DIR__ . '/src/ip_block_settings.json'))->getCountryByIP($__pre_ip);
+        }
         // ✅ 로그인 로그 JSON 형식으로 저장 (파일 잠금)
         $log_file = __DIR__ . "/src/login_log.json";
         $fp = fopen($log_file, 'c+');
@@ -410,6 +473,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
             if (flock($fp, LOCK_EX)) {
                 $content = stream_get_contents($fp);
                 $log_arr = json_decode($content, true) ?? [];
+                if (!is_array($log_arr)) $log_arr = []; // ★ (2026-11-02 21:10) 배열이 아닌 값이면 count() 오류로 로그인이 500 났음
                 
                 // ✅ 최대 5000개 유지 (활동 로그와 동일)
                 if (count($log_arr) >= 5000) {
@@ -417,13 +481,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
                 }
                 
                 // 국가 정보 가져오기
-                $login_ip = filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP) ?: 'unknown';
-                $login_country = 'UNKNOWN';
-                if (file_exists(__DIR__ . '/ip_block.php')) {
-                    require_once __DIR__ . '/ip_block.php';
-                    $ipBlockerForLog = new IPBlocker(__DIR__ . '/src/ip_block_settings.json');
-                    $login_country = $ipBlockerForLog->getCountryByIP($login_ip);
-                }
+                $login_ip = $__pre_ip;
+                $login_country = $__pre_country; // 위에서 미리 조회
                 
                 // ✅ 한국 시간 사용 (활동 로그와 동일)
                 $kst = new DateTime('now', new DateTimeZone('Asia/Seoul'));
@@ -437,10 +496,14 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
                     'user_agent' => substr(preg_replace('/[\r\n]/', '', $_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 200)
                 ];
                 
-                ftruncate($fp, 0);
-                rewind($fp);
-                fwrite($fp, json_encode($log_arr, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-                fflush($fp);
+                // ★ (2026-11-02 21:10) 잘못된 UTF-8(User-Agent 를 바이트로 자른 것 등)이 있으면 json_encode 가 false → 로그 파일 전체가 비워졌음 — 대체 문자로, 그래도 실패면 안 씀
+                $__enc = json_encode($log_arr, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE);
+                if ($__enc !== false) {
+                    ftruncate($fp, 0);
+                    rewind($fp);
+                    fwrite($fp, $__enc);
+                    fflush($fp);
+                }
                 flock($fp, LOCK_UN);
             }
             fclose($fp);
@@ -448,14 +511,19 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
         
         // ✅ 세션 고정 공격 방지 (Session Fixation Prevention)
         // 로그인 성공 시 세션 ID를 재생성하여 공격자가 미리 설정한 세션 ID 무효화
+        $__keep_lang = (isset($_SESSION['lang']) && is_string($_SESSION['lang'])) ? $_SESSION['lang'] : null; // ★ (2026-11-02 10:00) 로그인 화면에서 고른 언어 유지
         session_unset(); 
         session_destroy(); 
         session_start();
+        if ($__keep_lang !== null) $_SESSION['lang'] = $__keep_lang;
         session_regenerate_id(true);  // 새 세션 ID 생성 및 이전 세션 파일 삭제
         
         $_SESSION['user_id'] = $id;
-        $_SESSION['user_pass'] = $hashed;
+        $_SESSION['user_pass'] = ''; // ★ (2026-11-02 09:06) 해시는 세션에 남기지 않음(읽는 곳 없음)
         $_SESSION['user_group'] = $user_arr[$id]['group'];
+        // ★ (2026-11-04 00:47) 비밀번호 변경·'모든 기기 로그아웃' 기준값을 로그인할 때 바로 기억 — 전엔 첫 확인 때 그 시점 값으로 채워, 그 사이 바뀐 것을 놓치고 살아남았음
+        $_SESSION['mc_pw_seen'] = (string)($user_arr[$id]['password_changed_at'] ?? '');
+        $_SESSION['mc_rev_seen'] = (string)($user_arr[$id]['sessions_revoked_at'] ?? '');
         $_SESSION['last_action'] = time();
         
         // ✅ 캐시 갱신 플래그 초기화 (새 콘텐츠 반영을 위해)
@@ -488,6 +556,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
 // ✅ 아이디 찾기 처리
 // ============================================================
 } elseif (isset($_POST['mode']) && $_POST['mode'] === "find_id") {
+    // ★ (2026-11-02 10:00) 관리자가 끈 기능은 처리도 안 함(전에는 링크만 숨기고 직접 보내면 동작했음)
+    if (empty(get_app_settings('registration', [])['find_id_enabled'] ?? true)) { header("Location: login.php"); exit; }
     $email = trim($_POST['email'] ?? '');
     
     if (empty($email) || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -515,6 +585,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     if (!empty($found_ids)) {
         $_SESSION['find_success'] = __('find_id_success', implode(', ', $found_ids));
     } else {
+        // ★ (2026-11-08 전체 점검 3차 fix75) 없는 이메일도 틀린 횟수로 셈(비밀번호 찾기와 같게) — 전엔 횟수 제한 없이 이메일을 계속 넣어 가입 여부·가린 아이디를 알아낼 수 있었음
+        $ipBlocker->recordLoginFailure(null, '');
         $_SESSION['find_error'] = __('find_id_error_no_result');
     }
     header("Location: login.php?mode=find_id");
@@ -524,8 +596,9 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
 // ✅ 비밀번호 찾기 처리
 // ============================================================
 } elseif (isset($_POST['mode']) && $_POST['mode'] === "find_password") {
-    $id = trim($_POST['id'] ?? '');
-    $email = trim($_POST['email'] ?? '');
+    if (empty(get_app_settings('registration', [])['find_password_enabled'] ?? true)) { header("Location: login.php"); exit; } // ★ (2026-11-02 10:00) 끈 기능은 처리 안 함
+    $id = trim(is_string($_POST['id'] ?? null) ? $_POST['id'] : ''); // ★ (2026-11-02 09:07) 배열이면 500 이던 것
+    $email = trim(is_string($_POST['email'] ?? null) ? $_POST['email'] : '');
     
     if (empty($id) || empty($email)) {
         $_SESSION['find_error'] = __('find_password_error_empty');
@@ -542,6 +615,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     $ua = load_users();
     
     if (!isset($ua[$id])) {
+        $ipBlocker->recordLoginFailure(null, $id); // ★ (2026-10-30) 아이디·이메일 맞춰 보기 반복 제한
         $_SESSION['find_error'] = __('login_error_not_found');
         header("Location: login.php?mode=find_password");
         exit;
@@ -549,37 +623,116 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     
     $user_email = $ua[$id]['email'] ?? '';
     if (empty($user_email) || strtolower($user_email) !== strtolower($email)) {
+        $ipBlocker->recordLoginFailure(null, $id); // ★ (2026-10-30)
         $_SESSION['find_error'] = __('find_password_error_mismatch');
         header("Location: login.php?mode=find_password");
         exit;
     }
     
-    // 임시 비밀번호 생성 (8자리)
-    $temp_password = substr(str_shuffle('abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'), 0, 8);
+    // ★ (2026-11-02 09:07) 같은 계정은 10분에 한 번만 — 아이디·이메일을 아는 사람이 계속 눌러 주인에게 메일을 거듭 보내지 못하게
+    // ★ (2026-11-04 07:49) 비밀번호를 바로 바꾸지 않고 확인 코드를 계정 이메일로 보냄(펜닐) — 전엔 아이디·이메일만 알면 누구나 주인의 비밀번호를 바꿔
+    //   10분마다 주인(관리자 포함)을 로그아웃시킬 수 있었음. 이제 메일의 코드를 이 화면에 넣어야 임시 비밀번호로 바뀜(코드를 안 넣으면 그대로)
+    //   링크 대신 코드: 메일 속 링크 주소는 요청 쪽 Host 헤더로 만들어져 위조될 수 있고, 메일 보안 검사기가 링크를 먼저 열 수도 있어서
+    //   코드는 8자리·30분·5번 틀리면 끝, 사용자 파일엔 해시만 저장
+    // ★ (2026-11-04 09:34) 10분 확인과 코드 기록을 잠금 하나 안에서 먼저(예약) 한 뒤 메일을 보냄 — 전엔 메일 보내는 사이 들어온 요청이 모두 통과해 메일이 여러 통 갔고,
+    //   저장은 마지막 코드만 남아 주인이 받은 다른 코드는 '틀림'이 됐음. 메일을 못 보내면 예약을 되돌림
+    $_rc_chars = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    $reset_code = '';
+    for ($_i = 0; $_i < 8; $_i++) $reset_code .= $_rc_chars[random_int(0, strlen($_rc_chars) - 1)];
+    $_rc_hash = hash('sha256', $reset_code);
+    $_prev_pr = null; $_can_code = false;
+    $_res = mc_users_modify(function (&$u) use ($id, $_rc_hash, &$_prev_pr, &$_can_code) {
+        if (!isset($u[$id])) return false;
+        $_prw = is_array($u[$id]['pw_reset'] ?? null) ? $u[$id]['pw_reset'] : [];
+        $_pra = max(strtotime((string)($u[$id]['password_reset_at'] ?? '')) ?: 0, (int)($_prw['at'] ?? 0));
+        if ($_pra > 0 && time() - $_pra < 600) {
+            // ★ (2026-11-04 08:13) 아직 쓸 수 있는 코드가 있으면 코드 칸을 보여 줌 — 남이 먼저 요청했거나 브라우저를 닫아 세션이 끝나도, 메일을 받은 주인이 그 코드를 쓸 수 있게(틀린 횟수 5번은 계정에 쌓임)
+            $_can_code = !empty($_prw['h']) && time() <= (int)($_prw['exp'] ?? 0) && (int)($_prw['try'] ?? 0) < 5;
+            return false; // 'wait' — 저장 안 함
+        }
+        $_prev_pr = $u[$id]['pw_reset'] ?? null;
+        $u[$id]['pw_reset'] = ['h' => $_rc_hash, 'at' => time(), 'exp' => time() + 1800, 'try' => 0];
+        return 'ok';
+    });
+    if ($_res !== 'ok') {
+        if ($_res === null) { $_SESSION['find_error'] = __('adm_blk_fail'); }
+        else {
+            $_SESSION['find_error'] = __('find_password_wait');
+            if ($_can_code) $_SESSION['pw_reset_id'] = $id;
+        }
+        header("Location: login.php?mode=find_password");
+        exit;
+    }
     
-    // 비밀번호 저장
-    $ua[$id]['pass'] = password_hash(hash("sha256", $temp_password), PASSWORD_DEFAULT);
-    $ua[$id]['password_reset_at'] = date('Y-m-d H:i:s');
-    save_users($ua);
-    
-    // ✅ SMTP 설정이 있으면 이메일 발송, 없으면 화면에 표시
-    $email_sent = false;
-    $email_result = send_password_reset_email($email, $id, $temp_password);
+    $email_result = function_exists('send_password_reset_code_email') ? send_password_reset_code_email($user_email, $id, $reset_code) : false;
     
     if ($email_result === true) {
-        $email_sent = true;
-        $_SESSION['find_success'] = __('find_password_email_sent', $email);
+        $_SESSION['pw_reset_id'] = $id;
+        $_SESSION['find_success'] = __('find_password_code_sent', $email);
     } else {
-        // 이메일 발송 실패 또는 SMTP 미설정 - 화면에 표시
-        $_SESSION['temp_password'] = $temp_password;
-        $_SESSION['temp_password_user'] = $id;
-        $_SESSION['find_success'] = __('find_password_reset_success');
+        // 메일 설정이 없거나 발송 실패 — 예약을 되돌리고(다시 시도할 수 있게) 비밀번호는 그대로 두고 안내
+        mc_users_modify(function (&$u) use ($id, $_rc_hash, $_prev_pr) {
+            if (!isset($u[$id]) || (string)($u[$id]['pw_reset']['h'] ?? '') !== $_rc_hash) return false; // 그사이 다른 요청이 바꿨으면 그대로
+            if ($_prev_pr === null) unset($u[$id]['pw_reset']); else $u[$id]['pw_reset'] = $_prev_pr;
+            return true;
+        });
+        $_SESSION['find_error'] = __('find_password_no_mail');
     }
     
     header("Location: login.php?mode=find_password");
     exit;
 
+} elseif (isset($_POST['mode']) && $_POST['mode'] === "find_password_code") {
+    // ★ (2026-11-04 07:49) 메일로 받은 확인 코드 확인 → 맞으면 임시 비밀번호로 바꾸고 이 화면에 보여 줌(코드를 받은 사람 = 메일 주인)
+    if (empty(get_app_settings('registration', [])['find_password_enabled'] ?? true)) { header("Location: login.php"); exit; }
+    $id = is_string($_SESSION['pw_reset_id'] ?? null) ? $_SESSION['pw_reset_id'] : '';
+    $code = strtoupper(preg_replace('/[\s-]/', '', is_string($_POST['reset_code'] ?? null) ? $_POST['reset_code'] : ''));
+    // 임시 비밀번호(8자리, 암호학적 난수) — 해시는 잠그기 전에 미리(느린 계산)
+    $_tp_chars = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+    $temp_password = '';
+    for ($_i = 0; $_i < 8; $_i++) $temp_password .= $_tp_chars[random_int(0, strlen($_tp_chars) - 1)];
+    $_tp_hash = password_hash(hash("sha256", $temp_password), PASSWORD_DEFAULT);
+    // ★ (2026-11-04 09:34) 확인·틀린 횟수·비밀번호 바꾸기를 잠금 하나 안에서 — 전엔 다른 요청(가입 등)과 겹치면 임시 비밀번호가 저장되지 않았는데 화면엔 나왔고, 쓴 코드가 되살아났음
+    $_st = ($id === '') ? 'expired' : mc_users_modify(function (&$u) use ($id, $code, $_tp_hash) {
+        $_pr = (isset($u[$id]) && is_array($u[$id]['pw_reset'] ?? null)) ? $u[$id]['pw_reset'] : null;
+        if ($_pr === null || empty($_pr['h']) || time() > (int)($_pr['exp'] ?? 0) || (int)($_pr['try'] ?? 0) >= 5) {
+            if ($_pr === null) return false; // 고칠 것 없음(저장 안 함) — 아래에서 '만료'로 처리
+            $u[$id]['pw_reset'] = ['at' => (int)($_pr['at'] ?? 0)]; // ★ (2026-11-04 08:13) 요청 시각은 남김(통째로 지우면 10분 제한을 건너뛰어 메일을 계속 보낼 수 있었음)
+            return 'expired';
+        }
+        if ($code === '' || !hash_equals((string)$_pr['h'], hash('sha256', $code))) {
+            $u[$id]['pw_reset']['try'] = (int)($_pr['try'] ?? 0) + 1;
+            return 'wrong';
+        }
+        $u[$id]['pass'] = $_tp_hash;
+        $u[$id]['password_reset_at'] = date('Y-m-d H:i:s');
+        $u[$id]['password_changed_at'] = $u[$id]['password_reset_at']; // ★ (2026-11-02 09:58) 열려 있던 다른 세션도 끝나게(init.php)
+        $u[$id]['pw_reset'] = ['at' => (int)($_pr['at'] ?? 0)]; // ★ (2026-11-04 08:13) 코드는 지우고 요청 시각만(10분 제한 유지)
+        return 'ok';
+    });
+    if ($_st === 'wrong') {
+        $ipBlocker->recordLoginFailure(null, $id);
+        $_SESSION['find_error'] = __('find_password_code_wrong');
+        header("Location: login.php?mode=find_password");
+        exit;
+    }
+    if ($_st !== 'ok') {
+        unset($_SESSION['pw_reset_id']);
+        $_SESSION['find_error'] = ($_st === null) ? __('adm_blk_fail') : __('find_password_code_expired'); // false = 코드 없음(만료와 같은 안내)
+        header("Location: login.php?mode=find_password");
+        exit;
+    }
+    if (function_exists('delete_user_remember_tokens')) delete_user_remember_tokens($id);
+    unset($_SESSION['pw_reset_id']);
+    session_regenerate_id(true); // ★ (2026-11-04 08:13) 임시 비밀번호를 담기 전에 세션 ID 새로(심어 둔 세션으로 엿보지 못하게)
+    $_SESSION['find_success'] = __('find_password_reset_success');
+    $_SESSION['temp_password'] = $temp_password; // 아래 화면이 한 번 보여 주고 지움
+    header("Location: login.php?mode=find_password");
+    exit;
+
 } elseif (isset($_GET['mode']) && $_GET['mode'] === "logout") {
+    // ★ (2026-11-08 전체 점검 3차 fix75) 다른 사이트의 링크로는 안 됨(모든 기기 로그아웃과 같게) — 남이 심은 링크 한 번에 로그아웃되고 '로그인 유지'도 풀렸음
+    if (($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'cross-site') { header("Location: index.php"); exit; }
     if (!empty($_SESSION['user_id'])) clearUserCache($_SESSION['user_id']);
     
     // ✅ 수동 로그아웃 시에만 토큰 삭제
@@ -593,15 +746,21 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
 
 } elseif (isset($_GET['mode']) && $_GET['mode'] === "logout_all") {
     // ✅ 모든 기기에서 로그아웃
+    // ★ (2026-11-02 09:00) 다른 사이트의 링크로는 안 됨(브라우저가 알려 주는 Sec-Fetch-Site) — 남이 심은 링크 한 번에 모든 기기 로그인이 풀리지 않게
+    if (($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'cross-site') { header("Location: index.php"); exit; }
     $user_id = $_SESSION['user_id'] ?? null;
     
     if (!empty($user_id)) {
         clearUserCache($user_id);
         delete_user_remember_tokens($user_id); // 해당 사용자의 모든 토큰 삭제
+        // ★ (2026-11-02 09:58) 다른 기기에 열려 있는 세션도 끝나게 표시(init.php 가 2분마다 확인)
+        // ★ (2026-11-04 09:34) 잠금 안에서(다른 요청과 겹쳐도 기록이 사라지지 않게)
+        mc_users_modify(function (&$u) use ($user_id) { if (!isset($u[$user_id])) return false; $u[$user_id]['sessions_revoked_at'] = date('Y-m-d H:i:s'); return true; });
     }
     
     // 현재 기기 쿠키도 삭제
     if (isset($_COOKIE['remember_token'])) {
+        delete_remember_token($_COOKIE['remember_token']); // ★ (2026-11-09 11:37) 세션 없이 온 경우(위에서 자동 로그인 안 함)에도 이 기기 토큰 기록은 지움 — 세션이 있으면 위에서 이미 지워져 있음
         setcookie('remember_token', '', time() - 3600, '/');
     }
     
@@ -610,6 +769,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     header("Location: login.php"); exit;
 
 } elseif (isset($_GET['mode']) && $_GET['mode'] === "timeout") {
+    // ★ (2026-11-09 11:37) 다른 사이트의 링크로는 안 됨(로그아웃과 같게) — 남이 심은 링크 한 번에 로그아웃되던 것
+    if (($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'cross-site') { header("Location: index.php"); exit; }
     $msg = $_SESSION['timeout_message'] ?? __('login_timeout_message');
     if (!empty($_SESSION['user_id'])) clearUserCache($_SESSION['user_id']);
     
@@ -639,6 +800,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
         exit;
     }
     
+    // ★ (2026-11-04 01:16) 확인 전에도 잠금 확인 — 잠긴 뒤 넣은 맞는 백업 코드가 쓰이기만 하고 막히지 않게
+    $__bf1 = $ipBlocker->checkBruteforce();
+    if ($__bf1['blocked']) {
+        $ipBlocker->showBruteForcePage($__bf1['remaining']);
+    }
     $otp_code = $_POST['otp_code'] ?? '';
     $user_id_2fa = $_SESSION['2fa_user_id'];
     
@@ -652,6 +818,12 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
         exit;
     }
     
+    // ★ (2026-11-04 00:47) 맞힌 뒤 한 번 더 잠금 확인(위 비밀번호와 같은 이유)
+    $__bf2 = $ipBlocker->checkBruteforce();
+    if ($__bf2['blocked']) {
+        $ipBlocker->showBruteForcePage($__bf2['remaining']);
+    }
+    
     // 2FA 검증 성공 - 실제 로그인 처리
     $id = $_SESSION['2fa_user_id'];
     $hashed = $_SESSION['2fa_user_pass'];
@@ -663,8 +835,11 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     $user_arr = load_users();
     
     clearUserCache($id);
-    $ipBlocker->clearLoginAttempts();
+    $ipBlocker->clearLoginAttempts(null, $id); // ★ (2026-11-02 08:49) 이 아이디 것만
     
+    // ★ (2026-11-02 10:08) 나라 조회는 잠그기 전에
+    $__pre_ip = filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP) ?: 'unknown';
+    $__pre_country = $ipBlocker->getCountryByIP($__pre_ip);
     // 로그인 로그 저장
     $log_file = __DIR__ . "/src/login_log.json";
     $fp = fopen($log_file, 'c+');
@@ -672,6 +847,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
         if (flock($fp, LOCK_EX)) {
             $content = stream_get_contents($fp);
             $log_arr = json_decode($content, true) ?? [];
+            if (!is_array($log_arr)) $log_arr = []; // ★ (2026-11-02 21:36) 일반 로그인 쪽과 같게 — 배열이 아니면 count() 오류로 2단계 로그인이 500
             
             // ✅ 최대 5000개 유지 (활동 로그와 동일)
             if (count($log_arr) >= 5000) {
@@ -679,8 +855,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
             }
             
             // 국가 정보 가져오기
-            $login_ip = filter_var($_SERVER['REMOTE_ADDR'], FILTER_VALIDATE_IP) ?: 'unknown';
-            $login_country = $ipBlocker->getCountryByIP($login_ip);
+            $login_ip = $__pre_ip;
+            $login_country = $__pre_country; // 위에서 미리 조회
             
             // ✅ 한국 시간 사용 (활동 로그와 동일)
             $kst = new DateTime('now', new DateTimeZone('Asia/Seoul'));
@@ -693,24 +869,32 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
                 'user_agent' => substr(preg_replace('/[\r\n]/', '', $_SERVER['HTTP_USER_AGENT'] ?? ''), 0, 200),
                 '2fa' => true
             ];
-            ftruncate($fp, 0);
-            rewind($fp);
-            fwrite($fp, json_encode($log_arr, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT));
-            fflush($fp);
+            $__enc = json_encode($log_arr, JSON_UNESCAPED_UNICODE | JSON_PRETTY_PRINT | JSON_INVALID_UTF8_SUBSTITUTE); // ★ (2026-11-02 21:36) 일반 로그인 쪽과 같게 — 잘린 한글 UA 면 false 라 로그 전체가 0바이트가 됐음
+            if ($__enc !== false) {
+                ftruncate($fp, 0);
+                rewind($fp);
+                fwrite($fp, $__enc);
+                fflush($fp);
+            }
             flock($fp, LOCK_UN);
         }
         fclose($fp);
     }
     
     // 세션 고정 공격 방지
+    $__keep_lang = (isset($_SESSION['lang']) && is_string($_SESSION['lang'])) ? $_SESSION['lang'] : null; // ★ (2026-11-02 10:00) 로그인 화면에서 고른 언어 유지
     session_unset();
     session_destroy();
     session_start();
     session_regenerate_id(true);
+    if ($__keep_lang !== null) $_SESSION['lang'] = $__keep_lang;
     
     $_SESSION['user_id'] = $id;
-    $_SESSION['user_pass'] = $hashed;
+    $_SESSION['user_pass'] = ''; // ★ (2026-11-02 09:06) 해시는 세션에 남기지 않음(읽는 곳 없음)
     $_SESSION['user_group'] = $user_arr[$id]['group'];
+    // ★ (2026-11-04 00:47) 비밀번호 변경·'모든 기기 로그아웃' 기준값을 로그인할 때 바로 기억 — 전엔 첫 확인 때 그 시점 값으로 채워, 그 사이 바뀐 것을 놓치고 살아남았음
+    $_SESSION['mc_pw_seen'] = (string)($user_arr[$id]['password_changed_at'] ?? '');
+    $_SESSION['mc_rev_seen'] = (string)($user_arr[$id]['sessions_revoked_at'] ?? '');
     $_SESSION['last_action'] = time();
     
     unset($_SESSION['index_refreshed']);
@@ -803,7 +987,7 @@ elseif (isset($_GET['mode']) && $_GET['mode'] === '2fa' && !empty($_SESSION['2fa
 elseif (isset($_GET['mode']) && $_GET['mode'] === 'find_id' && $find_id_enabled) $page = 'find_id';
 elseif (isset($_GET['mode']) && $_GET['mode'] === 'find_password' && $find_password_enabled) $page = 'find_password';
 elseif (isset($_GET['mode']) && $_GET['mode'] === 'signup' && $registration_enabled) $page = 'signup';
-elseif (isset($_SESSION['user_id']) && isset($_GET['mode']) && $_GET['mode'] === 'adduser' && ($_SESSION['user_group'] ?? '') === 'admin') $page = 'adduser';
+elseif (isset($_SESSION['user_id']) && isset($_GET['mode']) && $_GET['mode'] === 'adduser' && mc_login_admin_now()) $page = 'adduser'; // ★ (2026-11-02 21:35) 사용자 파일로 다시 확인
 elseif (isset($_SESSION['user_id'])) { header("Location: " . $_ps_redirect); exit; }
 ?>
 <!DOCTYPE html>
@@ -820,7 +1004,7 @@ html.leaving{opacity:0;transition:opacity .1s ease-out}
 *{box-sizing:border-box}
 body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 </style>
-<link rel="shortcut icon" href="./favicon.ico">
+<?php echo function_exists('mc_favicon_tags') ? mc_favicon_tags() : '<link rel="shortcut icon" href="./favicon.ico">'; // ★ (2026-11-03 23:50) 탭 아이콘 = 로고 ?>
 <link href="https://fonts.googleapis.com/css2?family=Gugi&family=Nanum+Gothic:wght@400;700&family=Black+Han+Sans&family=Jua&family=Do+Hyeon&family=Noto+Serif+KR:wght@400;700&family=VT323&family=Orbitron:wght@400;700&family=Creepster&family=Press+Start+2P&family=Roboto+Mono:wght@400;700&family=Share+Tech+Mono&family=Cinzel:wght@400;700&family=Playfair+Display:wght@400;700&display=swap" rel="stylesheet">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
@@ -858,15 +1042,16 @@ form{max-width:400px}
 
 /* 커스텀 배경 이미지 */
 <?php if(!empty($custom_bg)): ?>
-.custom-bg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:url('<?php echo h($custom_bg); ?>') center/cover fixed;z-index:0<?php if($bg_filter_css !== 'none'): ?>;filter:<?php echo $bg_filter_css; ?><?php endif; ?>}
+.custom-bg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:url('<?php echo mc_css_str($custom_bg); /* ★ (2026-11-02 10:01) CSS 문자열 이스케이프 */ ?>') center/cover fixed;z-index:0<?php if($bg_filter_css !== 'none'): ?>;filter:<?php echo $bg_filter_css; ?><?php endif; ?>}
 body{background:transparent !important}
-/* 커스텀 배경 사용 시 모든 테마 애니메이션 요소 숨김 */
+/* 커스텀 배경 사용 시 모든 테마 애니메이션 요소 숨김 — ★ (2026-11-02 11:39) 테마 1~25 의 body 배경 주소도 h() 대신 mc_css_str()(<style> 안이라 & 가 &amp; 로 남았음) */
 #matrixCanvas, #starsContainer, #sakuraContainer, #gothicContainer, #bubbleContainer,
 #jarvisContainer, #auroraContainer, #neonContainer, #fireContainer, #fishContainer,
 #snowContainer, #warpContainer, #constellationContainer, #milkywayContainer,
 #nebulaContainer, #meteorContainer, #deepSpaceContainer, #glassContainer,
 #cyberContainer, #minimalContainer, #retroContainer, #gradientContainer,
 #goldContainer, #holoContainer, #terminalContainer,
+#oceanContainer, #aquariumContainer, #starwarsContainer, #deepspaceContainer, /* ★ (2026-11-02 10:01) 9·15·20·25 실제 이름(위 이름과 달라 배경을 넣어도 효과가 보였음) */
 .theme-0-bookshelf-container, .theme-0-overlay, .theme-0-lamp-light {
     display: none !important;
 }
@@ -875,7 +1060,7 @@ body{background:transparent !important}
 <?php if($theme == 0): /* 도서관 - 책꽂이/서재 */ ?>
 /* 도서관 테마 전용 CSS */
 <?php if($custom_bg): ?>
-body{background:url('<?php echo $custom_bg; ?>') center/cover fixed !important;min-height:100vh;overflow-x:hidden}
+body{background:url('<?php echo mc_css_str($custom_bg); /* ★ (2026-11-02 10:01) 이스케이프 없이 나가던 것 */ ?>') center/cover fixed !important;min-height:100vh;overflow-x:hidden}
 <?php elseif(!empty($theme_0_default_bg)): ?>
 body{background:url('<?php echo $theme_0_default_bg; ?>') center/cover fixed;min-height:100vh;overflow-x:hidden}
 <?php else: ?>
@@ -895,7 +1080,7 @@ body{min-height:100vh;overflow:hidden}
 <?php endif; ?>
 /* 로그인 카드 */
 form{position:relative;z-index:10}
-.login-card{background:rgba(245,240,230,0.97);border-radius:12px;padding:40px;width:100%;max-width:400px;box-shadow:0 25px 60px rgba(0,0,0,0.5),0 0 0 1px rgba(139,69,19,0.3),inset 0 1px 0 rgba(255,255,255,0.5);position:relative;margin:20px}
+.login-card{background:rgba(245,240,230,0.97);border-radius:12px;padding:40px;width:100%;max-width:400px;box-shadow:0 25px 60px rgba(0,0,0,0.5),0 0 0 1px rgba(139,69,19,0.3),inset 0 1px 0 rgba(255,255,255,0.5);position:relative;margin:20px auto}
 .login-card::before{content:'';position:absolute;top:10px;left:10px;right:10px;bottom:10px;border:1px solid rgba(139,69,19,0.15);border-radius:8px;pointer-events:none}
 /* 로고 영역 */
 .logo-area{text-align:center;margin-bottom:30px}
@@ -929,10 +1114,10 @@ form{position:relative;z-index:10}
 .back-link{background:rgba(245,240,230,0.9);border:1px solid #d4c9b8;color:#5d4e37;border-radius:8px}
 .setup-notice{background:rgba(245,240,230,0.9);border:1px solid #d4c9b8;color:#5d4e37}
 .group-select label{color:#5d4e37}
-@media(max-width:480px){.login-card{padding:30px 25px;margin:15px}.shelf-row{height:80px}.book{transform:scale(0.7)}}
+@media(max-width:480px){.login-card{padding:30px 25px;margin:15px auto}.shelf-row{height:80px}.book{transform:scale(0.7)}}
 
 <?php elseif($theme == 1): /* 매트릭스 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "#000"; ?>;overflow:hidden;position:relative}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "#000"; ?>;overflow-x:hidden;position:relative} /* ★ (2026-11-02 19:14) overflow:hidden → overflow-x — 낮은 화면(휴대폰 가로)에서 세로 스크롤이 안 돼 비밀번호 칸·버튼에 닿지 못했음 */
 .matrix-canvas{position:fixed;top:0;left:0;width:100%;height:100%;z-index:1;pointer-events:none}
 form{position:relative;z-index:10}
 .login-card{background:rgba(0,10,0,0.95);border:2px solid #00ff00;border-radius:0;backdrop-filter:blur(10px);box-shadow:0 0 50px rgba(0,255,0,0.3),inset 0 0 30px rgba(0,255,0,0.1);animation:matrixPulse 2s ease-in-out infinite}
@@ -968,7 +1153,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#00ff00;font-family:'VT323',monospace}
 
 <?php elseif($theme == 2): /* 글래스모피즘 */ ?>
-body{background:url('<?php echo h($custom_bg ?: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1200'); ?>') center/cover fixed;min-height:100vh}
+body{background:url('<?php echo mc_css_str($custom_bg ?: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?w=1200'); ?>') center/cover fixed;min-height:100vh}
 body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(135deg,rgba(102,126,234,0.3),rgba(118,75,162,0.3));z-index:0}
 .login-card{background:rgba(255,255,255,0.15);border:1px solid rgba(255,255,255,0.3);border-radius:20px;backdrop-filter:blur(20px);-webkit-backdrop-filter:blur(20px);box-shadow:0 25px 50px rgba(0,0,0,0.3);z-index:10;animation:glassFloat 5s ease-in-out infinite}
 @keyframes glassFloat{0%,100%{transform:translateY(0) rotate(0deg)}25%{transform:translateY(-8px) rotate(0.5deg)}75%{transform:translateY(-4px) rotate(-0.5deg)}}
@@ -998,7 +1183,7 @@ body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:
 .group-select label{color:#fff}
 
 <?php elseif($theme == 3): /* 사이버펑크 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "#0a0014"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "#0a0014"; ?>}
 body::before{content:'';position:fixed;bottom:0;left:0;right:0;height:100%;background:linear-gradient(90deg,transparent 49%,rgba(255,0,102,0.3) 49%,rgba(255,0,102,0.3) 51%,transparent 51%),linear-gradient(0deg,rgba(255,0,102,0.3) 1px,transparent 1px);background-size:60px 60px;transform:perspective(500px) rotateX(60deg);transform-origin:bottom;animation:gridMove 2s linear infinite;z-index:1;pointer-events:none}
 @keyframes gridMove{0%{background-position:0 0}100%{background-position:60px 60px}}
 form{position:relative;z-index:10}
@@ -1034,7 +1219,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#00ffff;font-family:'Orbitron',sans-serif}
 
 <?php elseif($theme == 4): /* 갤럭시/우주 */ ?>
-body{background:url('<?php echo h($custom_bg ?: 'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?w=1200'); ?>') center/cover fixed}
+body{background:url('<?php echo mc_css_str($custom_bg ?: 'https://images.unsplash.com/photo-1462331940025-496dfbfc7564?w=1200'); ?>') center/cover fixed}
 body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,20,0.5);z-index:0}
 #starsContainer{z-index:1}
 form{position:relative;z-index:10}
@@ -1069,7 +1254,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#e0b0ff;font-family:'Orbitron',sans-serif}
 
 <?php elseif($theme == 5): /* 사쿠라/벚꽃 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#ffecd2,#fcb69f)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#ffecd2,#fcb69f)"; ?>}
 #sakuraContainer{z-index:1}
 form{position:relative;z-index:10}
 .login-card{background:rgba(255,255,255,0.95);border:none;border-radius:25px;box-shadow:0 20px 60px rgba(255,105,180,0.3),0 0 0 3px #ff69b4;animation:sakuraFloat 4s ease-in-out infinite;overflow:hidden}
@@ -1103,7 +1288,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#ff1493;font-family:'Jua',sans-serif}
 
 <?php elseif($theme == 6): /* 다크 고딕 */ ?>
-body{background:url('<?php echo h($custom_bg ?: 'https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?w=1200'); ?>') center/cover fixed}
+body{background:url('<?php echo mc_css_str($custom_bg ?: 'https://images.unsplash.com/photo-1478760329108-5c3ed9d495a0?w=1200'); ?>') center/cover fixed}
 body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:linear-gradient(180deg,rgba(0,0,0,0.7),rgba(20,0,0,0.9));z-index:0}
 #gothicContainer{z-index:1}
 form{position:relative;z-index:10}
@@ -1138,7 +1323,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#999;font-family:'Cinzel',serif}
 
 <?php elseif($theme == 7): /* 미니멀 화이트 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(135deg,#f5f7fa,#c3cfe2)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(135deg,#f5f7fa,#c3cfe2)"; ?>}
 .login-card{background:#fff;border:none;border-radius:20px;box-shadow:0 30px 60px rgba(0,0,0,0.1);animation:minimalFloat 5s ease-in-out infinite}
 @keyframes minimalFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-8px)}}
 .login-header{background:transparent}
@@ -1167,7 +1352,7 @@ body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover f
 .group-select label{color:#333}
 
 <?php elseif($theme == 8): /* 레트로 아케이드 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "url('https://images.unsplash.com/photo-1511882150382-421056c89033?w=1920&q=80') center/cover fixed"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "url('https://images.unsplash.com/photo-1511882150382-421056c89033?w=1920&q=80') center/cover fixed"; ?>}
 body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:repeating-linear-gradient(0deg,rgba(0,0,0,0.15) 0px,rgba(0,0,0,0.15) 1px,transparent 1px,transparent 2px);pointer-events:none;z-index:9999}
 form{position:relative;z-index:10}
 .login-card{background:#000;border:3px dashed #00ff00;border-radius:0;box-shadow:0 0 30px rgba(0,255,0,0.3),inset 0 0 50px rgba(0,255,0,0.05);position:relative}
@@ -1202,7 +1387,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#00ff00;font-family:'Press Start 2P',monospace;font-size:0.6em}
 
 <?php elseif($theme == 9): /* 오션 웨이브 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#0077be 0%,#00416a 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#0077be 0%,#00416a 100%)"; ?>}
 body::before{content:'';position:fixed;bottom:0;left:0;width:200%;height:100px;background:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1440 320'%3E%3Cpath fill='%23ffffff' fill-opacity='0.3' d='M0,192L48,197.3C96,203,192,213,288,229.3C384,245,480,267,576,250.7C672,235,768,181,864,181.3C960,181,1056,235,1152,234.7C1248,235,1344,181,1392,154.7L1440,128L1440,320L1392,320C1344,320,1248,320,1152,320C1056,320,960,320,864,320C768,320,672,320,576,320C480,320,384,320,288,320C192,320,96,320,48,320L0,320Z'%3E%3C/path%3E%3C/svg%3E") repeat-x;background-size:50% 100%;animation:waveMove 10s linear infinite;z-index:1;pointer-events:none}
 @keyframes waveMove{0%{transform:translateX(0)}100%{transform:translateX(-50%)}}
 #oceanContainer{z-index:2;pointer-events:none}
@@ -1240,7 +1425,7 @@ form{position:relative;z-index:10}
 
 <?php elseif($theme == 10): /* 그라데이션 모션 */ ?>
 <?php if($custom_bg): ?>
-body{background:url('<?php echo h($custom_bg); ?>') center/cover fixed}
+body{background:url('<?php echo mc_css_str($custom_bg); ?>') center/cover fixed}
 <?php else: ?>
 body{background:linear-gradient(-45deg,#ee7752,#e73c7e,#23a6d5,#23d5ab);background-size:400% 400%;animation:gradientBG 15s ease infinite}
 @keyframes gradientBG{0%{background-position:0% 50%}50%{background-position:100% 50%}100%{background-position:0% 50%}}
@@ -1273,7 +1458,7 @@ body{background:linear-gradient(-45deg,#ee7752,#e73c7e,#23a6d5,#23d5ab);backgrou
 .group-select label{color:#333}
 
 <?php elseif($theme == 11): /* 자비스 (JARVIS) */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "#0a1628"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "#0a1628"; ?>}
 #jarvisContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(0,20,40,0.95);border:2px solid #00d4ff;border-radius:5px;box-shadow:0 0 50px rgba(0,212,255,0.3),inset 0 0 30px rgba(0,212,255,0.1);animation:jarvisPulse 3s infinite;position:relative;overflow:hidden}
@@ -1310,11 +1495,11 @@ form{position:relative;z-index:10}
 .group-select label{color:#00d4ff;font-family:'Share Tech Mono',monospace}
 
 <?php elseif($theme == 12): /* 오로라 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "url('https://images.unsplash.com/photo-1483347756197-71ef80e95f73?w=1920&q=80') center/cover fixed"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "url('https://images.unsplash.com/photo-1483347756197-71ef80e95f73?w=1920&q=80') center/cover fixed"; ?>}
 #auroraContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(10,10,32,0.9);border:1px solid rgba(0,255,136,0.4);border-radius:20px;backdrop-filter:blur(15px);box-shadow:0 20px 60px rgba(0,255,136,0.2);position:relative;overflow:hidden}
-.login-card::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:linear-gradient(45deg,transparent,rgba(0,255,136,0.1),transparent,rgba(0,212,255,0.1),transparent);animation:auroraShimmer 8s linear infinite}
+.login-card::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:linear-gradient(45deg,transparent,rgba(0,255,136,0.1),transparent,rgba(0,212,255,0.1),transparent);animation:auroraShimmer 8s linear infinite;pointer-events:none} /* ★ (2026-11-02 19:14) 장식이 입력칸 위를 덮어 휴대폰에서 찾기·2단계(OTP)·가입 칸을 누를 수 없던 것 */
 @keyframes auroraShimmer{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 .login-header{background:transparent;padding:25px 20px;position:relative}
 .login-header::before{content:'🌌';position:absolute;top:15px;left:15px;font-size:1.2em}
@@ -1345,7 +1530,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#00ff88}
 
 <?php elseif($theme == 13): /* 네온 시티 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#1a0033,#330066)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#1a0033,#330066)"; ?>}
 #neonContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(26,0,51,0.95);border:3px solid;border-image:linear-gradient(135deg,#ff00ff,#00ffff,#ff00ff) 1;box-shadow:0 0 30px rgba(255,0,255,0.4),0 0 60px rgba(0,255,255,0.2);position:relative}
@@ -1379,7 +1564,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#00ffff;font-family:'Share Tech Mono',monospace}
 
 <?php elseif($theme == 14): /* 파이어 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "#1a0000"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "#1a0000"; ?>}
 #fireContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:linear-gradient(180deg,rgba(40,0,0,0.97),rgba(15,0,0,0.97));border:2px solid #ff4500;border-radius:0;box-shadow:0 0 60px rgba(255,69,0,0.5),inset 0 0 40px rgba(255,69,0,0.1);position:relative}
@@ -1412,7 +1597,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#ff6600;font-family:'Cinzel',serif}
 
 <?php elseif($theme == 15): /* 아쿠아리움 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#006994 0%,#003366 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#006994 0%,#003366 100%)"; ?>}
 #aquariumContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(0,50,80,0.85);border:2px solid rgba(0,206,209,0.6);border-radius:25px;backdrop-filter:blur(15px);box-shadow:0 20px 50px rgba(0,0,0,0.3);position:relative;overflow:hidden}
@@ -1447,7 +1632,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#00ced1;font-family:'Jua',sans-serif}
 
 <?php elseif($theme == 16): /* 스노우 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#87ceeb 0%,#e0f0ff 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(180deg,#87ceeb 0%,#e0f0ff 100%)"; ?>}
 #snowContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(255,255,255,0.95);border:2px solid rgba(135,206,235,0.6);border-radius:25px;backdrop-filter:blur(15px);box-shadow:0 20px 50px rgba(0,0,0,0.1);position:relative}
@@ -1480,7 +1665,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#4a90a4;font-family:'Jua',sans-serif}
 
 <?php elseif($theme == 17): /* 골드 럭셔리 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(135deg,#1a1a2e 0%,#0d0d1a 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(135deg,#1a1a2e 0%,#0d0d1a 100%)"; ?>}
 form{position:relative;z-index:10}
 .login-card{background:linear-gradient(135deg,rgba(26,26,46,0.97),rgba(13,13,26,0.97));border:2px solid;border-image:linear-gradient(135deg,#ffd700,#b8860b,#ffd700) 1;box-shadow:0 0 50px rgba(255,215,0,0.2),inset 0 0 30px rgba(255,215,0,0.05);position:relative}
 .login-card::before{content:'♔';position:absolute;top:-20px;left:50%;transform:translateX(-50%);font-size:2em;color:#ffd700;text-shadow:0 0 20px rgba(255,215,0,0.8)}
@@ -1511,10 +1696,10 @@ form{position:relative;z-index:10}
 .group-select label{color:#ffd700;font-family:'Playfair Display',serif}
 
 <?php elseif($theme == 18): /* 홀로그램 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "#111"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "#111"; ?>}
 form{position:relative;z-index:10}
 .login-card{background:linear-gradient(135deg,rgba(255,105,180,0.15),rgba(0,255,255,0.15),rgba(255,255,0,0.15));border:3px solid transparent;border-radius:20px;backdrop-filter:blur(15px);box-shadow:0 0 40px rgba(255,105,180,0.3);animation:holoShift 5s infinite;background-size:400% 400%;position:relative;overflow:hidden}
-.login-card::before{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.3),transparent);animation:holoScan 3s linear infinite}
+.login-card::before{content:'';position:absolute;top:0;left:-100%;width:50%;height:100%;background:linear-gradient(90deg,transparent,rgba(255,255,255,0.3),transparent);animation:holoScan 3s linear infinite;pointer-events:none} /* ★ (2026-11-02 19:14) 장식이 입력칸 위를 덮어 휴대폰에서 찾기·2단계(OTP)·가입 칸을 누를 수 없던 것 */
 @keyframes holoScan{0%{left:-100%}100%{left:200%}}
 @keyframes holoShift{0%{background-position:0% 50%;border-color:#ff69b4}25%{background-position:100% 50%;border-color:#00ffff}50%{background-position:100% 100%;border-color:#ffff00}75%{background-position:0% 100%;border-color:#00ff00}100%{background-position:0% 50%;border-color:#ff69b4}}
 .login-header{background:transparent;padding:25px 20px}
@@ -1545,7 +1730,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#ff69b4;font-family:'Share Tech Mono',monospace}
 
 <?php elseif($theme == 19): /* 터미널 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "url('https://images.unsplash.com/photo-1629654297299-c8506221ca97?w=1920&q=80') center/cover fixed"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "url('https://images.unsplash.com/photo-1629654297299-c8506221ca97?w=1920&q=80') center/cover fixed"; ?>}
 body::before{content:'';position:fixed;top:0;left:0;right:0;bottom:0;background:repeating-linear-gradient(0deg,rgba(0,0,0,0.15) 0px,rgba(0,0,0,0.15) 1px,transparent 1px,transparent 2px);pointer-events:none;z-index:1}
 form{position:relative;z-index:10}
 .login-card{background:rgba(12,12,12,0.98);border:1px solid #333;border-radius:5px;box-shadow:0 10px 40px rgba(0,0,0,0.8);position:relative;overflow:hidden}
@@ -1585,7 +1770,7 @@ form{position:relative;z-index:10}
 .options input[type="checkbox"]{accent-color:#00ff00}
 
 <?php elseif($theme == 20): /* 스타워즈 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "#000"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "#000"; ?>}
 #starwarsContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(0,0,0,0.9);border:2px solid #ffe81f;border-radius:0;box-shadow:0 0 60px rgba(255,232,31,0.3),inset 0 0 30px rgba(255,232,31,0.05);position:relative}
@@ -1617,7 +1802,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#ffe81f;font-family:'Share Tech Mono',monospace}
 
 <?php elseif($theme == 21): /* 별자리 연결 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(180deg, #0a0a2e 0%, #1a1a4e 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(180deg, #0a0a2e 0%, #1a1a4e 100%)"; ?>}
 #constellationContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(10,10,46,0.92);border:2px solid rgba(100,149,237,0.5);border-radius:15px;backdrop-filter:blur(15px);box-shadow:0 0 50px rgba(100,149,237,0.25);position:relative}
@@ -1651,11 +1836,11 @@ form{position:relative;z-index:10}
 .group-select label{color:#6495ed}
 
 <?php elseif($theme == 22): /* 은하수 흐름 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "radial-gradient(ellipse at center, #1a0a3e 0%, #0a0a1e 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "radial-gradient(ellipse at center, #1a0a3e 0%, #0a0a1e 100%)"; ?>}
 #milkywayContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(26,10,62,0.9);border:2px solid rgba(138,43,226,0.5);border-radius:20px;backdrop-filter:blur(15px);box-shadow:0 0 60px rgba(138,43,226,0.25);position:relative;overflow:hidden}
-.login-card::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(ellipse,rgba(138,43,226,0.15) 0%,transparent 70%);animation:milkyRotate 20s linear infinite}
+.login-card::before{content:'';position:absolute;top:-50%;left:-50%;width:200%;height:200%;background:radial-gradient(ellipse,rgba(138,43,226,0.15) 0%,transparent 70%);animation:milkyRotate 20s linear infinite;pointer-events:none} /* ★ (2026-11-02 19:14) 장식이 입력칸 위를 덮어 휴대폰에서 찾기·2단계(OTP)·가입 칸을 누를 수 없던 것 */
 @keyframes milkyRotate{0%{transform:rotate(0deg)}100%{transform:rotate(360deg)}}
 .login-header{background:transparent;border-bottom:1px solid rgba(138,43,226,0.4);padding:25px 20px}
 .login-header h2{background:linear-gradient(90deg,#9370db,#ff69b4,#9370db);background-size:200% 100%;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:milkyText 4s linear infinite;font-family:'Orbitron',sans-serif;font-size:1.4em}
@@ -1686,7 +1871,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#9370db}
 
 <?php elseif($theme == 23): /* 네뷸라 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(135deg, #1a0a2e 0%, #2e1a4a 50%, #0a1a2e 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(135deg, #1a0a2e 0%, #2e1a4a 50%, #0a1a2e 100%)"; ?>}
 #nebulaContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(30,10,50,0.9);border:2px solid rgba(0,255,255,0.4);border-radius:15px;backdrop-filter:blur(15px);box-shadow:0 0 50px rgba(0,255,255,0.2),0 0 100px rgba(255,0,255,0.1);position:relative;overflow:hidden}
@@ -1718,7 +1903,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#00ffff}
 
 <?php elseif($theme == 24): /* 유성우 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "linear-gradient(180deg, #000020 0%, #000040 100%)"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "linear-gradient(180deg, #000020 0%, #000040 100%)"; ?>}
 #meteorContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(0,0,40,0.92);border:2px solid rgba(255,215,0,0.5);border-radius:15px;backdrop-filter:blur(15px);box-shadow:0 0 50px rgba(255,215,0,0.2);position:relative}
@@ -1751,7 +1936,7 @@ form{position:relative;z-index:10}
 .group-select label{color:#ffd700}
 
 <?php elseif($theme == 25): /* 딥 스페이스 */ ?>
-body{background:<?php echo $custom_bg ? "url('".h($custom_bg)."') center/cover fixed" : "#000005"; ?>}
+body{background:<?php echo $custom_bg ? "url('".mc_css_str($custom_bg)."') center/cover fixed" : "#000005"; ?>}
 #deepspaceContainer{position:fixed;top:0;left:0;right:0;bottom:0;z-index:1;pointer-events:none;overflow:hidden}
 form{position:relative;z-index:10}
 .login-card{background:rgba(0,15,30,0.95);border:2px solid rgba(0,150,255,0.5);border-radius:10px;box-shadow:0 0 60px rgba(0,150,255,0.25),inset 0 0 30px rgba(0,150,255,0.05);position:relative}
@@ -1822,6 +2007,7 @@ form{position:relative;z-index:10}
 <?php elseif($page === 'adduser'): ?>
 <form action="<?php echo h($_SERVER['PHP_SELF']) . $bidx_query; ?>" method="post">
 <input type="hidden" name="bidx" value="<?php echo $bidx; ?>">
+<?php echo csrf_field(); ?>
 <div class="login-card">
 <div class="login-header"><h2><?php echo render_login_logo($branding); ?></h2><div class="subtitle"><?php echo __h("adduser_title"); ?></div></div>
 <div class="login-body">
@@ -1893,11 +2079,19 @@ form{position:relative;z-index:10}
 <?php endif; ?>
 </div>
 <?php endif; ?>
+<?php if (!empty($_SESSION['pw_reset_id']) && empty($_GET['restart'])): // ★ (2026-11-04 07:49) 확인 코드 넣는 단계 ?>
+<div class="setup-notice"><?php echo __h("find_password_code_notice"); ?></div>
+<input type="text" name="reset_code" placeholder="<?php echo __h('find_password_code_placeholder'); ?>" required autofocus autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="12" style="text-align:center;letter-spacing:3px;font-family:monospace;">
+<input type="hidden" name="mode" value="find_password_code">
+<button type="submit"><?php echo __h("find_password_code_button"); ?></button>
+<div style="margin-top:10px;text-align:center;"><a href="login.php?mode=find_password&amp;restart=1" style="color:#6c757d;text-decoration:none;font-size:0.9em;"><?php echo __h("find_password_code_again"); ?></a></div>
+<?php else: if (!empty($_GET['restart'])) unset($_SESSION['pw_reset_id']); ?>
 <div class="setup-notice"><?php echo __("find_password_notice"); ?></div>
 <input type="text" name="id" placeholder="<?php echo __h('find_password_id_placeholder'); ?>" required autofocus>
 <input type="email" name="email" placeholder="<?php echo __h('find_password_email_placeholder'); ?>" required>
 <input type="hidden" name="mode" value="find_password">
 <button type="submit"><?php echo __h("find_password_button"); ?></button>
+<?php endif; ?>
 <div style="margin-top:15px;text-align:center;">
 <a href="login.php?mode=find_id" style="color:#6c757d;text-decoration:none;font-size:0.9em;"><?php echo __h("find_id"); ?></a>
 <span style="color:#ddd;margin:0 10px;">|</span>
@@ -1965,7 +2159,7 @@ if ($terms_settings['enabled'] && !empty($terms_settings['content'])):
 </div>
 <div class="login-body">
     <?php if (!empty($_SESSION['2fa_error'])): ?>
-    <div class="alert-box" style="margin-bottom:15px;"><?php echo h($_SESSION['2fa_error']); ?></div>
+    <div class="alert-box" style="position:static;transform:none;max-width:none;margin-bottom:15px;"><?php echo h($_SESSION['2fa_error']); ?></div><?php /* ★ (2026-11-02 20:11) 카드 안 제자리에 — fixed 라 일부 테마에서 카드 제목을 덮은 채 남았음 */ ?>
     <?php unset($_SESSION['2fa_error']); endif; ?>
     
     <!-- OTP 입력 (기본) -->
@@ -1994,9 +2188,9 @@ if ($terms_settings['enabled'] && !empty($terms_settings['content'])):
         <div class="setup-notice" style="margin-bottom:15px;">
             <?php echo __("2fa_backup_notice"); ?>
         </div>
-        
-        <input type="text" name="" id="backup-input" placeholder="XXXXXXXXXX" 
-               pattern="[0-9A-Za-z]{10}" maxlength="10" autocomplete="off"
+        <!-- ★ (2026-10-30) 백업 코드는 8자리(generate_backup_codes) — 전에는 10자리만 받아 제출 자체가 막혔음 -->
+        <input type="text" name="" id="backup-input" placeholder="XXXXXXXX" 
+               pattern="[0-9A-Za-z\-]{8,11}" maxlength="11" autocomplete="off"
                style="font-size:1.5em; letter-spacing:0.2em; text-align:center; font-family:monospace; text-transform:uppercase;">
         
         <input type="hidden" name="mode" value="2fa_verify">
@@ -2677,8 +2871,8 @@ initShelves();window.addEventListener('resize',initShelves);
 <form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
 <div class="login-card">
 <div class="login-header">
-    <div class="logo-icon" style="width:65px;height:65px;margin:0 auto 12px;background:linear-gradient(180deg,#ff4500,#ff6600,#ff8c00);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 30px rgba(255,69,0,0.6);animation:fireGlow 1s infinite alternate;">
-        <span style="font-size:2em;animation:fireFloat 0.5s infinite alternate;">🔥</span>
+    <div class="logo-icon" style="width:65px;height:65px;margin:0 auto 12px;background:linear-gradient(180deg,#ff4500,#ff6600,#ff8c00);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 0 30px rgba(255,69,0,0.6);animation:fireLogoGlow 1s infinite alternate;">
+        <span style="font-size:2em;animation:fireLogoFloat 0.5s infinite alternate;">🔥</span>
     </div>
     <h2><?php echo h($branding['logo_text'] ?? 'INFERNO'); ?></h2>
     <div class="subtitle"><?php echo h($branding['subtitle'] ?? __('theme14_subtitle_default')); ?></div>
@@ -2712,14 +2906,14 @@ initShelves();window.addEventListener('resize',initShelves);
     <div class="login-footer"><?php echo h($branding['copyright'] ?? '🔥 myComix © 2026'); ?></div>
 </div>
 </form>
-<style>@keyframes fireGlow{from{box-shadow:0 0 30px rgba(255,69,0,0.6)}to{box-shadow:0 0 50px rgba(255,140,0,0.8)}}@keyframes fireFloat{from{transform:translateY(0)}to{transform:translateY(-3px)}}</style>
+<style>/* ★ (2026-11-02 20:11) 이름 따로 — 같은 이름이라 카드 위 🔥 장식(translateX(-50%))이 덮여 오른쪽으로 밀렸음 */@keyframes fireLogoGlow{from{box-shadow:0 0 30px rgba(255,69,0,0.6)}to{box-shadow:0 0 50px rgba(255,140,0,0.8)}}@keyframes fireLogoFloat{from{transform:translateY(0)}to{transform:translateY(-3px)}}</style>
 
 <?php elseif($theme == 15): /* 아쿠아리움 - 수족관 스타일 */ ?>
 <form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
 <div class="login-card">
 <div class="login-header">
     <div class="logo-icon" style="width:65px;height:65px;margin:0 auto 12px;background:linear-gradient(180deg,#00ced1,#008b8b);border-radius:50%;display:flex;align-items:center;justify-content:center;box-shadow:0 5px 20px rgba(0,206,209,0.4);">
-        <span style="font-size:2em;animation:fishSwim 2s ease-in-out infinite;">🐠</span>
+        <span style="font-size:2em;animation:fishLogoSwim 2s ease-in-out infinite;">🐠</span>
     </div>
     <h2><?php echo h($branding['logo_text'] ?? 'AQUA'); ?></h2>
     <div class="subtitle"><?php echo h($branding['subtitle'] ?? __('theme15_subtitle_default')); ?></div>
@@ -2753,7 +2947,7 @@ initShelves();window.addEventListener('resize',initShelves);
     <div class="login-footer"><?php echo h($branding['copyright'] ?? '🐠 myComix © 2026'); ?></div>
 </div>
 </form>
-<style>@keyframes fishSwim{0%,100%{transform:translateX(0) scaleX(1)}50%{transform:translateX(5px) scaleX(1)}}</style>
+<style>/* ★ (2026-11-02 21:37) 이름 따로(테마 15 배경 물고기 fishBgSwim 과 겹쳐 물고기가 화면 밖에 머물렀음) */@keyframes fishLogoSwim{0%,100%{transform:translateX(0) scaleX(1)}50%{transform:translateX(5px) scaleX(1)}}</style>
 
 <?php elseif($theme == 16): /* 윈터 원더랜드 - 겨울 스타일 */ ?>
 <form action="<?php echo h($_SERVER['PHP_SELF']); ?>" method="post">
@@ -2904,7 +3098,7 @@ initShelves();window.addEventListener('resize',initShelves);
     </div>
     <input type="hidden" name="bidx" value="0">
     <input type="hidden" name="mode" value="login">
-    <button type="submit">> connect</button>
+    <button type="submit">connect</button><?php /* ★ (2026-11-02 19:14) 앞의 '> ' 는 CSS(::before)가 붙임 — 둘 다 있어 '> > connect' 로 보였음 */ ?>
 </div>
 <?php echo render_find_links($find_id_enabled, $find_password_enabled, $registration_enabled); ?>
     <div class="login-footer"><?php echo h($branding['copyright'] ?? 'GNU/Linux 6.0'); ?></div>
@@ -3452,7 +3646,7 @@ initShelves();window.addEventListener('resize',initShelves);
     scanLine.style.cssText = `
         position:absolute;top:0;left:0;right:0;height:2px;
         background:linear-gradient(90deg,transparent,#00d4ff,transparent);
-        animation:jarvisScan 3s linear infinite;
+        animation:jarvisScanLine 3s linear infinite;
     `;
     container.appendChild(scanLine);
     
@@ -3474,7 +3668,7 @@ initShelves();window.addEventListener('resize',initShelves);
     const style = document.createElement('style');
     style.textContent = `
         @keyframes jarvisRotate{from{transform:translate(-50%,-50%) rotate(0deg)}to{transform:translate(-50%,-50%) rotate(360deg)}}
-        @keyframes jarvisScan{0%{top:0;opacity:0}50%{opacity:1}100%{top:100%;opacity:0}}
+        @keyframes jarvisScanLine{0%{top:0;opacity:0}50%{opacity:1}100%{top:100%;opacity:0}}
         @keyframes jarvisFade{0%{opacity:0;transform:scale(0.5)}50%{opacity:1}100%{opacity:0;transform:scale(1)}}
     `;
     document.head.appendChild(style);
@@ -3692,7 +3886,7 @@ initShelves();window.addEventListener('resize',initShelves);
             top:${Math.random() * 80 + 10}%;
             font-size:${Math.random() * 20 + 20}px;
             transform:scaleX(${isLeft ? 1 : -1});
-            animation:fishSwim ${Math.random() * 10 + 10}s linear forwards;
+            animation:fishBgSwim ${Math.random() * 10 + 10}s linear forwards;
             --direction:${isLeft ? '1' : '-1'};
         `;
         container.appendChild(fish);
@@ -3722,7 +3916,7 @@ initShelves();window.addEventListener('resize',initShelves);
     
     const style = document.createElement('style');
     style.textContent = `
-        @keyframes fishSwim{0%{transform:translateX(0) scaleX(var(--direction))}100%{transform:translateX(calc(var(--direction) * 120vw)) scaleX(var(--direction))}}
+        @keyframes fishBgSwim{0%{transform:translateX(0) scaleX(var(--direction))}100%{transform:translateX(calc(var(--direction) * 120vw)) scaleX(var(--direction))}}
         @keyframes bubbleFloat{0%{transform:translateY(0);opacity:0.8}100%{transform:translateY(-100vh);opacity:0}}
     `;
     document.head.appendChild(style);
@@ -3808,7 +4002,7 @@ initShelves();window.addEventListener('resize',initShelves);
             
             const sx = (star.x / star.z) * 300 + centerX;
             const sy = (star.y / star.z) * 300 + centerY;
-            const size = (1 - star.z / canvas.width) * 3;
+            const size = Math.max(0, (1 - star.z / canvas.width) * 3); // ★ (2026-11-02 19:14) 화면이 좁아지면(회전) 음수가 되어 arc 오류로 애니메이션이 멈췄음
             
             ctx.beginPath();
             ctx.fillStyle = `rgba(255,232,31,${1 - star.z / canvas.width})`;
@@ -4180,7 +4374,7 @@ initShelves();window.addEventListener('resize',initShelves);
             const k = 200 / star.z;
             const px = (star.x - cx) * k + cx;
             const py = (star.y - cy) * k + cy;
-            const size = (1 - star.z / canvas.width) * 4;
+            const size = Math.max(0, (1 - star.z / canvas.width) * 4); // ★ (2026-11-02 19:14) 위와 같음
             const alpha = 1 - star.z / canvas.width;
             
             // 별 꼬리 (속도감)
@@ -4376,5 +4570,6 @@ initShelves();window.addEventListener('resize',initShelves);
 <!-- ✅ 페이지 전환 (bootstrap.php 함수 사용으로 중복 코드 제거) -->
 <?php render_page_transition_script(false); ?>
 
+<?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 </body>
 </html>

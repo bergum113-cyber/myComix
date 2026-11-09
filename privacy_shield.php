@@ -93,7 +93,7 @@ $_debug = $_privacy_settings['debug'] ?? false;
   /* ===========================
    * 상태 플래그
    * =========================== */
-  var BLANK_URL = '<?php echo $_blank_url; ?>';
+  var BLANK_URL = <?php echo function_exists('js') ? js((string)$_blank_url) : json_encode((string)$_blank_url); ?>; // ★ (2026-11-04 09:39) 따옴표가 든 주소에도 깨지지 않게(blank.php 와 같게)
   var jumped = false;
   var isInternalNavigation = false;
   var pendingHide = false;   // hidden 전환이 시작됐는지(빠른 백그라운드에서 pagehide가 stale visible로 와도 보강)

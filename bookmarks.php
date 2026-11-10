@@ -79,6 +79,7 @@ function bm_item($type, $no, $path, $mark) {
     $page = preg_match('/^image(\d+)$/', $anchor, $m) ? (int)$m[1] + 1 : 0; // ★ (2026-11-02 19:10) imageN 은 0부터(뷰어 그림 id·책갈피 알림과 같게 +1) — 10번째 쪽이 '9쪽'으로 보였음
     // ★ (2026-11-02 01:01) PDF 위치('pdf_쪽', 1부터)도 쪽 표시 / 자동 저장(이어 보기)은 쪽 안 위치(f)까지 붙여 보던 줄로 열리게
     if (!$page && preg_match('/^pdf_(\d{1,6})$/', $anchor, $m)) $page = (int)$m[1];
+    if ($type === 'autosave' && is_array($mark) && is_int($mark['vp'] ?? null) && $page > 0 && $mark['vp'] + 1 >= $page) $page = $mark['vp'] + 1; // ★ (2026-11-10 17:23, 펜닐 요청 — fix103) 이어 보기 쪽 표시는 화면에 가장 넓게 보이던 쪽(뷰어 위 막대·서재와 같게) — 여는 위치는 그대로
     if ($type === 'autosave' && is_array($mark) && preg_match('/^(image|pdf_)\d+$/', $anchor)) {
         $_bf = $mark['f'] ?? null;
         if (is_int($_bf) && $_bf >= 0 && $_bf <= 999) $url .= 'f' . $_bf;
@@ -91,7 +92,7 @@ function bm_item($type, $no, $path, $mark) {
         'enc'     => encode_url($path),
         'bidx'    => $ib,
         'url'     => $url,
-        'thumb'   => "thumb.php?file=" . encode_url($path) . "&bidx=" . $tb,
+        'thumb'   => "thumb.php?file=" . encode_url($path) . "&bidx=" . $tb . (function_exists('mc_file_cover_v_rel') ? mc_file_cover_v_rel($tb, $path) : ''), // ★ (2026-11-10 16:08 fix101) 직접 고른 표지면 주소가 바뀜
         'title'   => mark_display_title($name),   // 이미 HTML 이스케이프됨
         'parent'  => count($parts) > 1 ? implode('/', array_slice($parts, 0, -1)) : '',
         'page'    => $page,
@@ -152,7 +153,7 @@ if ($_ebook_max > 0) {
                 'enc'     => encode_url($_rel),
                 'bidx'    => $_kb,
                 'url'     => ($_ext === 'epub' ? 'epub_viewer.php' : 'txt_viewer.php') . '?file=' . encode_url($_rel) . '&bidx=' . $_kb . '&note=' . $_id,
-                'thumb'   => 'thumb.php?file=' . encode_url($_rel) . '&bidx=' . $_kb,
+                'thumb'   => 'thumb.php?file=' . encode_url($_rel) . '&bidx=' . $_kb . (function_exists('mc_file_cover_v_rel') ? mc_file_cover_v_rel($_kb, $_rel) : ''), // ★ (2026-11-10 16:08 fix101)
                 'title'   => mark_display_title($_name),
                 'parent'  => count($_parts) > 1 ? implode('/', array_slice($_parts, 0, -1)) : '',
                 'ch'      => is_string($_it['ch'] ?? null) ? $_it['ch'] : '',
@@ -370,6 +371,7 @@ if ($_mc_thumb_css !== ''): ?>
 <?php endif; ?>
 </div>
 
+<?php echo function_exists('mc_pager_group_js') ? mc_pager_group_js() : ''; /* ★ (2026-11-10 18:39 fix104) 쪽 번호 묶음 — 관리자 설정 페이지 네비게이션 PC/모바일 */ ?>
 <script>
 (function () {
   var CSRF = <?php echo json_encode($csrf_token); ?>;
@@ -422,6 +424,16 @@ if ($_mc_thumb_css !== ''): ?>
     if (!nav) return;
     if (pages <= 1) { nav.hidden = true; nav.innerHTML = ''; return; }
     nav.hidden = false;
+    // ★ (2026-11-10 18:39, 펜닐 요청 — fix104) 폴더 목록과 같은 묶음 방식(관리자 설정 페이지 네비게이션 PC/모바일) — 전엔 처음·끝·지금 앞뒤 2쪽(…)
+    var G = window.mcPgGroup;
+    if (G) {
+      var R = G.range(page, pages), b = function (p, label, tip, on) { return '<button type="button" class="bm-pg' + (on ? ' on' : '') + '" data-pg="' + p + '"' + (on ? ' aria-current="page"' : '') + (tip ? ' aria-label="' + tip + '" title="' + tip + '"' : '') + '>' + label + '</button>'; };
+      var gh = (R.first ? b(1, '«', G.t.first) : '') + (R.prev ? b(R.prev, '‹', G.t.prev) : '');
+      for (var gp = R.st; gp <= R.en; gp++) gh += b(gp, String(gp), '', gp === page);
+      if (R.next) gh += b(R.next, '›', G.t.next);
+      nav.innerHTML = gh;
+      return;
+    }
     var html = '<button type="button" class="bm-pg" data-pg="' + (page - 1) + '"' + (page <= 1 ? ' disabled' : '') + ' aria-label="' + T_PREV + '" title="' + T_PREV + '">‹</button>';
     var last = 0;
     for (var p = 1; p <= pages; p++) {
@@ -435,6 +447,7 @@ if ($_mc_thumb_css !== ''): ?>
   }
   var secs = document.querySelectorAll('.bm-sec');
   for (var s = 0; s < secs.length; s++) paginate(secs[s]);
+  if (window.mcPgGroup) window.mcPgGroup.onChange(function () { for (var s2 = 0; s2 < secs.length; s2++) paginate(secs[s2], parseInt(secs[s2].getAttribute('data-page') || '1', 10)); }); // ★ (2026-11-10 18:39 fix104) 폭이 768px 를 넘나들면 묶음 개수를 다시
   document.addEventListener('click', function (ev) {
     var b = ev.target && ev.target.closest ? ev.target.closest('.bm-pg') : null;
     if (!b || b.disabled || b.classList.contains('on')) return;

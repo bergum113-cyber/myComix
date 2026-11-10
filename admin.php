@@ -2409,8 +2409,10 @@ if (isset($_POST['mode']) && $_POST['mode'] === 'security_settings') {
     $settings = [
         'enabled' => isset($_POST['ip_block_enabled']),
         'mode' => isset($_POST['ip_block_mode']) ? (array)$_POST['ip_block_mode'] : [],
-        'blocked_countries' => array_filter(array_map('trim', explode(',', $_POST['blocked_countries'] ?? ''))),
-        'allowed_countries' => array_filter(array_map('trim', explode(',', $_POST['allowed_countries'] ?? ''))),
+        // ★ (2026-11-10 07:20) 국가 코드는 대문자로 저장 — 판정은 GeoIP 의 대문자 코드(KR)와 그대로 비교해서, 'kr' 로 넣으면 허용 모드에선 한국이 막히고 차단 모드에선 안 막혔음
+        //   (입력 칸 옆 국가 단추는 이미 대문자로 비교해 'kr' 도 KR 선택으로 보였음). 저장할 때만 바꿈 — 이미 저장된 값은 다시 저장하기 전까지 그대로
+        'blocked_countries' => array_filter(array_map('strtoupper', array_map('trim', explode(',', $_POST['blocked_countries'] ?? '')))),
+        'allowed_countries' => array_filter(array_map('strtoupper', array_map('trim', explode(',', $_POST['allowed_countries'] ?? '')))),
         'blocked_ips' => array_filter(array_map('trim', preg_split('/[\r\n,]+/', $_POST['blocked_ips'] ?? ''))),
         'allowed_ips' => array_filter(array_map('trim', preg_split('/[\r\n,]+/', $_POST['allowed_ips'] ?? ''))),
         'whitelist_ips' => array_filter(array_map('trim', preg_split('/[\r\n,]+/', $_POST['whitelist_ips'] ?? ''))),
@@ -2962,6 +2964,7 @@ echo json_encode($_i18n_adm_data, JSON_UNESCAPED_UNICODE);
 <?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-11-07 fix36) 아이콘 변환을 본문보다 먼저 시작 — 새로고침 때 예전 이모지가 잠깐 보였다가 바뀌던 것(펜닐 제보) / 페이지 끝의 같은 스크립트는 다시 실행되지 않음 */ ?>
 </head>
 <body class="text-center mc-adm">
+<?php echo function_exists('mc_pager_group_js') ? mc_pager_group_js() : ''; /* ★ (2026-11-10 19:19, 펜닐 요청 — fix105) 쪽 번호 단추 묶음 — 관리자 설정 페이지 네비게이션 PC/모바일(폴더 목록과 같음) */ ?>
 <?php if($message):
     // ★ (2026-11-02 09:10) 실패(❌)·주의(⚠️) 알림은 빨강·노랑으로, 앞 이모지는 한 번만 — 전에는 모두 초록에 '✅ ❌ …'처럼 겹쳐 나왔음
     $_am_cls = 'success'; $_am_ico = '✅'; $_am_txt = (string)$message;
@@ -3477,8 +3480,8 @@ foreach ($dirs as $idx => $dir): ?>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_file_list"); ?></td><td class=""><input type="number" name="maxview_file" class="form-control" value="<?php echo h($maxview_file); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_file_list_help'); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_list_mobile"); ?></td><td class=""><input type="number" name="maxview_folder_mobile" class="form-control" value="<?php echo h($maxview_folder_mobile); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_folder_list_mobile_help'); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_file_list_mobile"); ?></td><td class=""><input type="number" name="maxview_file_mobile" class="form-control" value="<?php echo h($maxview_file_mobile); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_file_list_mobile_help'); ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_pc"); ?></td><td class=""><input type="number" name="pages_per_group" class="form-control" value="<?php echo h($pages_per_group); ?>" min="1" required></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_mobile"); ?></td><td class=""><input type="number" name="pages_per_group_mobile" class="form-control" value="<?php echo h($pages_per_group_mobile); ?>" min="1" required></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_pc"); ?></td><td class=""><input type="number" name="pages_per_group" class="form-control" value="<?php echo h($pages_per_group); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_page_nav_pc_help'); /* ★ (2026-11-10 22:26, 펜닐 요청) 이 설정이 쓰이는 화면 */ ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_mobile"); ?></td><td class=""><input type="number" name="pages_per_group_mobile" class="form-control" value="<?php echo h($pages_per_group_mobile); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_page_nav_mobile_help'); /* ★ (2026-11-10 22:26, 펜닐 요청) */ ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_autosave"); ?></td><td class=""><input type="number" name="max_autosave" class="form-control" value="<?php echo h($max_autosave); ?>" min="1" required></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_bookmark"); ?></td><td class=""><input type="number" name="max_bookmark" class="form-control" value="<?php echo h($max_bookmark); ?>" min="1" required></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_ebook_bookmark"); ?></td><td class=""><input type="number" name="max_ebook_bookmark" class="form-control" value="<?php echo h($max_ebook_bookmark); ?>" min="0" max="500" required><small class="text-muted"><?php echo __h('adm_cfg_max_ebook_bookmark_help'); ?></small></td></tr><?php // ★ (2026-11-03 00:07) ?>
@@ -8609,27 +8612,8 @@ endforeach;
     
     <?php if ($total_pages > 1): ?>
     <nav class="mx-auto my-2">
-        <ul class="pagination pagination-sm mb-0 justify-content-center">
-            <?php if ($current_page > 1): ?>
-            <li class="page-item"><a class="page-link" href="?log_page=1&tab=logs">«</a></li>
-            <li class="page-item"><a class="page-link" href="?log_page=<?php echo $current_page - 1; ?>&tab=logs">‹</a></li>
-            <?php endif; ?>
-            
-            <?php
-            $start_page = max(1, $current_page - 2);
-            $end_page = min($total_pages, $current_page + 2);
-            for ($p = $start_page; $p <= $end_page; $p++):
-            ?>
-            <li class="page-item <?php echo $p == $current_page ? 'active' : ''; ?>">
-                <a class="page-link" href="?log_page=<?php echo $p; ?>&tab=logs"><?php echo $p; ?></a>
-            </li>
-            <?php endfor; ?>
-            
-            <?php if ($current_page < $total_pages): ?>
-            <li class="page-item"><a class="page-link" href="?log_page=<?php echo $current_page + 1; ?>&tab=logs">›</a></li>
-            <li class="page-item"><a class="page-link" href="?log_page=<?php echo $total_pages; ?>&tab=logs">»</a></li>
-            <?php endif; ?>
-        </ul>
+        <?php [$__pga, $__pgl] = mc_pager_bs($current_page, $total_pages, function ($p) { return '?log_page=' . (int)$p . '&tab=logs'; }); /* ★ (2026-11-10 19:19 fix105) 폴더 목록과 같은 묶음 방식 — 전엔 앞뒤 2쪽 + « ‹ › » */ ?>
+        <ul class="pagination pagination-sm mb-0 justify-content-center" <?php echo $__pga; ?>><?php echo $__pgl; ?></ul>
     </nav>
     <div></div>
     <?php endif; ?>
@@ -8921,26 +8905,8 @@ function setDateRange(range) {
 
 <?php if ($activity_total_pages > 1): ?>
 <nav aria-label="Activity log pagination">
-<ul class="pagination pagination-sm justify-content-center mb-0">
-    <?php if ($activity_page > 1): ?>
-    <li class="page-item"><a class="page-link" href="?activity_page=1<?php echo $filter_query; ?>#logs">«</a></li>
-    <li class="page-item"><a class="page-link" href="?activity_page=<?php echo $activity_page - 1; ?><?php echo $filter_query; ?>#logs">‹</a></li>
-    <?php endif; ?>
-    
-    <?php
-    $start_page = max(1, $activity_page - 2);
-    $end_page = min($activity_total_pages, $activity_page + 2);
-    for ($p = $start_page; $p <= $end_page; $p++): ?>
-    <li class="page-item <?php echo $p == $activity_page ? 'active' : ''; ?>">
-        <a class="page-link" href="?activity_page=<?php echo $p; ?><?php echo $filter_query; ?>#logs"><?php echo $p; ?></a>
-    </li>
-    <?php endfor; ?>
-    
-    <?php if ($activity_page < $activity_total_pages): ?>
-    <li class="page-item"><a class="page-link" href="?activity_page=<?php echo $activity_page + 1; ?><?php echo $filter_query; ?>#logs">›</a></li>
-    <li class="page-item"><a class="page-link" href="?activity_page=<?php echo $activity_total_pages; ?><?php echo $filter_query; ?>#logs">»</a></li>
-    <?php endif; ?>
-</ul>
+<?php [$__pga, $__pgl] = mc_pager_bs($activity_page, $activity_total_pages, function ($p) use ($filter_query) { return '?activity_page=' . (int)$p . $filter_query . '#logs'; }); /* ★ (2026-11-10 19:19 fix105) 폴더 목록과 같은 묶음 방식 */ ?>
+<ul class="pagination pagination-sm justify-content-center mb-0" <?php echo $__pga; ?>><?php echo $__pgl; ?></ul>
 </nav>
 <?php endif; ?>
 
@@ -9189,6 +9155,8 @@ function renderLoginLogs() {
     // 페이지네이션
     if (totalPages > 1) {
         html += '<nav><ul class="pagination pagination-sm justify-content-center mb-0">';
+        if (window.mcPgGroup) html += window.mcPgGroup.bs(loginLogPage, totalPages, { click: function (p) { return 'changeLoginLogPage(' + p + ')'; } }); // ★ (2026-11-10 19:19 fix105) 폴더 목록과 같은 묶음 방식
+        else {
         html += '<li class="page-item ' + (loginLogPage === 1 ? 'disabled' : '') + '"><a class="page-link" href="#" onclick="changeLoginLogPage(' + (loginLogPage - 1) + ');return false;">«</a></li>';
         
         var startPage = Math.max(1, loginLogPage - 2);
@@ -9200,6 +9168,7 @@ function renderLoginLogs() {
         }
         
         html += '<li class="page-item ' + (loginLogPage === totalPages ? 'disabled' : '') + '"><a class="page-link" href="#" onclick="changeLoginLogPage(' + (loginLogPage + 1) + ');return false;">»</a></li>';
+        }
         html += '</ul></nav>';
         html += '<div class="text-center text-muted" style="font-size:11px;">' + loginLogPage + ' / ' + totalPages + '</div>';
     }
@@ -9254,6 +9223,8 @@ function renderActivityLogs() {
     // 페이지네이션
     if (totalPages > 1) {
         html += '<nav><ul class="pagination pagination-sm justify-content-center mb-0">';
+        if (window.mcPgGroup) html += window.mcPgGroup.bs(activityLogPage, totalPages, { click: function (p) { return 'changeActivityLogPage(' + p + ')'; } }); // ★ (2026-11-10 19:19 fix105) 폴더 목록과 같은 묶음 방식
+        else {
         html += '<li class="page-item ' + (activityLogPage === 1 ? 'disabled' : '') + '"><a class="page-link" href="#" onclick="changeActivityLogPage(' + (activityLogPage - 1) + ');return false;">«</a></li>';
         
         var startPage = Math.max(1, activityLogPage - 2);
@@ -9265,6 +9236,7 @@ function renderActivityLogs() {
         }
         
         html += '<li class="page-item ' + (activityLogPage === totalPages ? 'disabled' : '') + '"><a class="page-link" href="#" onclick="changeActivityLogPage(' + (activityLogPage + 1) + ');return false;">»</a></li>';
+        }
         html += '</ul></nav>';
         html += '<div class="text-center text-muted" style="font-size:11px;">' + activityLogPage + ' / ' + totalPages + '</div>';
     }
@@ -10996,6 +10968,8 @@ $smtp_from_name = $smtp['from_name'] ?? 'myComix';
     
     function renderDuplicatePagination(totalPages) {
         let html = '<nav class="my-2"><ul class="pagination pagination-sm justify-content-center mb-0">';
+        // ★ (2026-11-10 19:19, 펜닐 요청 — fix105) 폴더 목록과 같은 묶음 방식(관리자 설정 페이지 네비게이션 PC/모바일)
+        if (window.mcPgGroup) return html + window.mcPgGroup.bs(duplicatePage, totalPages, { cls: 'dup-page-link', attr: function (p) { return 'data-page="' + p + '"'; } }) + '</ul></nav>';
         
         // 이전 버튼
         html += `<li class="page-item ${duplicatePage <= 1 ? 'disabled' : ''}">

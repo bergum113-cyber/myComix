@@ -2476,7 +2476,7 @@ function mc_lib_view_url($bidx, $rel, $page = null, $from_start = false) {
 }
 
 function mc_lib_thumb_url($bidx, $rel) {
-    return 'thumb.php?file=' . encode_url($rel) . '&bidx=' . (int)$bidx;
+    return 'thumb.php?file=' . encode_url($rel) . '&bidx=' . (int)$bidx . (function_exists('mc_file_cover_v_rel') ? mc_file_cover_v_rel((int)$bidx, $rel) : ''); // ★ (2026-11-10 16:08 fix101) 직접 고른 표지면 주소가 바뀜
 }
 
 /** 권한 있는 시리즈인지(권 하나라도 볼 수 있으면) */

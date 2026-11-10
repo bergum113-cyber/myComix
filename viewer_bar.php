@@ -263,10 +263,13 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
   <?php else: ?>
   <div class="mcv-hr"></div>
   <?php echo $_mcv_view_items; ?>
-  <?php if (!empty($_viewer_is_admin)): // ★ (2026-11-04 07:44) 표지 지정은 관리자만 ?>
-  <div class="mcv-hr"></div>
-  <button type="button" class="mcv-mi" role="menuitem" data-act="cover"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover'); ?></button>
   <?php endif; ?>
+  <?php if (!empty($_viewer_is_admin)): // ★ (2026-11-04 07:44) 표지 지정은 관리자만 / ★ (2026-11-10 13:54, 펜닐 요청 — fix98) 지금 보는 쪽을 파일 표지·폴더 표지로, 자동으로 되돌리기(툰·북모드 둘 다) ?>
+  <div class="mcv-hr"></div>
+  <div class="mcv-hd"><?php echo __h('mcv2_cover'); ?></div>
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-file"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_file'); ?></button>
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-folder"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_folder'); ?></button>
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-auto"><?php echo $_mcv_ico($_mcv_i['resume']); ?><?php echo __h('mcv2_cover_auto'); ?></button>
   <?php endif; ?>
   <div class="mcv-hr"></div>
   <a class="mcv-mi" role="menuitem" href="<?php echo $_mcv_prev !== '' ? h($_mcv_prev) : '#'; ?>" data-act="vol"<?php echo $_mcv_prev === '' ? ' aria-disabled="true" tabindex="-1"' : ''; ?>><?php echo $_mcv_ico($_mcv_i['prev']); ?><?php echo __h('mcv2_prev_vol'); ?></a>

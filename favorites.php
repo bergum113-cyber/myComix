@@ -78,7 +78,7 @@ foreach ($favorites_arr as $file_path => $fav_data) {
         'enc'     => encode_url($file_path),
         'bidx'    => $fav_bidx,
         'url'     => $url,
-        'thumb'   => "thumb.php?file=" . encode_url($file_path) . "&bidx=" . $fav_bidx,
+        'thumb'   => "thumb.php?file=" . encode_url($file_path) . "&bidx=" . $fav_bidx . (function_exists('mc_file_cover_v_rel') ? mc_file_cover_v_rel($fav_bidx, $file_path) : ''), // ★ (2026-11-10 16:08 fix101) 직접 고른 표지면 주소가 바뀜(하루 캐시에 막히지 않게)
         'title'   => mark_display_title($name),   // 이미 HTML 이스케이프됨
         'parent'  => $parent,
         'kind'    => $kind,
@@ -277,6 +277,7 @@ if ($_mc_thumb_css !== ''): ?>
 <?php endif; ?>
 </div>
 
+<?php echo function_exists('mc_pager_group_js') ? mc_pager_group_js() : ''; /* ★ (2026-11-10 18:39 fix104) 쪽 번호 묶음 — 관리자 설정 페이지 네비게이션 PC/모바일 */ ?>
 <script>
 (function () {
   var shelf = document.getElementById('favShelf');
@@ -386,6 +387,16 @@ if ($_mc_thumb_css !== ''): ?>
       else { el = document.createElement('a'); el.href = pageUrl(p); el.setAttribute('data-p', String(p)); if (aria) el.setAttribute('aria-label', aria); }
       el.textContent = label; pager.appendChild(el);
     }
+    // ★ (2026-11-10 18:39, 펜닐 요청 — fix104) 폴더 목록과 같은 묶음 방식(관리자 설정 페이지 네비게이션 PC/모바일) — 전엔 지금 쪽 앞뒤 3쪽 + 처음·끝(…)
+    var G = window.mcPgGroup;
+    if (G) {
+      var R = G.range(curPage, pages);
+      if (R.first) add(1, '«', G.t.first);
+      if (R.prev) add(R.prev, '‹', G.t.prev);
+      for (var p = R.st; p <= R.en; p++) add(p, String(p));
+      if (R.next) add(R.next, '›', G.t.next);
+      return;
+    }
     if (curPage > 1) add(curPage - 1, '‹', MSG_PREV);
     for (var p = 1; p <= pages; p++) {
       if (p !== 1 && p !== pages && Math.abs(p - curPage) > 3) {
@@ -396,6 +407,7 @@ if ($_mc_thumb_css !== ''): ?>
     }
     if (curPage < pages) add(curPage + 1, '›', MSG_NEXT);
   }
+  if (window.mcPgGroup) window.mcPgGroup.onChange(function () { paginate(); }); // 폭이 768px 를 넘나들면(화면 돌림) 묶음 개수를 다시
   if (pager) {
     pager.addEventListener('click', function (ev) {
       var a = ev.target && ev.target.closest ? ev.target.closest('a[data-p]') : null;

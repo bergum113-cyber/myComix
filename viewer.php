@@ -3538,31 +3538,92 @@ function set_cover() {
 	// ★ (2026-10-30) bookmark.php 가 set_cover 에 삭제 토큰을 요구하는데 안 붙여서 늘 403 이던 문제
 	$.get("bookmark.php?mode=set_cover&file=" + safeFile + "&bidx=<?php echo $current_bidx; ?>&token=<?php echo urlencode($_viewer_delete_token); ?>", function( data ) {
 		document.getElementById("info").value = data;
+		if (typeof mcCoverBump === 'function') mcCoverBump('folder'); // ★ (2026-11-10 13:55 fix98) 목록이 새로고침 없이 바뀌게
 	}).fail(function (x) { document.getElementById("info").value = (x && x.responseText) ? String(x.responseText).slice(0, 80) : '✕'; }); // ★ (2026-11-04 09:43) 실패(쓸 그림 없음·권한)도 알림
 }
 <?php if ($_viewer_is_admin): ?>
+/* ★ (2026-11-10 13:55, 펜닐 요청 — fix98) 표지를 바꾼 뒤 목록이 새로고침 없이 바뀌게 — index.php 가 localStorage 'mc_cover_bump' 를 봄(k: file·folder·auto) */
+function mcCoverBump(k) { try { localStorage.setItem('mc_cover_bump', JSON.stringify({ t: Date.now(), f: <?php echo js((string)$getfile); ?>, d: <?php echo js(rtrim(str_replace('\\', '/', dirname(str_replace('\\', '/', (string)$getfile))), '/')); ?>, k: k })); } catch (e) {} }
 /* ★ (2026-11-08 fix80, 펜닐 요청) 보고 있는 장면(동영상)·쪽(PDF)을 이 폴더의 표지로 — 화면 그림을 JPEG 로 보내 bookmark.php?mode=set_cover_img 가 [cover].jpg 로 저장(관리자·CSRF) */
-function mcCoverPost(dataUrl, done) {
+/* ★ (2026-11-10 13:55 fix98) target 'file' 이면 이 파일의 표지(목록 카드)로 — 안 주면 예전처럼 폴더 표지 */
+function mcCoverPost(dataUrl, done, target) {
 	try {
 		var fd = new FormData();
 		fd.append('mode', 'set_cover_img'); fd.append('file', <?php echo js((string)$getfile); ?>);
 		fd.append('csrf_token', <?php echo js((string)$_viewer_csrf); ?>); fd.append('image', dataUrl);
+		if (target === 'file') fd.append('target', 'file');
 		fetch('bookmark.php?bidx=<?php echo (int)$current_bidx; ?>', { method: 'POST', body: fd, credentials: 'same-origin' })
-			.then(function (r) { return r.text().then(function (t) { done(r.ok ? t : String(t || '✕').slice(0, 80), r.ok); }); })
+			.then(function (r) { return r.text().then(function (t) { if (r.ok) mcCoverBump(target === 'file' ? 'file' : 'folder'); done(r.ok ? t : String(t || '✕').slice(0, 80), r.ok); }); })
 			.catch(function () { done('✕', false); });
 	} catch (e) { done('✕', false); }
 }
-function mcCoverFromVideo() {
+/* ★ (2026-11-10 13:55 fix98) 표지를 자동으로 되돌림 — 이 파일에 직접 고른 표지를 지우고 폴더 표지도 자동(첫 파일의 첫 쪽)으로 */
+function mcCoverAuto(done) {
+	if (!confirm(<?php echo js(__('mcv2_cover_auto_q')); ?>)) return;
+	try {
+		var fd = new FormData();
+		fd.append('mode', 'cover_auto'); fd.append('file', <?php echo js((string)$getfile); ?>);
+		fd.append('csrf_token', <?php echo js((string)$_viewer_csrf); ?>);
+		fetch('bookmark.php?bidx=<?php echo (int)$current_bidx; ?>', { method: 'POST', body: fd, credentials: 'same-origin' })
+			.then(function (r) { return r.text().then(function (t) { if (r.ok) mcCoverBump('auto'); done(r.ok ? t : String(t || '✕').slice(0, 80), r.ok); }); })
+			.catch(function () { done('✕', false); });
+	} catch (e) { done('✕', false); }
+}
+/* ★ (2026-11-10 13:55, 펜닐 요청 — fix98) 만화(압축·이미지 폴더): 지금 보는 쪽(idx — 위 막대 쪽 번호와 같은 쪽)을 파일 표지·폴더 표지로, 또는 자동으로
+   화면에 띄운 그 쪽 그림(viewer.php?img=번호, 나눠 보기면 그 반쪽)을 높이 1000px 이하 JPEG 로 다시 그려 보냄 */
+function mcCoverPage(target, idx) {
+	var inf = document.getElementById('info'), say = function (t) { if (inf) inf.value = t; };
+	if (target === 'auto') { mcCoverAuto(say); return; }
+	idx = Math.max(0, parseInt(idx, 10) || 0);
+	var els = ['image' + idx, 'image' + idx + '_left', 'image' + idx + '_right'].map(function (id) { return document.getElementById(id); }).filter(Boolean), el = els[0] || null;
+	// ★ (2026-11-10 16:42, 펜닐 제보 — fix102) 화면(위 막대 아래 ~ 화면 아래)에 가장 넓게 보이는 쪽 그림으로 — 전엔 위 막대 아래 줄에 걸친 쪽(위 막대 쪽 번호)이라
+	//   앞 쪽 끝이 조금만 남아 있어도 그 앞 쪽이 표지가 됐음(펜닐: 화면에 보이는 것과 다름). 넓이가 같으면(펼침 두 장) 쪽 번호가 작은 쪽. 반으로 나눔(3·4)의 반쪽도 같은 기준
+	//   (fix100 의 '위 줄에 걸친 반쪽' 판정은 이 기준에 들어감) / 북모드는 아래 갤러리 그림(.lg-current)이 우선
+	if (!document.querySelector('.lg-outer')) try { // 북모드(갤러리가 열림)는 뒤 목록 그림이 아니라 아래 갤러리 그림·쪽 번호로
+		var bt = 0; try { var bb = document.getElementById('mcvBar'); if (bb) bt = Math.max(0, bb.getBoundingClientRect().bottom); } catch (e) {}
+		var vh = window.innerHeight || document.documentElement.clientHeight, vw = document.documentElement.clientWidth || window.innerWidth;
+		var best = null, bestA = 0, bestN = 1e9;
+		document.querySelectorAll('#lightgallery img[id^="image"]').forEach(function (im) {
+			var r = im.getBoundingClientRect(); if (r.width <= 0 || r.height <= 0) return;
+			var a = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, bt)) * Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+			var n = parseInt((im.id.match(/^image(\d+)/) || [0, 1e9])[1], 10);
+			if (a > bestA * 1.01 || (a > 0 && Math.abs(a - bestA) <= bestA * 0.01 && n < bestN)) { best = im; bestA = a; bestN = n; }
+		});
+		if (best && bestA > 0) el = best;
+		// ★ (2026-11-10 17:45 fix103) 위 막대의 '보이는 쪽'(window.mcVisibleIdx — 쪽 번호·서재 %·책갈피와 같은 기준)이 있으면 그 쪽으로(나눔 보기의 반쪽은 위 넓이 판정 그대로)
+		if (typeof window.mcVisibleIdx === 'function') { var _vi = window.mcVisibleIdx(); if (_vi >= 0 && (!el || !/^image\d+_(left|right)$/.test(el.id)) && document.getElementById('image' + _vi)) el = document.getElementById('image' + _vi); }
+	} catch (e) {}
+	var src = el ? (el.getAttribute('data-src') || el.currentSrc || el.src || '') : '';
+	// ★ (2026-11-10 15:41 fix100) 북모드에서 지금 슬라이드에 그림이 하나면(한 쪽·반으로 나눔) 화면에 띄운 그 그림 그대로 — 나눔(3·4)은 슬라이드가 반쪽이라 쪽 번호만으로는 다른 반쪽이 표지가 됐음. 펼침(두 장)은 위 쪽 번호의 쪽
+	try { var lgc = document.querySelectorAll('.lg-current img.lg-image'); if (lgc.length === 1 && lgc[0].getAttribute('src') && !/^data:/.test(lgc[0].getAttribute('src'))) src = lgc[0].getAttribute('src'); } catch (e) {}
+	if (!src || /^data:/.test(src)) src = 'viewer.php?file=' + <?php echo js(encode_url($getfile)); ?> + '&bidx=<?php echo (int)$current_bidx; ?>&img=' + idx; // 아직 안 붙은 쪽 — 뒤에 붙일 때(createImageElement)와 같은 주소
+	say(_vi18n.setting);
+	var im = new Image();
+	im.onload = function () {
+		try {
+			var w = im.naturalWidth, h = im.naturalHeight;
+			if (!w || !h) { say(<?php echo js(__('viewer_cover_none')); ?>); return; }
+			var sc = Math.min(1, 1000 / h), c = document.createElement('canvas');
+			c.width = Math.max(1, Math.round(w * sc)); c.height = Math.max(1, Math.round(h * sc));
+			var x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height);
+			mcCoverPost(c.toDataURL('image/jpeg', 0.88), function (t) { say(t); }, target === 'file' ? 'file' : 'folder');
+		} catch (e) { say('✕'); }
+	};
+	im.onerror = function () { say(<?php echo js(__('viewer_cover_none')); ?>); };
+	im.src = src;
+}
+function mcCoverFromVideo(target) {
 	var inf = document.getElementById('info'), v = document.getElementById('videoPlayer');
 	if (inf) inf.value = _vi18n.setting;
 	// 장면이 아직 없으면(재생 전·변환 중) 예전 방식 — 서버가 영상 썸네일·같은 이름 그림으로
-	if (!v || v.readyState < 2 || !v.videoWidth) { if (typeof set_cover === 'function') set_cover(); return; }
+	// ★ (2026-11-10 13:55 fix98) 파일 표지는 장면이 있어야 함(자동 썸네일과 같은 그림을 직접 지정으로 두지 않음)
+	if (!v || v.readyState < 2 || !v.videoWidth) { if (target === 'file') { if (inf) inf.value = <?php echo js(__('viewer_cover_none')); ?>; return; } if (typeof set_cover === 'function') set_cover(); return; }
 	try {
 		var sc = Math.min(1, 1280 / v.videoWidth), c = document.createElement('canvas');
 		c.width = Math.max(1, Math.round(v.videoWidth * sc)); c.height = Math.max(1, Math.round(v.videoHeight * sc));
 		c.getContext('2d').drawImage(v, 0, 0, c.width, c.height);
-		mcCoverPost(c.toDataURL('image/jpeg', 0.88), function (t) { if (inf) inf.value = t; });
-	} catch (e) { if (typeof set_cover === 'function') set_cover(); }
+		mcCoverPost(c.toDataURL('image/jpeg', 0.88), function (t) { if (inf) inf.value = t; }, target === 'file' ? 'file' : 'folder');
+	} catch (e) { if (target === 'file') { if (inf) inf.value = '✕'; return; } if (typeof set_cover === 'function') set_cover(); }
 }
 <?php endif; ?>
 <?php
@@ -3656,6 +3717,9 @@ if(($type === 'zip' || $type === 'images' || $type === 'video') && $_viewer_is_a
 <br>
 <?php if ($type === 'video'): ?>
 <button class="btn btn-sm btn-success mt-2 p-0" onclick="mcCoverFromVideo();"><?php echo __h("viewer_cover_frame"); ?></button>
+<?php /* ★ (2026-11-10 13:55, 펜닐 요청 — fix98) 지금 장면을 이 파일 표지로 · 자동으로 되돌리기 */ ?>
+<button class="btn btn-sm btn-success mt-2 p-0" onclick="mcCoverFromVideo('file');"><?php echo __h("viewer_cover_frame_file"); ?></button>
+<button class="btn btn-sm btn-secondary mt-2 p-0" onclick="mcCoverAuto(function (t) { var i = document.getElementById('info'); if (i) i.value = t; });"><?php echo __h("mcv2_cover_auto"); ?></button>
 <?php else: ?>
 <button class="btn btn-sm btn-success mt-2 p-0" onclick="set_cover();"><?php echo __h("viewer_set_cover"); ?></button>
 <?php endif; ?>
@@ -4816,6 +4880,8 @@ function downloadFile(url) {
     gap: 10px;
     border-bottom: 1px solid #1a1a1a;
 }
+.mc-pdfcv-mi { display:block; width:100%; background:none; border:0; color:#222; padding:8px 14px; font-size:14px; text-align:left; cursor:pointer; } /* ★ (2026-11-10 13:56 fix98) PDF 표지 메뉴 */
+.mc-pdfcv-mi:hover { background:#eef2f7; }
 .pdf-toolbar-btn {
     background: transparent;
     border: none;
@@ -5089,9 +5155,17 @@ function downloadFile(url) {
                 </button>
                 <?php if ($_viewer_is_admin): /* ★ (2026-11-08 fix80, 펜닐 요청) 보고 있는 쪽을 이 폴더의 표지로(관리자) */ ?>
                 <div class="pdf-toolbar-divider"></div>
-                <button class="pdf-toolbar-btn" id="mcPdfCoverBtn" onclick="mcPdfCover(this)" title="<?php echo __h('pdf_cover_page'); ?>">
+                <?php /* ★ (2026-11-10 13:56, 펜닐 요청 — fix98) 누르면 작은 메뉴: 이 쪽을 파일 표지로 · 이 쪽을 폴더 표지로 · 자동으로 되돌리기 */ ?>
+                <span style="position:relative;display:inline-block">
+                <button class="pdf-toolbar-btn" id="mcPdfCoverBtn" onclick="var m=document.getElementById('mcPdfCoverMenu'); if (m) m.hidden=!m.hidden;" title="<?php echo __h('pdf_cover_page'); ?>" aria-haspopup="true">
                     🖼️<span class="btn-text"> <?php echo __h("pdf_cover_page_short"); ?></span>
                 </button>
+                <span id="mcPdfCoverMenu" hidden style="position:absolute;top:100%;right:0;z-index:2000;background:#fff;color:#222;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.25);padding:4px 0;min-width:190px;text-align:left;white-space:nowrap">
+                    <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'file');"><?php echo __h('mcv2_cover_file'); ?></button>
+                    <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'folder');"><?php echo __h('mcv2_cover_folder'); ?></button>
+                    <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'auto');"><?php echo __h('mcv2_cover_auto'); ?></button>
+                </span>
+                </span>
                 <?php endif; ?>
                 <div class="pdf-toolbar-divider"></div>
                 <button class="pdf-toolbar-btn" onclick="var u=(window.mcBackUrl ? window.mcBackUrl(this.getAttribute('data-def')) : this.getAttribute('data-def')); if (window.mcBackGo) window.mcBackGo(u, 'push'); else location.href=u;" data-def="./index.php?dir=<?php echo h(encode_url($link_dir)); ?>&amp;page=<?php echo intval($page); ?>&amp;bidx=<?php echo (int)$current_bidx; ?>" title="<?php echo __h('viewer_back_to_list'); ?>">
@@ -5111,13 +5185,25 @@ let totalPages = 0;
 let current_page = 1;
 <?php if ($_viewer_is_admin): ?>
 // ★ (2026-11-08 fix80, 펜닐 요청) 지금 보고 있는 쪽을 높이 약 1000px JPEG 로 다시 그려 폴더 표지로(bookmark.php?mode=set_cover_img — 관리자·CSRF)
-function mcPdfCover(btn) {
+// ★ (2026-11-10 13:56, 펜닐 요청 — fix98) target: 'file'(이 파일 표지) · 'folder'(폴더 표지 — 예전 동작) · 'auto'(자동으로 되돌리기)
+function mcCoverBump(k) { try { localStorage.setItem('mc_cover_bump', JSON.stringify({ t: Date.now(), f: <?php echo js((string)$getfile); ?>, d: <?php echo js(rtrim(str_replace('\\', '/', dirname(str_replace('\\', '/', (string)$getfile))), '/')); ?>, k: k })); } catch (e) {} } // 목록이 새로고침 없이 바뀌게(index.php)
+document.addEventListener('click', function (e) { var m = document.getElementById('mcPdfCoverMenu'); if (m && !m.hidden && !(e.target.closest && e.target.closest('#mcPdfCoverMenu, #mcPdfCoverBtn'))) m.hidden = true; }); // 메뉴 밖을 누르면 닫음
+function mcPdfCover(btn, target) {
     if (!pdfDoc || !btn || btn.disabled) return;
+    if (target === 'auto' && !confirm(<?php echo js(__('mcv2_cover_auto_q')); ?>)) return;
     // ★ (2026-11-08 fix81) 결과를 ✓/✕ 로도 보임 — 휴대폰은 글자(.btn-text)가 숨겨져 '설정됨'이 안 보였음. 끝나면 원래 모양(innerHTML) 그대로
     var h0 = btn.innerHTML, t0 = btn.title;
     var mark = function (m, t) { btn.textContent = m; if (t) { var sp = document.createElement('span'); sp.className = 'btn-text'; sp.textContent = ' ' + t; btn.appendChild(sp); } };
-    var show = function (t, ok) { mark(ok ? '✓' : '✕', t); btn.title = t; setTimeout(function () { btn.innerHTML = h0; btn.title = t0; btn.disabled = false; }, 2500); };
+    var show = function (t, ok) { if (ok) mcCoverBump(target === 'file' || target === 'auto' ? target : 'folder'); mark(ok ? '✓' : '✕', t); btn.title = t; setTimeout(function () { btn.innerHTML = h0; btn.title = t0; btn.disabled = false; }, 2500); };
     btn.disabled = true; mark('…', '');
+    if (target === 'auto') {
+        var fa = new FormData();
+        fa.append('mode', 'cover_auto'); fa.append('file', <?php echo js((string)$getfile); ?>); fa.append('csrf_token', <?php echo js((string)$_viewer_csrf); ?>);
+        fetch('bookmark.php?bidx=<?php echo (int)$current_bidx; ?>', { method: 'POST', body: fa, credentials: 'same-origin' })
+            .then(function (r) { return r.text().then(function (t) { show(r.ok ? t : String(t || '✕').slice(0, 40), r.ok); }); })
+            .catch(function () { show('✕', false); });
+        return;
+    }
     pdfDoc.getPage(Math.max(1, Math.min(totalPages || 1, current_page || 1))).then(function (page) {
         var v1 = page.getViewport({ scale: 1 }), sc = Math.max(0.2, Math.min(3, 1000 / (v1.height || 1000))), vp = page.getViewport({ scale: sc });
         var c = document.createElement('canvas'); c.width = Math.round(vp.width); c.height = Math.round(vp.height);
@@ -5126,6 +5212,7 @@ function mcPdfCover(btn) {
             var fd = new FormData();
             fd.append('mode', 'set_cover_img'); fd.append('file', <?php echo js((string)$getfile); ?>);
             fd.append('csrf_token', <?php echo js((string)$_viewer_csrf); ?>); fd.append('image', c.toDataURL('image/jpeg', 0.88));
+            if (target === 'file') fd.append('target', 'file'); // ★ (2026-11-10 13:56 fix98)
             return fetch('bookmark.php?bidx=<?php echo (int)$current_bidx; ?>', { method: 'POST', body: fd, credentials: 'same-origin' })
                 .then(function (r) { return r.text().then(function (t) { show(r.ok ? t : String(t || '✕').slice(0, 40), r.ok); }); });
         });
@@ -5899,6 +5986,7 @@ bookmark = (function(){
 	}
 	return cur;
 })();
+try { if (typeof window.mcVisibleIdx === 'function') { var _bv = window.mcVisibleIdx(); if (_bv >= 0) bookmark = "image" + _bv; } } catch(e){} // ★ (2026-11-10 17:22, 펜닐 요청 — fix103) 책갈피는 화면에 가장 넓게 보이는 쪽으로(전엔 맨 위 줄 쪽 — 앞 쪽 끝이 조금 남아 있으면 그 앞 쪽이 저장됐음)
 var bookmarkBaseUrl = <?php echo js("bookmark.php?viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>;
 $.get(bookmarkBaseUrl + bookmark, function( data ) {
   	document.getElementById("info").value = data;
@@ -6039,7 +6127,8 @@ function autosave(){
 		return cur;
 	})();
 	var autosaveUrl = mcAsUrl(<?php echo js("bookmark.php?mode=autosave&viewer=" . $mode . "&page_order=" . ($pageorder['page_order'] ?? '0') . "&file=" . encode_url($getfile) . "&bidx=" . $current_bidx . "&bookmark="); ?>); // ★ (2026-11-05 15:40) mcAsUrl — 위 설명
-	sendAutosave(autosaveUrl + bookmark + (_frac >= 0 ? "&f=" + _frac : ""));
+	var _vp = -1; try { if (typeof window.mcVisibleIdx === 'function') _vp = window.mcVisibleIdx(); } catch(e){} // ★ (2026-11-10 17:22, 펜닐 요청 — fix103) 화면에 가장 넓게 보이는 쪽 — 서재 %·쪽 번호용(이어 보기 위치는 bookmark·f 그대로)
+	sendAutosave(autosaveUrl + bookmark + (_frac >= 0 ? "&f=" + _frac : "") + (_vp >= 0 ? "&vp=" + _vp : ""));
 <?php } elseif($type != "pdf" && $mode == "book") { ?>
 	for (var i = 0; i <= <?php echo $image_counter; ?>; i++) {
 		var j = <?php echo $image_counter; ?> - i;
@@ -6080,7 +6169,8 @@ function autosave(){
 			}
 		}
 	} catch(e){}
-	sendAutosave(pdfAutosaveUrl + "pdf_" + _ph.page + "&f=" + _ph.f + (_ph.n ? "&total=" + _ph.n : "")); // ★ (2026-11-02 20:10) 총 쪽수도 — PDF 는 쪽수 캐시가 없어 서재 진행률이 늘 1%·다 읽음이 안 됐음
+	var _pvp = (typeof current_page === 'number' && current_page > 0) ? current_page - 1 : -1; // ★ (2026-11-10 17:22 fix103) 쪽 입력칸에 보이는 쪽(보기 칸 가운데에 걸친 쪽) — 서재 %·쪽 번호용
+	sendAutosave(pdfAutosaveUrl + "pdf_" + _ph.page + "&f=" + _ph.f + (_ph.n ? "&total=" + _ph.n : "") + (_pvp >= 0 ? "&vp=" + _pvp : "")); // ★ (2026-11-02 20:10) 총 쪽수도 — PDF 는 쪽수 캐시가 없어 서재 진행률이 늘 1%·다 읽음이 안 됐음
 <?php } ?>
 }
 

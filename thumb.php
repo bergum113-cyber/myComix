@@ -195,6 +195,21 @@ if ($debug) {
     exit;
 }
 
+// ★ (2026-11-10 13:52, 펜닐 요청 — fix98) 관리자가 직접 고른 파일 표지(src/covers)가 있으면 그것을 먼저 — 폴더 표지(type=cover)는 그대로
+if ($type !== 'cover' && function_exists('mc_file_cover_path')) {
+    $__fc = mc_file_cover_path($filepath);
+    if (is_file($__fc)) {
+        $__fcd = @file_get_contents($__fc);
+        if ($__fcd !== false && $__fcd !== '') {
+            header('Content-Type: image/jpeg');
+            header('Content-Length: ' . strlen($__fcd));
+            header('Cache-Control: private, max-age=86400');
+            echo $__fcd;
+            exit;
+        }
+    }
+}
+
 // auto 모드: 파일/폴더 유형에 따라 자동 결정
 if ($type === 'auto') {
     if (is_dir($filepath)) {

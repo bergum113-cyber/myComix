@@ -749,6 +749,8 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     // ★ (2026-11-02 09:00) 다른 사이트의 링크로는 안 됨(브라우저가 알려 주는 Sec-Fetch-Site) — 남이 심은 링크 한 번에 모든 기기 로그인이 풀리지 않게
     if (($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') === 'cross-site') { header("Location: index.php"); exit; }
     $user_id = $_SESSION['user_id'] ?? null;
+    // ★ (2026-11-10 10:25) 세션 없이 온 경우(위에서 자동 로그인 안 함 — fix90) 이 기기 토큰으로 아이디를 찾음(새 토큰 발급 없이) — 전에는 이 기기 토큰만 지우고 다른 기기는 그대로인데 '모든 기기에서 로그아웃' 문구가 나왔음
+    if (empty($user_id) && isset($_COOKIE['remember_token']) && function_exists('verify_remember_token')) $user_id = verify_remember_token($_COOKIE['remember_token'], false) ?: null;
     
     if (!empty($user_id)) {
         clearUserCache($user_id);
@@ -765,7 +767,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "make_id") {
     }
     
     session_unset(); session_destroy(); session_start();
-    $_SESSION['login_error'] = __('login_all_devices_logout');
+    if (!empty($user_id)) $_SESSION['login_error'] = __('login_all_devices_logout'); // ★ (2026-11-10 11:11) 계정을 찾아 실제로 모든 기기를 끝냈을 때만 — 없는 토큰·세션 없음이면 지운 것 없이 이 문구가 나왔음(원본부터)
     header("Location: login.php"); exit;
 
 } elseif (isset($_GET['mode']) && $_GET['mode'] === "timeout") {

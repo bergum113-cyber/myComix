@@ -788,6 +788,7 @@ if (isset($_GET['thumb']) && $_GET['thumb'] === 'video' && isset($_GET['file']))
     }
     
     $thumb_path = $video_file . '.video_thumb.jpg';
+    if (function_exists('mc_file_cover_path') && is_file(mc_file_cover_path($video_file))) $thumb_path = mc_file_cover_path($video_file); // ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 관리자가 직접 고른 파일 표지 먼저
     
     if (file_exists($thumb_path)) {
         header('Content-Type: image/jpeg');
@@ -6645,7 +6646,7 @@ for($count=0;$count < count($autosave_arr); $count++){
 	$title_temp = explode("/", $autosave_title[$count]);
 ?>
 <?php $_mc_miss = !mc_entry_exists($autosave_title[$count], $autosave_mark[$count]['bidx'] ?? null); ?>
-	<tr class="border-bottom border-success<?php echo $_mc_miss ? ' mc-missing' : ''; ?>"<?php echo $_mc_miss ? ' title="파일 없음"' : ''; ?> data-fav-thumb="<?php echo h("thumb.php?file=" . encode_url($autosave_title[$count]) . "&bidx=" . ($autosave_mark[$count]['bidx'] ?? 0)); ?>" data-fav-title="<?php echo h(mark_display_title($title_temp[count($title_temp) - 1])); ?>" data-fav-url="<?php echo h("viewer.php?mode=toon&page_order=" . ($autosave_mark[$count]['page_order'] ?? '0') . "&file=" . encode_url($autosave_title[$count]) . "&bidx=" . ($autosave_mark[$count]['bidx'] ?? 0) . "#" . $autosave_mark[$count]['bookmark']); ?>"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0"><?php echo $_svg_warn; ?></button><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_autosave&file=<?php echo encode_url($autosave_title[$count]) . '&bidx=' . (int)($autosave_mark[$count]['bidx'] ?? 0); /* ★ (2026-11-06 00:50) 그 기록의 콘텐츠 폴더(지우기가 콘텐츠 폴더별이라) */ ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $autosave_mark[$count]['page_order'] ?? '0'; /* ★ (2026-11-05) 보기 방식이 없는 아주 옛 기록이면 경고(Undefined array key) — 기본값 '0' */ ?>&file=<?php echo encode_url($autosave_title[$count]); ?>&bidx=<?php echo $autosave_mark[$count]['bidx'] ?? 0; ?>#<?php echo $autosave_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
+	<tr class="border-bottom border-success<?php echo $_mc_miss ? ' mc-missing' : ''; ?>"<?php echo $_mc_miss ? ' title="파일 없음"' : ''; ?> data-fav-thumb="<?php echo h("thumb.php?file=" . encode_url($autosave_title[$count]) . "&bidx=" . ($autosave_mark[$count]['bidx'] ?? 0) . mc_file_cover_v_rel((int)($autosave_mark[$count]['bidx'] ?? 0), $autosave_title[$count])); /* ★ (2026-11-10 16:08 fix101) */ ?>" data-fav-title="<?php echo h(mark_display_title($title_temp[count($title_temp) - 1])); ?>" data-fav-url="<?php echo h("viewer.php?mode=toon&page_order=" . ($autosave_mark[$count]['page_order'] ?? '0') . "&file=" . encode_url($autosave_title[$count]) . "&bidx=" . ($autosave_mark[$count]['bidx'] ?? 0) . "#" . $autosave_mark[$count]['bookmark']); ?>"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0"><?php echo $_svg_warn; ?></button><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_autosave&file=<?php echo encode_url($autosave_title[$count]) . '&bidx=' . (int)($autosave_mark[$count]['bidx'] ?? 0); /* ★ (2026-11-06 00:50) 그 기록의 콘텐츠 폴더(지우기가 콘텐츠 폴더별이라) */ ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?mode=toon&page_order=<?php echo $autosave_mark[$count]['page_order'] ?? '0'; /* ★ (2026-11-05) 보기 방식이 없는 아주 옛 기록이면 경고(Undefined array key) — 기본값 '0' */ ?>&file=<?php echo encode_url($autosave_title[$count]); ?>&bidx=<?php echo $autosave_mark[$count]['bidx'] ?? 0; ?>#<?php echo $autosave_mark[$count]['bookmark']; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
 	}
 	}
@@ -6659,7 +6660,7 @@ for($count=0;$count < count($bookmark_arr); $count++){
 	$title_temp = explode("/", $bookmark_title[$count]);
 ?>
 <?php $_mc_miss = !mc_entry_exists($bookmark_title[$count], is_array($bookmark_mark[$count]) ? ($bookmark_mark[$count]['bidx'] ?? null) : null); ?>
-	<tr class="border-bottom border-light<?php echo $_mc_miss ? ' mc-missing' : ''; ?>"<?php echo $_mc_miss ? ' title="파일 없음"' : ''; ?> data-fav-thumb="<?php echo h("thumb.php?file=" . encode_url($bookmark_title[$count]) . "&bidx=" . (is_array($bookmark_mark[$count]) ? ($bookmark_mark[$count]['bidx'] ?? $current_bidx) : $current_bidx)); ?>" data-fav-title="<?php echo h(mark_display_title($title_temp[count($title_temp) - 1])); ?>" data-fav-url="<?php /* ★ (2026-10-30) 모바일 '열기'도 제목 버튼과 같은 주소(저장 위치·쪽 순서·항목 bidx) — 전에는 배열 형식이면 처음 쪽으로 열렸음 */ echo h(is_array($bookmark_mark[$count]) ? ("viewer.php?mode=toon&page_order=" . ($bookmark_mark[$count]['page_order'] ?? '0') . "&file=" . encode_url($bookmark_title[$count]) . "&bidx=" . ($bookmark_mark[$count]['bidx'] ?? 0) . "#" . ($bookmark_mark[$count]['bookmark'] ?? '')) : ("viewer.php?file=" . encode_url($bookmark_title[$count]) . $bidx_param . "#" . $bookmark_mark[$count])); ?>"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_bookmark&file=<?php echo encode_url($bookmark_title[$count]) . '&bidx=' . (is_array($bookmark_mark[$count]) ? (int)($bookmark_mark[$count]['bidx'] ?? 0) : (int)$current_bidx); /* ★ (2026-11-06 00:50) 위와 같음 */ ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><?php
+	<tr class="border-bottom border-light<?php echo $_mc_miss ? ' mc-missing' : ''; ?>"<?php echo $_mc_miss ? ' title="파일 없음"' : ''; ?> data-fav-thumb="<?php echo h("thumb.php?file=" . encode_url($bookmark_title[$count]) . "&bidx=" . (is_array($bookmark_mark[$count]) ? ($bookmark_mark[$count]['bidx'] ?? $current_bidx) : $current_bidx) . mc_file_cover_v_rel((int)(is_array($bookmark_mark[$count]) ? ($bookmark_mark[$count]['bidx'] ?? $current_bidx) : $current_bidx), $bookmark_title[$count])); /* ★ (2026-11-10 16:08 fix101) */ ?>" data-fav-title="<?php echo h(mark_display_title($title_temp[count($title_temp) - 1])); ?>" data-fav-url="<?php /* ★ (2026-10-30) 모바일 '열기'도 제목 버튼과 같은 주소(저장 위치·쪽 순서·항목 bidx) — 전에는 배열 형식이면 처음 쪽으로 열렸음 */ echo h(is_array($bookmark_mark[$count]) ? ("viewer.php?mode=toon&page_order=" . ($bookmark_mark[$count]['page_order'] ?? '0') . "&file=" . encode_url($bookmark_title[$count]) . "&bidx=" . ($bookmark_mark[$count]['bidx'] ?? 0) . "#" . ($bookmark_mark[$count]['bookmark'] ?? '')) : ("viewer.php?file=" . encode_url($bookmark_title[$count]) . $bidx_param . "#" . $bookmark_mark[$count])); ?>"><td align=right style="white-space:nowrap;"><button class="btn btn-sm m-0 p-0" onclick="location.replace('bookmark.php?mode=delete_bookmark&file=<?php echo encode_url($bookmark_title[$count]) . '&bidx=' . (is_array($bookmark_mark[$count]) ? (int)($bookmark_mark[$count]['bidx'] ?? 0) : (int)$current_bidx); /* ★ (2026-11-06 00:50) 위와 같음 */ ?>&token=<?php echo get_delete_token(); ?>');"><?php echo $_svg_x; ?></button></td><td><?php
 	if(!is_array($bookmark_mark[$count])){
 ?><button class="btn btn-sm mr-1 p-0 d-inline-block text-truncate text-nowrap" onclick="window.mcFavMarkAndSave&&mcFavMarkAndSave(this);window.myComixMarkNavigation&&myComixMarkNavigation();location.href='./viewer.php?file=<?php echo encode_url($bookmark_title[$count]) . $bidx_param; ?>#<?php echo $bookmark_mark[$count]; ?>'"><?php echo mark_display_title($title_temp[count($title_temp) - 1]); ?></button></td></tr>
 <?php
@@ -7945,7 +7946,7 @@ if(strpos($zip_file, "_imgfolder") == true){
     <a href='viewer.php?filetype=images&mode=<?php echo urlencode((string)$viewer); /* ★ (2026-11-09 14:15) 폴더 옆 정보 파일의 값이라 주소용으로 감쌈(따옴표로 속성을 빠져나갔음) */ ?>&file=<?php echo encode_url($getdir."/".str_replace("_imgfolder","", $fileinfo)) . $bidx_param; ?>'>
       <div class="col mb-3">
         <div class="card mc-folder-card text-black m-0 p-1" style="position:relative;" <?php if ($is_admin): ?>data-folder-path="<?php echo h($getdir."/".str_replace("_imgfolder","", $fileinfo)); ?>"<?php endif; ?>>
-            <img src="thumb.php?file=<?php echo encode_url($getdir."/".str_replace("_imgfolder","", $fileinfo)) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="thumbnail" loading="lazy">
+            <img src="thumb.php?file=<?php echo encode_url($getdir."/".str_replace("_imgfolder","", $fileinfo)) . $bidx_param . mc_file_cover_v($zip_file); /* ★ (2026-11-10 13:53 fix98) 직접 고른 표지면 주소가 바뀜 */ ?>" class="rounded card-img-top card-img" width="300" height="400" alt="thumbnail" loading="lazy">
 <?php 
 // ✅ 즐겨찾기 버튼
 $_fav_file_path = $getdir."/".str_replace("_imgfolder","", $fileinfo);
@@ -8018,6 +8019,7 @@ echo highlight_search($img_folder_name, $all_terms);
 		$pdf_thumb_file = '';
 		$pdf_base_name = preg_replace('/\.pdf$/i', '', $zip_file);
 		$pdf_possible_thumbs = [
+		    mc_file_cover_path($zip_file), // ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 관리자가 직접 고른 파일 표지 먼저
 		    $pdf_base_name . '.jpg',
 		    $pdf_base_name . '.jpeg', 
 		    $pdf_base_name . '.png',
@@ -8116,9 +8118,9 @@ $_is_favorite = mc_rec_find($favorites_arr, $current_bidx, $_fav_file_path) !== 
         title="<?php echo $_is_favorite ? __h('ui_unfavorite') : __h('ui_add_favorite'); ?>">
     <?php echo $_is_favorite ? '⭐' : '⭐'; ?>
 </button>
-<?php if ($video_thumb && file_exists($video_thumb)): ?>
+<?php $__mc_fcv = mc_file_cover_v($zip_file); /* ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 직접 고른 파일 표지 */ if (($video_thumb && file_exists($video_thumb)) || $__mc_fcv !== ''): ?>
 <!-- 동영상 썸네일 이미지 - 이미지 ZIP과 동일한 크기 -->
-<img src="index.php?thumb=video&file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="video thumbnail">
+<img src="index.php?thumb=video&file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param . $__mc_fcv; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="video thumbnail">
 <?php else: ?>
 <!-- 동영상 아이콘 SVG - 이미지 ZIP과 동일한 크기 -->
 <div class="rounded card-img-top card-img" style="display: flex; align-items: center; justify-content: center; background: #e9e9e9; min-height: 200px;">
@@ -8208,6 +8210,7 @@ echo highlight_search($fileinfo, $video_all_terms);
 							$thumb_file = '';
 							$base_name = preg_replace('/\.(txt|epub|hwpx?)$/i', '', $zip_file); // 확장자 제거
 							$possible_thumbs = [
+							    mc_file_cover_path($zip_file), // ★ (2026-11-10 14:55, 펜닐 요청 — fix99) 관리자가 직접 고른 파일 표지 먼저
 							    $base_name . '.jpg',
 							    $base_name . '.jpeg', 
 							    $base_name . '.png',
@@ -8349,6 +8352,7 @@ if ($__doc_nb > 0 && $__doc_ct && (time() - $__doc_ct) < ($__doc_nb * 3600)) ech
 							$thumb_file = '';
 							$base_name = preg_replace('/\.(docx?|xlsx?|pptx?)$/i', '', $zip_file);
 							$possible_thumbs = [
+								mc_file_cover_path($zip_file), // ★ (2026-11-10 14:55, 펜닐 요청 — fix99) 관리자가 직접 고른 파일 표지 먼저
 								$base_name . '.jpg',
 								$base_name . '.jpeg', 
 								$base_name . '.png',
@@ -8749,7 +8753,7 @@ if ($__doc_nb > 0 && $__doc_ct && (time() - $__doc_ct) < ($__doc_nb * 3600)) ech
 					<?php /* ★ (2026-10-30) 다른 카드처럼 관리자 삭제 모드에서 고를 수 있게 data-file-path */ ?>
 					<div class="card text-black m-0 p-1" <?php if ($is_admin): ?>data-file-path="<?php echo h($getdir."/".$fileinfo); ?>"<?php endif; ?>>
 						<!-- 동영상 아이콘 - thumb.php 사용 -->
-						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="video" loading="lazy" style="min-height: 120px; object-fit: contain; background: #e9e9e9;">
+						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param . mc_file_cover_v($zip_file); /* ★ (2026-11-10 13:53 fix98) */ ?>" class="rounded card-img-top card-img" width="300" height="400" alt="video" loading="lazy" style="min-height: 120px; object-fit: contain; background: #e9e9e9;">
 						<div class="card-img-overlay m-1 p-0">
 							<span class="badge badge-pill badge-primary">ZIP</span>
 							<span class="badge badge-pill badge-info badge-filecount"><?php echo h($totalpage); ?> files</span>
@@ -8817,7 +8821,7 @@ $_is_favorite = mc_rec_find($favorites_arr, $current_bidx, $_fav_file_path) !== 
         title="<?php echo $_is_favorite ? __h('ui_unfavorite') : __h('ui_add_favorite'); ?>">
     <?php echo $_is_favorite ? '⭐' : '⭐'; ?>
 </button>
-						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="thumbnail" loading="lazy">
+						<img src="thumb.php?file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param . mc_file_cover_v($zip_file); /* ★ (2026-11-10 13:53 fix98) 직접 고른 표지면 주소가 바뀜 */ ?>" class="rounded card-img-top card-img" width="300" height="400" alt="thumbnail" loading="lazy">
 									<div class="card-img-overlay m-1 p-0">
 									<span class="badge badge-pill badge-success"><?php echo h($totalpage); ?>p</span>
 									<span class="badge badge-pill badge-success" data-mcorder="<?php echo h($getdir."/".$fileinfo); ?>"><?php /* ★ (2026-11-05) 열릴 보기 방식(뷰어 '모드 기억' 설정 반영 — 책마다면 내 기록) / data-mcorder */ echo h(function_exists('mc_mv_order_for') ? mc_mv_order_label(mc_mv_order_for($getdir."/".$fileinfo, $current_bidx)) : $pageorder); ?></span>
@@ -9066,6 +9070,7 @@ $param_prefix = !empty($param_string) ? $param_string . '&' : '';
 }
 </style>
 
+<?php echo function_exists('mc_pager_group_js') ? mc_pager_group_js() : ''; /* ★ (2026-11-10 19:19 fix105) 내 정보 접속 기록 등 다른 쪽 단추도 같은 묶음 / ★ (2026-11-10 21:53 fix106) 폴더를 못 여는 화면에서도 나오게 조건 밖으로 */ ?>
 <?php if ($mc_dir_err === ''): // ★ (2026-11-06 00:10) 폴더를 열 수 없으면 쪽 번호·'1 / 1 (0개)' 없음(안내 상자의 단추로 이동) ?>
 <div class="pagination-wrapper" data-pc="<?php echo $pages_per_group; ?>" data-mobile="<?php echo $pages_per_group_mobile; ?>" data-current="<?php echo $current_page; ?>" data-total="<?php echo $total_pages; ?>" data-param-prefix="<?php echo htmlspecialchars($param_prefix); ?>">
     <!-- 페이지 버튼들 -->
@@ -9714,6 +9719,47 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 })();
 </script>
+<script>
+// ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 뷰어에서 표지를 바꾸면 목록으로 돌아왔을 때 새로고침 없이 바로 바뀜(즐겨찾기 표시처럼)
+//   뷰어가 localStorage 'mc_cover_bump' = {t: 시각, f: 파일 경로, d: 폴더 경로, k: file|folder|auto} 를 남김 → 이 화면이 그 뒤에 바뀐 것만 그림 주소에 cv=시각을 붙여 다시 받음
+//   새로 연 화면은 서버가 이미 새 주소(v=·cv=)를 주므로 건드리지 않음(이 화면을 그린 뒤에 바뀐 것만)
+(function () {
+    var seen = Date.now();
+    function np(s) { s = String(s || '').replace(/\{pl\}/g, '+').replace(/\{dt\}/g, '.').replace(/\{pc\}/g, '%').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, ''); return s.charAt(0) === '/' ? s : '/' + s; }
+    function bust(u, t) { try { var x = new URL(u, location.href); x.searchParams.set('cv', String(t)); return x.pathname.replace(/^.*\//, '') + x.search; } catch (e) { return u; } }
+    function apply() {
+        var b = null;
+        try { b = JSON.parse(localStorage.getItem('mc_cover_bump') || 'null'); } catch (e) {}
+        if (!b || !b.t || b.t <= seen) return;
+        seen = b.t;
+        var f = np(b.f), d = np(b.d), file = (b.k === 'file' || b.k === 'auto'), folder = (b.k === 'folder' || b.k === 'auto');
+        document.querySelectorAll('img').forEach(function (im) {
+            var s = im.getAttribute('src') || '';
+            if (!/(^|\/)thumb\.php\?|[?&]thumb=video(&|$)/.test(s)) return;
+            var q; try { q = new URL(s, location.href).searchParams; } catch (e) { return; }
+            var p = np(q.get('file')), isCover = (q.get('type') === 'cover');
+            if ((file && !isCover && p === f) || (folder && isCover && p === d)) im.setAttribute('src', bust(s, b.t));
+        });
+        // PDF 카드는 그림을 화면에 바로 넣어 둠 — 관리자 화면에만 있는 카드 경로(data-file-path)로 찾아 thumb.php 주소로 바꿈
+        if (file) document.querySelectorAll('.card[data-file-path]').forEach(function (c) {
+            if (np(c.getAttribute('data-file-path')) !== f) return;
+            var im = c.querySelector('img.card-img');
+            // ★ (2026-11-10 14:55 fix99) 표지 그림이 없던 카드(빈 칸만 있음 — 문서·PDF)는 그림 칸을 만들어 넣음
+            var ph = c.querySelector('.card-img-placeholder');
+            if (!im && ph) { im = document.createElement('img'); im.className = 'rounded card-img-top card-img loaded'; im.style.cssText = 'height:200px; object-fit:cover;'; im.setAttribute('src', 'data:,'); ph.parentNode.insertBefore(im, ph); }
+            if (im && /^data:/.test(im.getAttribute('src') || '')) im.onload = function () { // 새 표지가 있으면 그림, 없으면(자동으로 되돌려 표지 없음) 빈 칸 표시
+                var p2 = this.nextElementSibling, isPh = p2 && p2.classList && p2.classList.contains('card-img-placeholder');
+                if (this.naturalWidth > 1) { this.style.display = ''; if (isPh) p2.style.display = 'none'; }
+                else { this.style.display = 'none'; if (isPh) p2.style.display = 'flex'; }
+            };
+            if (im && /^data:/.test(im.getAttribute('src') || '')) im.setAttribute('src', 'thumb.php?file=' + encodeURIComponent(f.replace(/\+/g, '{pl}').replace(/\./g, '{dt}').replace(/%/g, '{pc}')) + '&bidx=<?php echo (int)$current_bidx; ?>&cv=' + b.t);
+        });
+    }
+    window.addEventListener('pageshow', apply);
+    window.addEventListener('storage', function (e) { if (e.key === 'mc_cover_bump') apply(); });
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') apply(); });
+})();
+</script>
 
 <!-- ✅ 즐겨찾기 토글 기능 -->
 <style>
@@ -10206,7 +10252,8 @@ function loadLoginLogs(page) {
                 // 페이지네이션
                 if (data.total_pages > 1) {
                     html += '<nav class="mt-2"><ul class="pagination pagination-sm justify-content-center mb-0">';
-                    
+                    if (window.mcPgGroup) html += window.mcPgGroup.bs(data.page, data.total_pages, { click: function (p) { return 'loadLoginLogs(' + p + ')'; } }); // ★ (2026-11-10 19:19, 펜닐 요청 — fix105) 폴더 목록과 같은 묶음 방식
+                    else {
                     if (data.page > 1) {
                         html += '<li class="page-item"><a class="page-link" href="#" onclick="loadLoginLogs(1);return false;">«</a></li>';
                         html += '<li class="page-item"><a class="page-link" href="#" onclick="loadLoginLogs(' + (data.page - 1) + ');return false;">‹</a></li>';
@@ -10224,7 +10271,7 @@ function loadLoginLogs(page) {
                         html += '<li class="page-item"><a class="page-link" href="#" onclick="loadLoginLogs(' + (data.page + 1) + ');return false;">›</a></li>';
                         html += '<li class="page-item"><a class="page-link" href="#" onclick="loadLoginLogs(' + data.total_pages + ');return false;">»</a></li>';
                     }
-                    
+                    }
                     html += '</ul></nav>';
                 }
             }

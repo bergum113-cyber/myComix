@@ -2003,6 +2003,78 @@ function mc_write_folder_cover($dir, $data) {
     return true;
 }
 }
+
+// ★ (2026-11-10 13:52, 펜닐 요청 — fix98) 파일 표지 직접 지정(관리자) — 고른 쪽을 src/covers/ 에 따로 둠. 자동 썸네일(json·영상 썸네일·같은 이름 그림)은 건드리지 않아
+//   이 파일을 지우면 그대로 자동으로 돌아감. 목록 카드·thumb.php 가 이 파일이 있으면 먼저 씀(폴더 표지 [cover].jpg 와는 따로)
+function mc_file_cover_path($abs) {
+    $rp = @realpath((string)$abs);
+    if ($rp === false) $rp = (string)$abs;
+    $k = str_replace('\\', '/', rtrim($rp, '/\\'));
+    if (DIRECTORY_SEPARATOR === '\\') $k = mb_strtolower($k, 'UTF-8'); // Windows 는 대소문자를 가리지 않음
+    return __DIR__ . '/src/covers/' . md5($k) . '.jpg';
+}
+/** 카드 그림 주소에 붙일 '&cv=시각'(직접 지정한 표지가 없으면 '') — 바꾸면 주소가 바뀌어 브라우저가 옛 그림(하루 캐시)을 쓰지 않게 */
+function mc_file_cover_v($abs) {
+    // ★ (2026-11-10 16:08 fix101) 직접 고른 표지가 하나도 없으면(대부분) 경로 확인 없이 바로 '' — 목록·서재 카드마다 디스크를 보지 않게
+    static $any = null;
+    if ($any === null) { $any = false; $dh = is_dir(__DIR__ . '/src/covers') ? @opendir(__DIR__ . '/src/covers') : false; if ($dh) { while (($n = readdir($dh)) !== false) { if (substr($n, -4) === '.jpg') { $any = true; break; } } closedir($dh); } } // 하나만 찾으면 멈춤
+    if (!$any) return '';
+    $p = mc_file_cover_path($abs);
+    return is_file($p) ? '&cv=' . (int)@filemtime($p) : '';
+}
+/** ★ (2026-11-10 16:08, fix101) 콘텐츠 폴더 번호·상대 경로로 — 즐겨찾기·북마크·서재 화면의 표지 주소에 붙임(thumb.php 와 같게 없는 번호는 0번) */
+function mc_file_cover_v_rel($bidx, $rel) {
+    $bds = $GLOBALS['base_dirs'] ?? [];
+    if (!is_array($bds)) return '';
+    $bd = $bds[(int)$bidx] ?? ($bds[0] ?? '');
+    $rel = str_replace('\\', '/', (string)$rel);
+    if (!is_string($bd) || $bd === '' || trim($rel, '/') === '' || preg_match('#(^|/)\.\.(/|$)#', $rel)) return '';
+    return mc_file_cover_v(rtrim($bd, '/\\') . '/' . ltrim($rel, '/'));
+}
+function mc_write_file_cover($abs, $data) {
+    if (!is_string($data) || $data === '') return false;
+    $img = mc_gd_from_string($data);
+    if (!$img) return false;
+    $w = imagesx($img); $h = imagesy($img);
+    if ($w < 1 || $h < 1) { imagedestroy($img); return false; }
+    $nh = min($h, 800); $nw = max(1, (int)round($w * $nh / $h));
+    $out = imagecreatetruecolor($nw, $nh);
+    imagefill($out, 0, 0, imagecolorallocate($out, 255, 255, 255));
+    imagecopyresampled($out, $img, 0, 0, 0, 0, $nw, $nh, $w, $h);
+    imagedestroy($img);
+    $dest = mc_file_cover_path($abs);
+    $dir = dirname($dest);
+    if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) { imagedestroy($out); return false; }
+    $tmp = $dir . '/.mc_cover_' . bin2hex(random_bytes(4)) . '.tmp';
+    $ok = @imagejpeg($out, $tmp, 85);
+    imagedestroy($out);
+    if (!$ok || !is_file($tmp) || filesize($tmp) < 100) { @unlink($tmp); return false; }
+    if (!@rename($tmp, $dest)) { // Windows: 있는 파일 위로는 이름 바꾸기가 안 됨
+        if (!@copy($tmp, $dest)) { @unlink($tmp); return false; }
+        @unlink($tmp);
+    }
+    @chmod($dest, 0644);
+    return true;
+}
+/** 폴더 표지를 자동으로 — [cover].jpg 를 지우고, 목록 화면이 처음 만들 때와 같이 첫 압축 파일(이름 순)의 썸네일로 다시 만듦(썸네일이 아직 없으면 목록을 열 때 만들어짐) */
+function mc_folder_cover_auto($dir) {
+    $dir = rtrim((string)$dir, '/\\');
+    if ($dir === '' || !is_dir($dir)) return false;
+    $cf = $dir . '/[cover].jpg';
+    if (is_file($cf) && !@unlink($cf)) return false;
+    $arcs = [];
+    foreach ((@scandir($dir) ?: []) as $n) {
+        if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $n) && is_file($dir . '/' . $n)) $arcs[] = $n;
+    }
+    if (!$arcs) return true;
+    $arcs = n_sort($arcs);
+    $j = @json_decode((string)@file_get_contents(get_cache_json_path($dir . '/' . reset($arcs))), true);
+    if (is_array($j) && !empty($j['thumbnail']) && is_string($j['thumbnail']) && strlen($j['thumbnail']) > 100) {
+        $d = base64_decode($j['thumbnail'], true);
+        if (is_string($d) && $d !== '') @file_put_contents($cf, $d, LOCK_EX);
+    }
+    return true;
+}
 if (!function_exists('mc_media_cover_pick')) {
 /**
  * 압축 책이 없는 폴더에서 표지로 쓸 그림 찾기
@@ -2073,18 +2145,100 @@ function mc_media_file_cover_data($path) {
     return (is_string($d) && $d !== '') ? $d : false;
 }
 }
+// ★ (2026-11-10 18:39, 펜닐 요청 — fix104) 즐겨찾기·북마크·서재의 쪽 번호 단추를 폴더 목록(index.php)과 같게 — 관리자 설정 '페이지 네비게이션 PC/모바일'(pages_per_group·pages_per_group_mobile)
+//   묶음 방식: [« 처음][‹ 이전 묶음] 이 묶음의 쪽 번호 [› 다음 묶음], 화면 폭 768px 이하는 모바일 개수(목록 화면 스크립트와 같은 기준)
+function mc_pager_groups() {
+    return [max(1, (int)($GLOBALS['pages_per_group'] ?? 10)), max(1, (int)($GLOBALS['pages_per_group_mobile'] ?? 5))];
+}
+/** 서버에서 처음 그릴 때(서재) — 목록 화면과 같은 User-Agent 판정 */
+function mc_pager_is_mobile() {
+    $ua = strtolower((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+    return strpos($ua, 'mobile') !== false || strpos($ua, 'android') !== false || strpos($ua, 'iphone') !== false || strpos($ua, 'ipad') !== false;
+}
+/** 묶음 범위 [start, end, 처음(0=없음), 이전 묶음 끝(0=없음), 다음 묶음 처음(0=없음)] */
+function mc_pager_range($cur, $pages, $per) {
+    $per = max(1, (int)$per); $pages = max(1, (int)$pages); $cur = min(max(1, (int)$cur), $pages);
+    $grp = (int)ceil($cur / $per); $st = ($grp - 1) * $per + 1; $en = min($st + $per - 1, $pages);
+    return [$st, $en, $grp > 1 ? 1 : 0, $grp > 1 ? $st - 1 : 0, $en < $pages ? $en + 1 : 0];
+}
+/** 화면 스크립트용 — window.mcPgGroup.range(지금 쪽, 전체 쪽) · onChange(다시 그리기: 폭이 768px 를 넘나들 때) */
+function mc_pager_group_js() {
+    [$pc, $mo] = mc_pager_groups();
+    $t = json_encode(['first' => __('ui_first_page'), 'prev' => __('ui_prev_group'), 'next' => __('ui_next_group')], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+    return '<script>if(!window.mcPgGroup){window.mcPgGroup={pc:' . $pc . ',mob:' . $mo . ',t:' . $t . ','
+        . 'per:function(){return (window.innerWidth||document.documentElement.clientWidth)<=768?this.mob:this.pc;},'
+        . 'range:function(cur,pages){var g=this.per(),grp=Math.ceil(cur/g),st=(grp-1)*g+1,en=Math.min(st+g-1,pages);return{st:st,en:en,first:grp>1?1:0,prev:grp>1?st-1:0,next:en<pages?en+1:0};},'
+        . 'onChange:function(fn){var self=this,m=this.per();window.addEventListener("resize",function(){var n=self.per();if(n!==m){m=n;fn();}});},'
+        // ★ (2026-11-10 19:18 fix105) 부트스트랩 쪽 단추(<li class="page-item">) — o.href(p) 주소, o.click(p) 누를 때 부를 식, o.attr(p) 더 붙일 속성, o.cls 링크 클래스
+        . 'bs:function(cur,pages,o){o=o||{};var R=this.range(cur,pages),t=this.t,e=function(s){return String(s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");},'
+        . 'li=function(p,l,tip,on){return \'<li class="page-item\'+(on?\' active\':\'\')+\'"><a class="page-link\'+(o.cls?\' \'+o.cls:\'\')+\'" href="\'+e(o.href?o.href(p):"#")+\'"\'+(o.click?\' onclick="\'+e(o.click(p))+\';return false;"\':\'\')+(o.attr?\' \'+o.attr(p):\'\')+(tip?\' title="\'+e(tip)+\'" aria-label="\'+e(tip)+\'"\':\'\')+\'>\'+l+\'</a></li>\';},h=\'\';'
+        . 'if(R.first)h+=li(1,"«",t.first);if(R.prev)h+=li(R.prev,"‹",t.prev);for(var p=R.st;p<=R.en;p++)h+=li(p,p,"",p===cur);if(R.next)h+=li(R.next,"›",t.next);return h;}};'
+        // 서버가 그린 부트스트랩 쪽 단추(mc_pager_bs_items — ul[data-mc-pg])도 폭이 768px 를 넘나들면 다시 그림
+        . 'window.mcPgGroup.onChange(function(){document.querySelectorAll("ul[data-mc-pg]").forEach(function(u){var U=u.getAttribute("data-url")||"";u.innerHTML=window.mcPgGroup.bs(+u.getAttribute("data-cur")||1,+u.getAttribute("data-pages")||1,{href:function(p){return U.replace("987654321",p);},cls:u.getAttribute("data-cls")||""});});});}</script>';
+}
+/** ★ (2026-11-10 19:18, 펜닐 요청 — fix105) 서버에서 그리는 부트스트랩 쪽 단추 — <ul class="pagination ..."> 의 여는 태그 속성과 <li> 들. $href(쪽) = 주소
+ *   쓰는 법: <ul class="pagination ..." <?php echo $a; ?>><?php echo $li; ?></ul> 처럼 [$a, $li] = mc_pager_bs($cur, $pages, $href) */
+function mc_pager_bs($cur, $pages, callable $href, $cls = '') {
+    [$pc, $mo] = mc_pager_groups();
+    $pages = max(1, (int)$pages); $cur = min(max(1, (int)$cur), $pages);
+    [$st, $en, $f, $pv, $nx] = mc_pager_range($cur, $pages, mc_pager_is_mobile() ? $mo : $pc);
+    $li = function ($p, $l, $tip, $on) use ($href, $cls) {
+        return '<li class="page-item' . ($on ? ' active' : '') . '"><a class="page-link' . ($cls !== '' ? ' ' . h($cls) : '') . '" href="' . h($href($p)) . '"' . ($tip !== '' ? ' title="' . h($tip) . '" aria-label="' . h($tip) . '"' : '') . '>' . $l . '</a></li>';
+    };
+    $h = '';
+    if ($f) $h .= $li(1, '«', __('ui_first_page'), false);
+    if ($pv) $h .= $li($pv, '‹', __('ui_prev_group'), false);
+    for ($p = $st; $p <= $en; $p++) $h .= $li($p, (string)$p, '', $p === $cur);
+    if ($nx) $h .= $li($nx, '›', __('ui_next_group'), false);
+    $a = 'data-mc-pg="1" data-cur="' . $cur . '" data-pages="' . $pages . '" data-url="' . h($href(987654321)) . '"' . ($cls !== '' ? ' data-cls="' . h($cls) . '"' : '');
+    return [$a, $h];
+}
+
 if (!function_exists('mc_doc_cover_btn')) {
 /** ★ (2026-11-08 fix80, 펜닐 요청) EPUB·TXT·오피스·한글 뷰어의 '이 책 표지를 폴더 표지로' 단추(관리자만) — bookmark.php?mode=set_cover(삭제 토큰)
  *   쓸 그림: 같은 이름 그림(책.jpg 등) → 파일 안 표지(EPUB 표지·HWPX 미리보기·오피스 썸네일). 없으면 '표지로 쓸 그림이 없습니다' */
-function mc_doc_cover_btn($getfile, $bidx, $class = '') {
+function mc_doc_cover_btn($getfile, $bidx, $class = '', $page = false) {
     if (trim((string)($_SESSION['user_group'] ?? '')) !== 'admin' || !function_exists('get_delete_token')) return '';
     $url = 'bookmark.php?mode=set_cover&file=' . encode_url((string)$getfile) . '&bidx=' . (int)$bidx . '&token=' . urlencode((string)get_delete_token());
     $lbl = __h('doc_cover_btn');
-    return '<button type="button" class="' . h($class) . '" title="' . $lbl . '" aria-label="' . $lbl . '" data-url="' . h($url) . '" onclick="mcDocCover(this)">🖼️</button>'
+    // ★ (2026-11-10 14:55, 펜닐 요청 — fix99) 단추를 누르면 작은 메뉴 — 책 표지를 폴더 표지로(예전 동작) · 그림 골라 파일 표지로 · 그림 골라 폴더 표지로 · 자동으로 되돌리기
+    //   $page = true(rhwp — 쪽이 그림): 이 쪽을 파일 표지로 · 이 쪽을 폴더 표지로 · 자동으로(뷰어가 window.mcDocCoverPage() 로 지금 쪽 그림을 줌)
+    //   보내기는 만화 뷰어와 같음: bookmark.php set_cover_img(target=file|폴더)·cover_auto — POST·관리자·CSRF. 끝나면 localStorage 'mc_cover_bump' 로 목록이 새로고침 없이 바뀜(index.php)
+    $gf = str_replace('\\', '/', (string)$getfile);
+    $dir = rtrim(str_replace('\\', '/', dirname($gf)), '/');
+    $csrf = function_exists('generate_csrf_token') ? generate_csrf_token() : '';
+    $it = function ($a, $k) { return '<button type="button" class="mc-dcv-mi" data-a="' . $a . '" onclick="mcDocCoverDo(this)">' . __h($k) . '</button>'; };
+    $items = $page
+        ? $it('page-file', 'mcv2_cover_file') . $it('page-folder', 'mcv2_cover_folder') . $it('book', 'doc_cover_book') // ★ (2026-11-10 16:08 fix101) rhwp 도 예전 '책 표지(문서 안 미리보기 등)를 폴더 표지로'를 그대로 둠
+        : $it('book', 'doc_cover_book') . $it('pick-file', 'doc_cover_pick_file') . $it('pick-folder', 'doc_cover_pick_folder');
+    $items .= $it('auto', 'mcv2_cover_auto');
+    return '<span class="mc-dcv" style="position:relative;display:inline-block" data-url="' . h($url) . '" data-file="' . h($gf) . '" data-dir="' . h($dir) . '" data-bidx="' . (int)$bidx . '" data-csrf="' . h($csrf) . '" data-q="' . __h('mcv2_cover_auto_q') . '" data-none="' . __h('viewer_cover_none') . '">'
+        . '<button type="button" class="' . h($class) . '" title="' . $lbl . '" aria-label="' . $lbl . '" aria-haspopup="true" onclick="mcDocCoverMenu(this)">🖼️</button>'
+        . '<span class="mc-dcv-menu" hidden>' . $items . '</span>'
+        . '<input type="file" accept="image/*" hidden></span>'
+        // 메뉴는 화면 기준(fixed)으로 단추 바로 아래에, 화면 밖으로 안 나가게(열 때 자리를 셈) — 뷰어마다 머리 막대 단추 규칙이 달라 메뉴 칸은 !important 로 고정
+        . '<style>.mc-dcv .mc-dcv-menu{position:fixed;z-index:3000;display:block;background:#fff;color:#222;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.25);padding:4px 0;min-width:190px;max-width:calc(100vw - 16px);text-align:left;white-space:nowrap;font-size:14px;line-height:1.3}.mc-dcv .mc-dcv-menu[hidden]{display:none!important}'
+        . '.mc-dcv .mc-dcv-menu .mc-dcv-mi{display:block!important;width:100%!important;height:auto!important;min-height:0!important;background:none!important;border:0!important;border-radius:0!important;margin:0!important;color:#222!important;padding:8px 14px!important;font-size:14px!important;text-align:left!important;cursor:pointer;white-space:nowrap;box-shadow:none!important}.mc-dcv .mc-dcv-menu .mc-dcv-mi:hover{background:#eef2f7!important}</style>'
+        . '<script>(function(){if(window.mcDocCoverDo)return;'
+        . 'window.mcDocCoverMenu=function(b){var m=b.parentNode.querySelector(".mc-dcv-menu");m.hidden=!m.hidden;if(m.hidden)return;var r=b.getBoundingClientRect(),w=m.offsetWidth,h=m.offsetHeight,vw=document.documentElement.clientWidth,vh=window.innerHeight;'
+        . 'm.style.left=Math.max(8,Math.min(r.right-w,vw-w-8))+"px";m.style.top=((r.bottom+4+h>vh&&r.top-4-h>0)?(r.top-4-h):(r.bottom+4))+"px";};'
+        . 'document.addEventListener("click",function(e){document.querySelectorAll(".mc-dcv-menu").forEach(function(m){if(!m.hidden&&!(e.target.closest&&e.target.closest(".mc-dcv")===m.parentNode))m.hidden=true;});});'
+        . 'window.addEventListener("scroll",function(){document.querySelectorAll(".mc-dcv-menu").forEach(function(m){m.hidden=true;});},true);' // 화면 기준 메뉴라 스크롤하면 닫음
+        . 'function bump(w,k){try{localStorage.setItem("mc_cover_bump",JSON.stringify({t:Date.now(),f:w.getAttribute("data-file"),d:w.getAttribute("data-dir"),k:k}));}catch(e){}}'
         // ★ (2026-11-08 fix81) 원래 모양은 innerHTML 로 되돌림 — 아이콘 스크립트(mc-icons.js)가 🖼️ 를 SVG 로 바꿔 글자(textContent)가 비어, 누른 뒤 단추가 빈칸이 되던 것
-        . '<script>window.mcDocCover=window.mcDocCover||function(b){if(b.disabled)return;var h0=b.innerHTML,l0=b.title;b.disabled=true;b.textContent="…";'
-        . 'fetch(b.getAttribute("data-url"),{credentials:"same-origin"}).then(function(r){return r.text().then(function(t){b.textContent=r.ok?"✓":"✕";b.title=String(t||"").slice(0,80);});})'
-        . '.catch(function(){b.textContent="✕";}).then(function(){setTimeout(function(){b.innerHTML=h0;b.title=l0;b.disabled=false;},2500);});};</script>';
+        . 'function run(w,p,k){var b=w.querySelector("button"),h0=b.innerHTML,l0=b.title;b.disabled=true;b.textContent="…";'
+        . 'p.then(function(r){return r.text().then(function(t){if(r.ok&&k)bump(w,k);b.textContent=r.ok?"✓":"✕";b.title=String(t||"").slice(0,80);});})'
+        . '.catch(function(){b.textContent="✕";}).then(function(){setTimeout(function(){b.innerHTML=h0;b.title=l0;b.disabled=false;},2500);});}'
+        . 'function post(w,mode,img,tg){var f=new FormData();f.append("mode",mode);f.append("file",w.getAttribute("data-file"));f.append("csrf_token",w.getAttribute("data-csrf"));if(img)f.append("image",img);if(tg==="file")f.append("target","file");'
+        . 'return fetch("bookmark.php?bidx="+(+w.getAttribute("data-bidx")||0),{method:"POST",body:f,credentials:"same-origin"});}'
+        . 'function shrink(src,cb){var im=new Image();im.onload=function(){try{var w=im.naturalWidth,h=im.naturalHeight;if(!w||!h)return cb(null);var s=Math.min(1,1000/h),c=document.createElement("canvas");c.width=Math.max(1,Math.round(w*s));c.height=Math.max(1,Math.round(h*s));var x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);cb(c.toDataURL("image/jpeg",0.88));}catch(e){cb(null);}};im.onerror=function(){cb(null);};im.src=src;}'
+        . 'function fail(w){var b=w.querySelector("button"),h0=b.innerHTML,l0=b.title;b.textContent="✕";b.title=w.getAttribute("data-none");setTimeout(function(){b.innerHTML=h0;b.title=l0;},2500);}'
+        . 'window.mcDocCoverDo=function(it){var w=it.closest(".mc-dcv"),a=it.getAttribute("data-a"),tg=/file$/.test(a)?"file":"folder";w.querySelector(".mc-dcv-menu").hidden=true;'
+        . 'if(a==="book"){run(w,fetch(w.getAttribute("data-url"),{credentials:"same-origin"}),"folder");return;}'
+        . 'if(a==="auto"){if(confirm(w.getAttribute("data-q")))run(w,post(w,"cover_auto"),"auto");return;}'
+        . 'if(/^page-/.test(a)){if(typeof window.mcDocCoverPage!=="function")return fail(w);Promise.resolve(window.mcDocCoverPage()).then(function(d){if(!d)return fail(w);run(w,post(w,"set_cover_img",d,tg),tg);},function(){fail(w);});return;}'
+        . 'var inp=w.querySelector("input[type=file]");inp.value="";inp.onchange=function(){var fl=inp.files&&inp.files[0];if(!fl)return;var u=URL.createObjectURL(fl);shrink(u,function(d){URL.revokeObjectURL(u);if(!d)return fail(w);run(w,post(w,"set_cover_img",d,tg),tg);});};inp.click();};'
+        . '})();</script>';
 }
 }
 if (!function_exists('mc_media_folder_cover_make')) {

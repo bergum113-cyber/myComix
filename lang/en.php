@@ -2810,6 +2810,9 @@ Save now?',
 Cache tab → Regen stats / Delete folder cache
 → Refresh main page',
     'adm_cfg_folder_list_help' => 'Folders per page in folder-only directories',
+    // ★ (2026-11-10 22:26 fix107) where the page-nav settings apply
+    'adm_cfg_page_nav_pc_help' => 'Page number buttons shown at once (PC) — folder list, favorites, bookmarks, library, my login history; admin login/activity logs, deleted users, duplicates, search translations',
+    'adm_cfg_page_nav_mobile_help' => 'Page number buttons shown at once (screen 768px wide or less) — same pages as PC',
     'adm_cfg_file_list_help' => 'Items per page in directories with files (99999999 = infinite scroll)',
     'adm_cfg_folder_list_mobile_help' => 'Folders per page on mobile (folder-only)',
     'adm_cfg_file_list_mobile_help' => 'Items per page on mobile (with files) (smaller value recommended)',
@@ -3275,6 +3278,17 @@ Cache tab → Regen stats / Delete folder cache
     'mcv2_bright_up' => 'Brighter',
     'mcv2_bright_zero' => 'Reset brightness',
     'mcv2_cover' => 'Set as cover',
+    // ★ (2026-11-10 13:56 fix98) choose covers by hand (admin) — file cover · folder cover · back to automatic
+    'mcv2_cover_file' => 'Use this page as file cover',
+    'mcv2_cover_folder' => 'Use this page as folder cover',
+    'mcv2_cover_auto' => 'Back to automatic',
+    'mcv2_cover_auto_q' => 'Reset covers to automatic (first page)? The cover chosen for this file and this folder\'s cover ([cover].jpg) will be removed and made again.',
+    'mcv2_cover_auto_done' => 'Reset to automatic',
+    'viewer_cover_frame_file' => 'Use this frame as file cover',
+    // ★ (2026-11-10 14:55 fix99) e-book · HWP · Office viewer cover menu
+    'doc_cover_book' => 'Use book cover as folder cover',
+    'doc_cover_pick_file' => 'Pick an image as file cover',
+    'doc_cover_pick_folder' => 'Pick an image as folder cover',
     'mcv2_done' => 'Bookmarked at page %s · each book keeps one bookmark, so the previous one moves here',
     'mcv2_copy_hint' => 'Tap to show the full title',
     'mcv2_copy_title' => 'Copy title',

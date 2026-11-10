@@ -64,7 +64,7 @@ $getfile = decode_file_param($_GET['file'] ?? $_POST['file'] ?? '');
 $mode = $_GET['mode'] ?? $_POST['mode'] ?? '';
 if (!is_string($mode)) $mode = ''; // ★ (2026-11-02 11:35) 배열이면 기본(북마크 저장)으로 빈 키가 저장되던 것
 // ★ (2026-11-02 11:35) 저장하는 요청은 빈 경로·'..' 경로·볼 수 없는 폴더를 받지 않음 — 저장해 두고 북마크·즐겨찾기 화면의 '파일 없음' 표시로 서버 파일·숨긴 폴더 파일이 있는지 알아낼 수 있었음
-if (!in_array($mode, ['delete_bookmark', 'delete_autosave', 'delete_epub_progress', 'delete_txt_progress', 'delete_favorite', 'check_favorite', 'list_favorites', 'set_cover', 'set_cover_img'], true)) {
+if (!in_array($mode, ['delete_bookmark', 'delete_autosave', 'delete_epub_progress', 'delete_txt_progress', 'delete_favorite', 'check_favorite', 'list_favorites', 'set_cover', 'set_cover_img', 'cover_auto'], true)) {
     $__gf = str_replace('\\', '/', (string)$getfile);
     if (trim($__gf, '/') === '' || preg_match('#(^|/)\.\.(/|$)#', $__gf) || strpos($__gf, "\0") !== false
         || (function_exists('mc_path_allowed') && !mc_path_allowed($__gf))) {
@@ -77,7 +77,7 @@ $bookmark_file = get_bookmark_file();
 $autosave_file = get_autosave_file();
 $favorites_file = get_favorites_file();
 // ★ (2026-11-09 11:43) 기록을 고치는 요청은 계정별로 차례로(function.php mc_rec_lock) — 동시에 온 자동 저장·북마크·즐겨찾기가 서로의 기록을 지우던 것. 표지 지정·읽기만 하는 요청은 제외
-if (!in_array($mode, ['set_cover', 'set_cover_img', 'check_favorite', 'list_favorites'], true) && function_exists('mc_rec_lock')) mc_rec_lock();
+if (!in_array($mode, ['set_cover', 'set_cover_img', 'cover_auto', 'check_favorite', 'list_favorites'], true) && function_exists('mc_rec_lock')) mc_rec_lock();
 
 // ✅ 설정값 - get_app_settings() 함수 사용 (global 대신 권장)
 $max_bookmark = (int)get_app_settings('max_bookmark', 10);
@@ -99,7 +99,7 @@ $rec_bidx = mc_rec_req_bidx($bidx);
 // ============================================================
 // 삭제 작업 목록 (토큰 필수)
 // ============================================================
-$delete_modes = ['delete_bookmark', 'delete_autosave', 'delete_epub_progress', 'delete_txt_progress', 'set_cover', 'set_cover_img', 'delete_favorite']; // ★ (2026-11-08 fix80) set_cover_img(POST — CSRF 토큰)
+$delete_modes = ['delete_bookmark', 'delete_autosave', 'delete_epub_progress', 'delete_txt_progress', 'set_cover', 'set_cover_img', 'cover_auto', 'delete_favorite']; // ★ (2026-11-08 fix80) set_cover_img(POST — CSRF 토큰) / ★ (2026-11-10 13:53 fix98) cover_auto(POST — CSRF 토큰)
 
 // ✅ 삭제 작업은 토큰 필수 - verify_state_change_request(true) 사용
 if (in_array($mode, $delete_modes)) {
@@ -149,6 +149,13 @@ if ($mode === "delete_bookmark") {
     // ★ (2026-11-02 00:59) 쪽 안 위치(천분율) — 툰모드·PDF 가 보냄(북모드는 쪽 단위라 안 보냄 → 지움)
     $_f = sanitize_frac($_GET['f'] ?? null);
     if ($_f !== null) $autosave_arr[$__ak]['f'] = $_f; else unset($autosave_arr[$__ak]['f']);
+    // ★ (2026-11-10 17:22, 펜닐 요청 — fix103) 화면에 가장 넓게 보이는 쪽(0부터) — 툰모드·PDF 가 보냄. 쪽 번호·서재 %·다 읽음은 이 값으로(화면 기준)
+    //   이어 보기 위치(bookmark·f — 보던 줄)는 그대로. 저장 위치 쪽 이상·50쪽 안일 때만 받음(엉뚱한 값은 버림 → 예전처럼 저장 위치 쪽)
+    $__mk = (string)$autosave_arr[$__ak]['bookmark'];
+    $__mp = preg_match('/^image(\d{1,6})/', $__mk, $__mm) ? (int)$__mm[1] : (preg_match('/^pdf_(\d{1,6})$/', $__mk, $__mm) ? max(0, (int)$__mm[1] - 1) : 0);
+    $__vp = (is_string($_GET['vp'] ?? null) && ctype_digit($_GET['vp']) && strlen($_GET['vp']) <= 6) ? (int)$_GET['vp'] : -1;
+    if ($__vp < $__mp || $__vp > $__mp + 50) $__vp = -1;
+    if ($__vp >= 0) $autosave_arr[$__ak]['vp'] = $__vp; else unset($autosave_arr[$__ak]['vp']);
     save_json_with_lock($autosave_file, $autosave_arr);
 
     // ★ (2026-10-29) 라이브러리 읽기 기록(시리즈 이어보기·다 읽음 표시용). 실패해도 기존 저장에는 영향 없음
@@ -156,7 +163,7 @@ if ($mode === "delete_bookmark") {
         if (is_file(__DIR__ . '/library.php')) {
             require_once __DIR__ . '/library.php';
             if (function_exists('mc_lib_record_read')) {
-                mc_lib_record_read($_SESSION['user_id'] ?? '', $bidx, $getfile, mc_lib_page_from_mark(sanitize_bookmark($_GET['bookmark'] ?? '')) /* ★ (2026-11-02) 걸러진 값으로 — 배열이 오면 경고 났음 */, (is_string($_GET['total'] ?? null) && ctype_digit($_GET['total'])) ? (int)$_GET['total'] : 0);
+                mc_lib_record_read($_SESSION['user_id'] ?? '', $bidx, $getfile, $__vp >= 0 ? $__vp : mc_lib_page_from_mark(sanitize_bookmark($_GET['bookmark'] ?? '')) /* ★ (2026-11-02) 걸러진 값으로 — 배열이 오면 경고 났음 / ★ (2026-11-10 17:22 fix103) 화면 기준 쪽이 있으면 그것 */, (is_string($_GET['total'] ?? null) && ctype_digit($_GET['total'])) ? (int)$_GET['total'] : 0);
             }
         }
     } catch (\Throwable $e) { /* 무시 */ }
@@ -321,12 +328,31 @@ if ($mode === "delete_bookmark") {
     if (trim((string)($_SESSION['user_group'] ?? '')) !== 'admin') simple_error_exit(403, __('err_access_denied'));
     if (trim(str_replace('\\', '/', (string)$getfile), '/.') === '') simple_error_exit(400, __('err_invalid_path'));
     $base_file = validate_file_path($getfile, $base_dir);
-    if ($base_file === false || !is_file($base_file) || !mc_path_allowed($getfile)) simple_error_exit(403, __('err_invalid_path'));
+    if ($base_file === false || !(is_file($base_file) || is_dir($base_file)) || !mc_path_allowed($getfile)) simple_error_exit(403, __('err_invalid_path')); // ★ (2026-11-10 13:53 fix98) 이미지 폴더(폴더 자체가 책)도
     $__img = $_POST['image'] ?? '';
     $__d = false;
     if (is_string($__img) && strlen($__img) < 12 * 1048576 && preg_match('#^data:image/(?:jpeg|png|webp);base64,([A-Za-z0-9+/=\s]+)$#', $__img, $__m)) $__d = base64_decode(preg_replace('/\s+/', '', $__m[1]), true);
+    // ★ (2026-11-10 13:53, 펜닐 요청 — fix98) target=file 이면 이 파일의 표지(목록 카드)로 — 없으면 예전처럼 폴더 표지
+    if (($_POST['target'] ?? '') === 'file') {
+        if (!is_string($__d) || $__d === '' || !function_exists('mc_write_file_cover') || !mc_write_file_cover($base_file, $__d)) { http_response_code(422); echo __('viewer_cover_none'); exit; }
+        echo __('bookmark_set'); exit;
+    }
     if (!is_string($__d) || $__d === '' || !function_exists('mc_write_folder_cover') || !mc_write_folder_cover(rtrim(dirname($base_file), '/\\'), $__d)) { http_response_code(422); echo __('viewer_cover_none'); exit; }
     echo __('bookmark_set');
+
+} elseif ($mode === "cover_auto") {
+    // ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 표지를 자동으로 되돌림 — 이 파일에 직접 지정한 표지를 지우고, 폴더 표지([cover].jpg)도 지운 뒤 자동(첫 파일의 첫 쪽)으로 다시 만듦
+    //   set_cover_img 와 같은 조건: POST · 관리자만 · CSRF 토큰(위 delete_modes) · 빈 경로 거절 · 경로·폴더 권한
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') simple_error_exit(405, 'Method Not Allowed');
+    if (trim((string)($_SESSION['user_group'] ?? '')) !== 'admin') simple_error_exit(403, __('err_access_denied'));
+    if (trim(str_replace('\\', '/', (string)$getfile), '/.') === '') simple_error_exit(400, __('err_invalid_path'));
+    $base_file = validate_file_path($getfile, $base_dir);
+    if ($base_file === false || !(is_file($base_file) || is_dir($base_file)) || !mc_path_allowed($getfile)) simple_error_exit(403, __('err_invalid_path'));
+    $__fc = mc_file_cover_path($base_file);
+    $__ok = (!is_file($__fc) || @unlink($__fc));
+    if (!mc_folder_cover_auto(rtrim(dirname($base_file), '/\\'))) $__ok = false;
+    if (!$__ok) { http_response_code(500); echo '✕'; exit; }
+    echo __('mcv2_cover_auto_done');
 
 } elseif ($mode === "add_favorite") {
     // ✅ 즐겨찾기 추가 (토큰 불필요, 세션만 확인)

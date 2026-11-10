@@ -264,6 +264,8 @@
     if (act === 'bookmark') { closePop(); if (typeof window.save_bookmark === 'function') watchInfo(window.save_bookmark); return; }
     if (act === 'fav') { closePop(); toggleFav(); return; }
     if (act === 'cover') { closePop(); if (typeof window.set_cover === 'function') watchInfo(window.set_cover); return; }
+    // ★ (2026-11-10 13:54, 펜닐 요청 — fix98) 지금 보는 쪽(위 막대 쪽 번호와 같은 쪽)을 파일 표지·폴더 표지로 / 자동으로 되돌리기 — viewer.php mcCoverPage
+    if (act === 'cover-file' || act === 'cover-folder' || act === 'cover-auto') { closePop(); if (typeof window.mcCoverPage === 'function') { var ci = hereIdx(); watchInfo(function () { window.mcCoverPage(act.slice(6), ci); }); } return; }
     if (act === 'bright-down' && typeof window.bright_down === 'function') { watchInfo(window.bright_down); saveBright(); return; }
     if (act === 'bright-up' && typeof window.bright_up === 'function') { watchInfo(window.bright_up); saveBright(); return; }
     if (act === 'bright-zero' && typeof window.bright === 'function') { watchInfo(window.bright); saveBright(); return; }
@@ -531,6 +533,32 @@
     }
     return { idx: idx, frac: frac };
   }
+  // ★ (2026-11-10 17:22, 펜닐 요청 — fix103) 화면(위 막대 아래 ~ 화면 아래)에 보이는 쪽(0부터) — 위 막대 쪽 번호·%, 북모드로 바꿀 때 쪽, 서재 %(자동 저장 vp)·책갈피·표지의 공통 기준
+  //   위에서부터 '자기 높이의 반 이상이 화면에 보이는' 첫 쪽(같은 줄 펼침이면 쪽 번호가 작은 쪽) — 없으면(쪽이 화면보다 커서 어느 쪽도 반이 안 보임) 가장 넓게 보이는 쪽
+  //   ★ (2026-11-10 17:45 보강) 처음엔 '가장 넓게 보이는 쪽'만 봤는데, 휴대폰에서 짧은 가로 1쪽 밑에 긴 2쪽이 더 넓게 보여 책을 열자마자 '2 / 30' 이 됐음(회귀 시험 vres·vtt 에서 찾음)
+  //   이어 보기 저장 위치(current() — 보던 줄)는 그대로
+  function visIdx() {
+    var top = barH(), vh = window.innerHeight || document.documentElement.clientHeight, vw = document.documentElement.clientWidth || window.innerWidth;
+    var imgs = box ? box.querySelectorAll('img[id^="image"]') : [];
+    var best = -1, bestA = 0, half = -1, halfTop = 0;
+    for (var k = 0; k < imgs.length; k++) {
+      var r = imgs[k].getBoundingClientRect();
+      if (r.height <= 0 || r.width <= 0) continue;
+      if (r.top >= vh) break; // 아래는 다 화면 밖(그림은 위에서 아래 순서)
+      var h = Math.max(0, Math.min(r.bottom, vh) - Math.max(r.top, top)), a = h * Math.max(0, Math.min(r.right, vw) - Math.max(r.left, 0));
+      if (a <= 0) continue;
+      var m = imgs[k].id.match(/^image(\d+)/); if (!m) continue;
+      var n = parseInt(m[1], 10);
+      if (h >= r.height * 0.5 - 1) { // 반 이상 보임 — 처음 찾은 줄의 쪽(같은 줄이면 번호 작은 쪽)
+        if (half < 0) { half = n; halfTop = r.top; } else if (Math.abs(r.top - halfTop) < 2 && n < half) half = n;
+      }
+      if (a > bestA * 1.01 || (Math.abs(a - bestA) <= bestA * 0.01 && n < best)) { best = n; bestA = a; }
+    }
+    if (half >= 0) return half;
+    if (best < 0) { try { return current().idx; } catch (e) { return 0; } }
+    return best;
+  }
+  try { window.mcVisibleIdx = isBook ? null : visIdx; } catch (e) {}
   function atBottom() {
     var se = document.scrollingElement || document.documentElement;
     return (window.innerHeight + (window.scrollY || se.scrollTop)) >= se.scrollHeight - 60;
@@ -550,10 +578,11 @@
   var lastTxt = '';
   function update() {
     if (!total) return;
-    var c = current();
+    var c = current(), v = visIdx();
     var end = atBottom() && (c.idx >= total - 2 || lastShown());
-    var pct = end ? 100 : Math.max(0, Math.min(100, Math.round((c.idx + c.frac) / total * 100)));
-    var page = end ? total : c.idx + 1;
+    // ★ (2026-11-10 17:22 fix103) 쪽 번호·% 는 화면에 가장 넓게 보이는 쪽으로 — % 는 서재(series.php: (쪽+1)/총쪽 내림)와 같은 셈. 전엔 맨 위 줄 쪽 + 쪽 안 위치라 화면·서재와 1쪽·몇 % 어긋났음
+    var pct = end ? 100 : Math.max(0, Math.min(100, Math.floor((v + 1) / total * 100)));
+    var page = end ? total : v + 1;
     var txt = page + ' / ' + total + ' · ' + pct + '%';
     if (posEl && txt !== lastTxt) { posEl.textContent = txt; lastTxt = txt; }
     if (progI) progI.style.width = pct + '%';
@@ -578,7 +607,7 @@
   // 📖 북모드 — 지금 보던 쪽으로
   var toBook = $id('mcvToBook');
   if (toBook) toBook.addEventListener('click', function () {
-    var c = current();
+    var c = { idx: visIdx() }; // ★ (2026-11-10 17:22 fix103) 화면에 가장 넓게 보이는 쪽으로(전엔 맨 위 줄 쪽 — 앞 쪽 끝이 조금 남아 있으면 그 앞 쪽부터 열렸음)
     remember('book', C.order, c.idx); // ★ (2026-11-05 15:40) 이 책의 기록을 바로 북모드로(떠날 때 저장도 북모드로)
     setPref('mcv_mode', 'book');
     goReplace('./viewer.php?' + C.ft + 'mode=book&file=' + C.file + '&bidx=' + C.bidx + '&ms=1#image' + c.idx);

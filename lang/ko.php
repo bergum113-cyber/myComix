@@ -2810,6 +2810,9 @@ return [
 캐시 탭 → 통계 다시 만들기 / 폴더 캐시 삭제
 → 메인 화면 새로고침',
     'adm_cfg_folder_list_help' => '폴더만 있는 곳의 한 쪽당 폴더 수',
+    // ★ (2026-11-10 22:26, 펜닐 요청 — fix107) 페이지 네비 설정이 쓰이는 화면
+    'adm_cfg_page_nav_pc_help' => '쪽 번호 단추를 한 번에 몇 개 보일지 (PC) — 폴더 목록·즐겨찾기·북마크·서재·내 정보 접속 기록, 관리자 로그인·활동 기록·탈퇴 회원 기록·중복 파일·한영 검색어',
+    'adm_cfg_page_nav_mobile_help' => '쪽 번호 단추를 한 번에 몇 개 보일지 (화면 폭 768px 이하) — PC 와 같은 화면',
     'adm_cfg_file_list_help' => '파일이 있는 곳의 한 쪽당 항목 수 (99999999 = 무한 스크롤)',
     'adm_cfg_folder_list_mobile_help' => '모바일에서 한 쪽당 폴더 수 (폴더만 있는 곳)',
     'adm_cfg_file_list_mobile_help' => '모바일에서 한 쪽당 항목 수 (파일이 있는 곳, 작은 값 권장)',
@@ -3275,6 +3278,17 @@ return [
     'mcv2_bright_up' => '밝게',
     'mcv2_bright_zero' => '밝기 원래대로',
     'mcv2_cover' => '표지로 지정',
+    // ★ (2026-11-10 13:56, 펜닐 요청 — fix98) 표지 직접 지정(관리자) — 파일 표지·폴더 표지·자동으로
+    'mcv2_cover_file' => '이 쪽을 파일 표지로',
+    'mcv2_cover_folder' => '이 쪽을 폴더 표지로',
+    'mcv2_cover_auto' => '자동으로 되돌리기',
+    'mcv2_cover_auto_q' => '표지를 자동(첫 쪽)으로 되돌릴까요? 이 파일에 직접 고른 표지와 이 폴더의 표지([cover].jpg)를 지우고 다시 만듭니다.',
+    'mcv2_cover_auto_done' => '자동으로 되돌림',
+    'viewer_cover_frame_file' => '지금 장면을 파일 표지로',
+    // ★ (2026-11-10 14:55 fix99) 전자책·한글·오피스 뷰어 표지 메뉴
+    'doc_cover_book' => '책 표지를 폴더 표지로',
+    'doc_cover_pick_file' => '그림 골라 파일 표지로',
+    'doc_cover_pick_folder' => '그림 골라 폴더 표지로',
     'mcv2_done' => '책갈피를 %s쪽으로 저장했습니다 · 책마다 하나만 남아 이전 책갈피는 이 쪽으로 바뀝니다',
     'mcv2_copy_hint' => '누르면 전체 제목',
     'mcv2_copy_title' => '제목 복사',

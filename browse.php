@@ -782,12 +782,43 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
     <?php else: ?>
       <div id="libCards" class="sc-grid"><?php foreach ($page_cards as $c) lib_card($c); ?></div>
       <?php if ($pages > 1): ?>
+      <?php if (function_exists('mc_pager_range')): // ★ (2026-11-10 18:39, 펜닐 요청 — fix104) 폴더 목록과 같은 묶음 방식(관리자 설정 페이지 네비게이션 PC/모바일) — 전엔 지금 쪽 앞뒤 3쪽 + 처음·끝(…)
+        [$__gpc, $__gmo] = mc_pager_groups(); [$__gs, $__ge, $__gf, $__gp, $__gn] = mc_pager_range($page, $pages, mc_pager_is_mobile() ? $__gmo : $__gpc);
+        $__gu = lib_browse_url(['page' => 987654321]); // 쪽 번호 자리 — 아래 스크립트가 폭이 바뀌면 같은 주소 모양으로 다시 그림 ?>
+      <div class="lib-pager" id="libPager" data-cur="<?php echo (int)$page; ?>" data-pages="<?php echo (int)$pages; ?>" data-url="<?php echo h($__gu); ?>">
+        <?php if ($__gf): ?><a href="<?php echo h(lib_browse_url(['page' => 1])); ?>" title="<?php echo __h('ui_first_page'); ?>">«</a><?php endif; ?>
+        <?php if ($__gp): ?><a href="<?php echo h(lib_browse_url(['page' => $__gp])); ?>" title="<?php echo __h('ui_prev_group'); ?>">‹</a><?php endif; ?>
+        <?php for ($p = $__gs; $p <= $__ge; $p++): ?>
+          <?php if ($p === $page): ?><span class="cur"><?php echo $p; ?></span><?php else: ?><a href="<?php echo h(lib_browse_url(['page' => $p])); ?>"><?php echo $p; ?></a><?php endif; ?>
+        <?php endfor; ?>
+        <?php if ($__gn): ?><a href="<?php echo h(lib_browse_url(['page' => $__gn])); ?>" title="<?php echo __h('ui_next_group'); ?>">›</a><?php endif; ?>
+      </div>
+      <?php echo mc_pager_group_js(); ?>
+      <script>
+      (function () { // 화면 폭으로 PC/모바일 개수 맞춤(처음 그림은 기기 정보로 — 목록 화면과 같음)
+        var el = document.getElementById('libPager'), G = window.mcPgGroup; if (!el || !G) return;
+        var cur = +el.getAttribute('data-cur') || 1, pages = +el.getAttribute('data-pages') || 1, U = el.getAttribute('data-url') || '';
+        function url(p) { return U.replace('987654321', String(p)); }
+        function esc(s) { return String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+        function draw() {
+          var R = G.range(cur, pages), h = '';
+          if (R.first) h += '<a href="' + esc(url(1)) + '" title="' + esc(G.t.first) + '">«</a>';
+          if (R.prev) h += '<a href="' + esc(url(R.prev)) + '" title="' + esc(G.t.prev) + '">‹</a>';
+          for (var p = R.st; p <= R.en; p++) h += (p === cur) ? '<span class="cur">' + p + '</span>' : '<a href="' + esc(url(p)) + '">' + p + '</a>';
+          if (R.next) h += '<a href="' + esc(url(R.next)) + '" title="' + esc(G.t.next) + '">›</a>';
+          el.innerHTML = h;
+        }
+        draw(); G.onChange(draw);
+      })();
+      </script>
+      <?php else: ?>
       <div class="lib-pager">
         <?php for ($p = 1; $p <= $pages; $p++):
           if ($p !== 1 && $p !== $pages && abs($p - $page) > 3) { if ($p === 2 || $p === $pages - 1) echo '<span>…</span>'; continue; } ?>
           <?php if ($p === $page): ?><span class="cur"><?php echo $p; ?></span><?php else: ?><a href="<?php echo h(lib_browse_url(['page' => $p])); ?>"><?php echo $p; ?></a><?php endif; ?>
         <?php endfor; ?>
       </div>
+      <?php endif; ?>
       <?php endif; ?>
     <?php endif; ?>
   </div>

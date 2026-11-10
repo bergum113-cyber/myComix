@@ -125,7 +125,7 @@ $rhwp_v = function ($f) { return (string)(@filemtime(__DIR__ . '/js/rhwp/' . $f)
         <a class="switch-btn back-btn" href="<?php echo h($back_url); ?>" data-mc-back title="<?php echo __h('js_go_back'); ?>" aria-label="<?php echo __h('js_go_back'); ?>"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M19 12H5M12 19l-7-7 7-7"/></svg></a><?php /* ★ (2026-11-08 fix84) 뒤로가기 — 들어온 곳(폴더·즐겨찾기·북마크 등)으로, 바로 앞 기록이면 브라우저 뒤로(function.php mc_back_origin_viewer_js) */ ?>
         <span class="title" title="<?php echo h($filename); ?>"><?php echo h($filename); ?></span>
         <div class="controls">
-            <?php if (function_exists('mc_doc_cover_btn')) echo mc_doc_cover_btn($getfile, $bidx ?? 0, ''); /* ★ (2026-11-08 fix80) 이 책 표지를 폴더 표지로(관리자) */ ?>
+            <?php if (function_exists('mc_doc_cover_btn')) echo mc_doc_cover_btn($getfile, $bidx ?? 0, '', true); /* ★ (2026-11-08 fix80) 이 책 표지를 폴더 표지로(관리자) / ★ (2026-11-10 14:55 fix99) 쪽이 그림이라 '이 쪽을 파일·폴더 표지로' */ ?>
             <button type="button" id="btn-prev" disabled title="<?php echo __h('rhwp_prev'); ?>" aria-label="<?php echo __h('rhwp_prev'); ?>">◀</button>
             <span class="page-info" id="page-info">- / -</span>
             <button type="button" id="btn-next" disabled title="<?php echo __h('rhwp_next'); ?>" aria-label="<?php echo __h('rhwp_next'); ?>">▶</button>
@@ -284,6 +284,30 @@ $rhwp_v = function ($f) { return (string)(@filemtime(__DIR__ . '/js/rhwp/' . $f)
         }
     }
 
+    // ★ (2026-11-10 14:55, 펜닐 요청 — fix99) 지금 보는 쪽(위 쪽 번호)의 SVG 를 높이 1000px 이하 JPEG 로 — 표지 메뉴(function.php mc_doc_cover_btn)가 씀
+    window.mcDocCoverPage = function () {
+        return new Promise(function (res) {
+            const svg = body.querySelector('.page-container[data-page="' + currentPage + '"] svg');
+            if (!svg) return res(null);
+            const vb = (svg.getAttribute('viewBox') || '').split(/[\s,]+/).map(Number);
+            const w0 = vb[2] || svg.getBoundingClientRect().width, h0 = vb[3] || svg.getBoundingClientRect().height;
+            if (!w0 || !h0) return res(null);
+            const cl = svg.cloneNode(true); cl.setAttribute('width', w0); cl.setAttribute('height', h0); cl.removeAttribute('style');
+            if (!cl.getAttribute('xmlns')) cl.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+            const u = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(cl)], { type: 'image/svg+xml' }));
+            const im = new Image();
+            im.onload = function () {
+                try {
+                    const s = Math.min(3, 1000 / h0), c = document.createElement('canvas');
+                    c.width = Math.max(1, Math.round(w0 * s)); c.height = Math.max(1, Math.round(h0 * s));
+                    const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height); x.drawImage(im, 0, 0, c.width, c.height);
+                    URL.revokeObjectURL(u); res(c.toDataURL('image/jpeg', 0.88));
+                } catch (e) { URL.revokeObjectURL(u); res(null); }
+            };
+            im.onerror = function () { URL.revokeObjectURL(u); res(null); };
+            im.src = u;
+        });
+    };
     btnPrev.addEventListener('click', () => goPage(currentPage - 1));
     btnNext.addEventListener('click', () => goPage(currentPage + 1));
     // 스크롤 위치로 지금 쪽 표시

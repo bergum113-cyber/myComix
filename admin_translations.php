@@ -419,6 +419,7 @@ body{padding:15px;font-family:'Nanum Gothic',sans-serif;background:#f3f4f6;color
 <?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-11-07 fix36) 아이콘 변환을 본문보다 먼저 시작 — 새로고침 때 예전 이모지가 잠깐 보였다가 바뀌던 것(펜닐 제보) / 페이지 끝의 같은 스크립트는 다시 실행되지 않음 */ ?>
 </head>
 <body class="mc-adm at-page">
+<?php echo function_exists('mc_pager_group_js') ? mc_pager_group_js() : ''; /* ★ (2026-11-10 19:19 fix105) 쪽 번호 단추 묶음 */ ?>
 <?php mc_admin_topbar(function_exists('load_branding') ? load_branding() : []); mc_admin_menu('links', 'translations'); mc_admin_shell_js(); ?>
 <!-- CSRF 토큰 -->
 <input type="hidden" id="csrf_token" value="<?php echo h(generate_csrf_token()); ?>">
@@ -545,6 +546,9 @@ foreach ($page_translations as $index => $item):
 <?php if ($total_pages > 1):
   $__qs = function ($pg) use ($search_query, $sort) { return '?page=' . (int)$pg . ($search_query !== '' ? '&search=' . urlencode($search_query) : '') . '&sort=' . urlencode($sort); };
 ?>
+<?php if (function_exists('mc_pager_bs')): [$__pga, $__pgl] = mc_pager_bs($page, $total_pages, $__qs); /* ★ (2026-11-10 19:19, 펜닐 요청 — fix105) 폴더 목록과 같은 묶음 방식 */ ?>
+<nav><ul class="pagination" style="margin-top:16px;justify-content:center;flex-wrap:wrap" <?php echo $__pga; ?>><?php echo $__pgl; ?></ul></nav>
+<?php else: ?>
 <nav><ul class="pagination" style="margin-top:16px;justify-content:center;flex-wrap:wrap">
 <?php if ($page > 1): ?><li class="page-item"><a class="page-link" href="<?php echo h($__qs($page - 1)); ?>"><?php echo __("at_prev"); ?></a></li><?php endif; ?>
 <?php $start_page = max(1, $page - 2); $end_page = min($total_pages, $page + 2);
@@ -553,6 +557,7 @@ if ($start_page > 1): ?><li class="page-item"><a class="page-link" href="<?php e
 <?php if ($end_page < $total_pages): if ($end_page < $total_pages - 1): ?><li class="page-item disabled"><span class="page-link">…</span></li><?php endif; ?><li class="page-item"><a class="page-link" href="<?php echo h($__qs($total_pages)); ?>"><?php echo $total_pages; ?></a></li><?php endif; ?>
 <?php if ($page < $total_pages): ?><li class="page-item"><a class="page-link" href="<?php echo h($__qs($page + 1)); ?>"><?php echo __("at_next"); ?></a></li><?php endif; ?>
 </ul></nav>
+<?php endif; ?>
 <?php endif; ?>
 </div>
 </div>

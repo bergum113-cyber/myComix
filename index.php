@@ -9754,6 +9754,32 @@ document.addEventListener('DOMContentLoaded', function() {
             };
             if (im && /^data:/.test(im.getAttribute('src') || '')) im.setAttribute('src', 'thumb.php?file=' + encodeURIComponent(f.replace(/\+/g, '{pl}').replace(/\./g, '{dt}').replace(/%/g, '{pc}')) + '&bidx=<?php echo (int)$current_bidx; ?>&cv=' + b.t);
         });
+        // ★ (2026-11-11 01:28 fix110) 표지가 없던 폴더(PDF·동영상·문서만 있어 자동 표지가 없음)는 그림 칸이 처음부터 없어서, 폴더 표지를 지정해도 새로고침 전엔 안 보였음
+        //   ① 이 폴더 목록 위: 제목줄을 서버가 그리는 것과 같은 표지 칸으로 바꿈 ② 위 목록의 폴더 카드: 빈 그림(data:)을 표지 주소로
+        //   자동으로 되돌려 쓸 그림이 없으면(thumb.php 가 1×1 그림) 다시 제목줄로 — 새로 열었을 때와 같은 모양
+        if (folder) {
+            var csrc = 'thumb.php?file=' + encodeURIComponent(d.replace(/\+/g, '{pl}').replace(/\./g, '{dt}').replace(/%/g, '{pc}')) + '&type=cover&bidx=<?php echo (int)$current_bidx; ?>&cv=' + b.t;
+            var toBar = function (bn) { var band = bn.querySelector('.mc-banner-band'); if (!band) return; var tb = document.createElement('div'); tb.className = 'mc-titlebar'; while (band.firstChild) tb.appendChild(band.firstChild); bn.parentNode.replaceChild(tb, bn); };
+            var watch = function (bn) { var mi = bn.querySelector('.mc-banner-img'); if (mi) mi.onload = function () { if (this.naturalWidth <= 1 && bn.parentNode) toBar(bn); }; };
+            if (<?php echo (isset($use_cover) && $use_cover == "y") ? 'true' : 'false'; ?> && d === np(<?php echo json_encode((string)$getdir, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>) && d !== '/') {
+                var bn = document.querySelector('.mc-banner'), tb = document.querySelector('.mc-titlebar');
+                if (bn) watch(bn); // 위에서 주소를 이미 바꿈
+                else if (tb) {
+                    bn = document.createElement('div'); bn.className = 'mc-banner';
+                    var bg = document.createElement('img'); bg.className = 'mc-banner-bg'; bg.alt = ''; bg.setAttribute('aria-hidden', 'true');
+                    var mi = document.createElement('img'); mi.className = 'mc-banner-img'; mi.alt = '';
+                    var band = document.createElement('div'); band.className = 'mc-banner-band';
+                    while (tb.firstChild) band.appendChild(tb.firstChild);
+                    bn.appendChild(bg); bn.appendChild(mi); bn.appendChild(band); tb.parentNode.replaceChild(bn, tb);
+                    watch(bn); bg.setAttribute('src', csrc); mi.setAttribute('src', csrc);
+                }
+            }
+            if (<?php echo (isset($use_listcover) && $use_listcover == "y") ? 'true' : 'false'; ?>) document.querySelectorAll('.card[data-folder-path]').forEach(function (c) {
+                if (np(c.getAttribute('data-folder-path')) !== d) return;
+                var im = c.querySelector('img.rounded-lg');
+                if (im && /^data:/.test(im.getAttribute('src') || '')) { im.style.objectFit = 'contain'; im.setAttribute('src', csrc); }
+            });
+        }
     }
     window.addEventListener('pageshow', apply);
     window.addEventListener('storage', function (e) { if (e.key === 'mc_cover_bump') apply(); });

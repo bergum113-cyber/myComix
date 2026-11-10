@@ -1341,7 +1341,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
 }
 
 // ✅ 캐시 초기화 처리
-if (isset($_SESSION['user_group']) && trim($_SESSION['user_group']) === "admin") {
+// ★ (2026-11-10 23:30 fix108) 보안: 다른 사이트의 링크로는 안 됨(브라우저가 알려 주는 Sec-Fetch-Site — login.php·index.php 캐시 작업과 같은 방식). 관리자 화면의 단추는 같은 사이트라 그대로
+if (isset($_SESSION['user_group']) && trim($_SESSION['user_group']) === "admin" && ($_SERVER['HTTP_SEC_FETCH_SITE'] ?? '') !== 'cross-site') {
     // OPcache 초기화
     if (isset($_GET['clear_opcache']) && function_exists('opcache_reset')) {
         opcache_reset();

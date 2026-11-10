@@ -125,6 +125,8 @@ function mc_path_allowed($getdir, $base_dir_override = null) {
     static $perm = null;
     $use_base_dir = $base_dir_override ?? $base_dir;
     $getdir = (string)$getdir;
+    // ★ (2026-11-10 23:54 fix108) 경로에 널 문자(%00)가 있으면 거절 — 아래 realpath() 가 예외를 던져 뷰어들이 500(치명 오류)으로 끝났음(11-09 링크 확인을 넣은 뒤부터). 그런 이름의 파일은 있을 수 없음
+    if (strpos($getdir, "\0") !== false) return false;
     if (function_exists('extract_basedir_index')) {
         list($idx, $clean_path) = extract_basedir_index($getdir);
         if ($idx > 0 && isset($base_dirs[$idx])) {
@@ -2045,6 +2047,9 @@ function mc_write_file_cover($abs, $data) {
     $dest = mc_file_cover_path($abs);
     $dir = dirname($dest);
     if (!is_dir($dir) && !@mkdir($dir, 0755, true) && !is_dir($dir)) { imagedestroy($out); return false; }
+    // ★ (2026-11-10 23:30 fix108) 보안: src/.htaccess 가 그림(jpg)은 열어 두므로, 표지 폴더는 주소로 바로 못 열게 따로 전부 막음(없으면 만듦 — src/video/.htaccess 와 같은 내용)
+    //   표지는 thumb.php·index.php 가 로그인·폴더 권한을 확인하고 내보내므로 화면에는 영향 없음 (Apache 2.4 실측: 막기 전 200 → 403)
+    if (!is_file($dir . '/.htaccess')) @file_put_contents($dir . '/.htaccess', "<IfModule mod_authz_core.c>\n<FilesMatch \".*\">\nRequire all denied\n</FilesMatch>\n</IfModule>\n<IfModule !mod_authz_core.c>\n<FilesMatch \".*\">\nOrder deny,allow\nDeny from all\n</FilesMatch>\n</IfModule>\n");
     $tmp = $dir . '/.mc_cover_' . bin2hex(random_bytes(4)) . '.tmp';
     $ok = @imagejpeg($out, $tmp, 85);
     imagedestroy($out);

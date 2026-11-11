@@ -95,6 +95,10 @@
             '.mcn-dlg textarea{width:100%;min-height:120px;resize:vertical;border:1px solid #dadce0;border-radius:8px;padding:8px 10px;font:inherit;color:inherit;background:#fff}' +
             '.mcn-dlg textarea:focus{outline:none;border-color:#1a73e8;box-shadow:0 0 0 3px rgba(26,115,232,.15)}' +
             '.mcn-dlg-f{display:flex;justify-content:flex-end;gap:8px;padding:10px 14px;border-top:1px solid #e8eaed}' +
+            // ★ (2026-11-11 11:33 fix113, 펜닐 요청) 메모 창이 낮은 화면(휴대폰 가로)에서 화면보다 커져 위 제목줄이 잘리고 저장 단추가 화면 끝에 붙었음 —
+            //   창 높이를 화면 안으로, 넘치면 가운데(인용·글 칸)만 스크롤(제목줄·저장/취소는 늘 보임). 낮은 화면은 인용·글 칸을 조금 작게
+            '.mcn-dlg{max-height:calc(100vh - 32px);max-height:calc(100dvh - 32px);display:flex;flex-direction:column}.mcn-dlg-b{overflow:auto;min-height:0;flex:1 1 auto}' +
+            '@media (max-height:520px){.mcn-mask{padding:8px}.mcn-dlg{max-height:calc(100vh - 16px);max-height:calc(100dvh - 16px)}.mcn-quote{max-height:64px}.mcn-dlg textarea{min-height:72px}}' +
             '.mcn-btn{height:34px;padding:0 14px;border-radius:17px;border:1px solid #dadce0;background:#fff;color:#202124;font:inherit;cursor:pointer}' +
             '.mcn-btn.pri{background:#1a73e8;border-color:#1a73e8;color:#fff}' +
             '.mcn-x{border:0;background:transparent;color:inherit;width:32px;height:32px;border-radius:16px;display:inline-flex;align-items:center;justify-content:center;cursor:pointer}' +

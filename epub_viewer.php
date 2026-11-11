@@ -733,6 +733,27 @@ render_viewer_i18n([
         .mc-spread-btn { flex: 1; padding: 8px 4px; border: 2px solid var(--border-color); border-radius: 6px; cursor: pointer; text-align: center; font-size: 12px; } /* ★ (2026-11-04 18:04) 2쪽 펼침 3단계(여백 단추와 같은 모양) */
         .mc-spread-btn.active { border-color: #007bff; }
         .mc-fs-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; }
+        /* ★ (2026-11-11 11:16 fix113, 펜닐 요청) 설정 창을 스크롤 없이(휴대폰 세로·가로·PC) — 한 줄에 이름+고르는 칸, 누르는 칸 높이 30px 이상, 낮은 가로 화면은 두 칸 */
+        .settings-panel.mc-setp { width: min(380px, calc(100vw - 20px)); padding: 10px 12px; }
+        .mc-setp .mc-sr { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; min-height: 30px; }
+        .mc-setp .mc-sl, .settings-panel.mc-setp label.mc-sl { flex: 0 0 82px; margin: 0; font-size: 12.5px; line-height: 1.25; display: block; }
+        .mc-setp .mc-sr > input[type="range"] { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
+        .mc-setp .mc-sr > select, .mc-setp .mc-sr3 select { flex: 1 1 auto; min-width: 0; width: 100%; height: 30px; padding: 2px 6px; font-size: 12.5px; margin: 0; }
+        .mc-setp .mc-sr > .btn { flex: 0 0 auto; white-space: nowrap; padding: 3px 8px; font-size: 12.5px; }
+        .mc-setp .theme-buttons { flex: 1 1 auto; margin: 0; gap: 6px; min-width: 0; }
+        .mc-setp .theme-btn, .mc-setp .mc-margin-btn, .mc-setp .mc-spread-btn { padding: 5px 2px; font-size: 12px; min-height: 30px; display: flex; align-items: center; justify-content: center; line-height: 1.15; }
+        .mc-setp .mc-sr3 { align-items: flex-end; gap: 6px; }
+        .settings-panel.mc-setp .mc-sr3 > label { flex: 1 1 0; min-width: 0; margin: 0; font-size: 11.5px; display: flex; flex-direction: column; gap: 2px; }
+        .mc-setp .mc-cks { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+        .settings-panel.mc-setp label.mc-ck { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 4px 10px; min-height: 30px; border: 1px solid var(--border-color); border-radius: 15px; font-size: 12px; cursor: pointer; }
+        .mc-setp .mc-ck input { margin: 0; }
+        .mc-setp .mc-sr-foot { gap: 6px; font-size: 12px; min-height: 0; margin-bottom: 4px; color: #888; }
+        .mc-setp .mc-sr-foot #readTime { font-size: 12px; color: inherit; }
+        .mc-setp .mc-fs-row { margin-top: 4px; }
+        @media (max-height: 520px) and (min-width: 560px) {
+            .settings-panel.mc-setp { width: min(720px, calc(100vw - 20px)); column-count: 2; column-gap: 16px; }
+            .mc-setp > * { break-inside: avoid; }
+        }
         .epub-footer .ch-left { font-size: 12px; opacity: .75; white-space: nowrap; } /* ★ (2026-11-01) 이 장 남은 쪽 */
         .epub-footer .ch-left:empty { display: none; }
         /* ★ (2026-10-31) 좁은 화면: 책갈피·노트 단추가 늘어 '돌아가기'가 두 줄로 꺾이지 않게 */
@@ -785,65 +806,61 @@ render_viewer_i18n([
 </div>
 
 <!-- 설정 패널 -->
-<div class="settings-panel" id="settingsPanel">
-    <label><?php echo __h("epub_theme"); ?></label>
+<?php // ★ (2026-11-11 11:16 fix113, 펜닐 요청) 설정 창을 스크롤 없이 — 한 줄에 이름+고르는 칸, 글꼴·줄·문단은 한 줄 세 칸, 체크 칸은 칩 묶음, 휴대폰 가로는 두 칸(CSS .mc-setp). 칸·ID·동작은 그대로 ?>
+<div class="settings-panel mc-setp" id="settingsPanel">
+    <div class="mc-sr"><span class="mc-sl"><?php echo __h("epub_theme"); ?></span>
     <div class="theme-buttons">
         <div class="theme-btn light <?php echo $theme === 'light' ? 'active' : ''; ?>" data-theme="light"><?php echo __h("epub_theme_light"); ?></div>
         <div class="theme-btn sepia <?php echo $theme === 'sepia' ? 'active' : ''; ?>" data-theme="sepia"><?php echo __h("epub_theme_sepia"); ?></div>
         <div class="theme-btn dark <?php echo $theme === 'dark' ? 'active' : ''; ?>" data-theme="dark"><?php echo __h("epub_theme_dark"); ?></div>
-    </div>
-    
-    <label><?php echo __h("txt_font_size"); ?> <span id="fontSizeValue"><?php echo $fontSize; ?></span>%</label>
-    <input type="range" id="fontSizeSlider" min="70" max="150" value="<?php echo $fontSize; ?>">
-    
-    <label style="margin-top:15px;">
-        <input type="checkbox" id="chkReverseNav" <?php echo ($_COOKIE['epub_reverse_nav'] ?? '') === '1' ? 'checked' : ''; ?>>
-        <?php echo __h("txt_reverse_nav"); ?>
-    </label>
+    </div></div>
+    <div class="mc-sr"><label class="mc-sl" for="fontSizeSlider"><?php echo __h("txt_font_size"); ?> <span id="fontSizeValue"><?php echo $fontSize; ?></span>%</label>
+    <input type="range" id="fontSizeSlider" min="70" max="150" value="<?php echo $fontSize; ?>"></div>
     <?php // ★ (2026-11-01) 줄 간격 · 좌우 여백 · 넓은 화면 2쪽 · 듣기 · 화면 꺼짐 방지 (이 기기에 기억) ?>
     <?php // ★ (2026-11-01 11:22) 글꼴 · 문단 간격 · 양쪽 정렬 (이 기기에 기억) ?>
-    <label style="margin-top:15px;" for="selFont"><?php echo __h("bt_font"); ?></label>
-    <select id="selFont" class="form-control form-control-sm" style="margin-bottom:12px;">
+    <div class="mc-sr mc-sr3">
+    <label for="selFont"><?php echo __h("bt_font"); ?>
+    <select id="selFont" class="form-control form-control-sm">
         <option value=""><?php echo __h("bt_book_default"); ?></option>
         <option value="gothic"><?php echo __h("bt_font_gothic"); ?></option>
         <option value="serif"><?php echo __h("bt_font_serif"); ?></option>
-    </select>
-    <label for="selLineHeight"><?php echo __h("bt_line"); ?></label>
-    <select id="selLineHeight" class="form-control form-control-sm" style="margin-bottom:12px;">
+    </select></label>
+    <label for="selLineHeight"><?php echo __h("bt_line"); ?>
+    <select id="selLineHeight" class="form-control form-control-sm">
         <option value=""><?php echo __h("bt_book_default"); ?></option>
         <?php foreach (['1.4', '1.6', '1.8', '2.0', '2.2', '2.4'] as $_lh): ?><option value="<?php echo $_lh; ?>"><?php echo $_lh; ?></option><?php endforeach; ?>
-    </select>
-    <label for="selPara"><?php echo __h("bt_para"); ?></label>
-    <select id="selPara" class="form-control form-control-sm" style="margin-bottom:8px;">
+    </select></label>
+    <label for="selPara"><?php echo __h("bt_para"); ?>
+    <select id="selPara" class="form-control form-control-sm">
         <option value=""><?php echo __h("bt_book_default"); ?></option>
         <?php foreach (['1', '2', '3'] as $_pa): ?><option value="<?php echo $_pa; ?>"><?php echo __h('bt_para_' . $_pa); ?></option><?php endforeach; ?>
-    </select>
-    <label><input type="checkbox" id="chkJustify"> <?php echo __h("bt_justify"); ?></label>
-    <label><?php echo __h("bt_margin"); ?></label>
+    </select></label>
+    </div>
+    <div class="mc-sr"><span class="mc-sl"><?php echo __h("bt_margin"); ?></span>
     <div class="theme-buttons" id="marginButtons">
         <?php foreach ([0, 1, 2] as $_mg): ?><div class="mc-margin-btn" role="button" tabindex="0" data-margin="<?php echo $_mg; ?>"><?php echo __h('bt_margin_' . $_mg); ?></div><?php endforeach; ?>
-    </div>
+    </div></div>
     <?php // ★ (2026-11-04 18:04) 2쪽 펼침: 체크 칸(켜면 폭 900 이상에서 2쪽) → 끔 · 넓은 화면(= 예전 켬, 그대로 이어짐) · 가로 화면(폰을 눕혀도 2쪽) ?>
-    <div id="spreadRow"><label><?php echo __h("bt_spread_lbl"); ?></label>
+    <div class="mc-sr" id="spreadRow"><span class="mc-sl"><?php echo __h("bt_spread_lbl"); ?></span>
     <div class="theme-buttons" id="spreadButtons" role="radiogroup" aria-label="<?php echo __h("bt_spread_lbl"); ?>">
         <?php foreach (['0', '1', 'land'] as $_sp): ?><div class="mc-spread-btn" role="radio" tabindex="0" data-spread="<?php echo $_sp; ?>" title="<?php echo __h('bt_spread_tip_' . $_sp); ?>"><?php echo __h('bt_spread_' . $_sp); ?></div><?php endforeach; ?>
     </div></div>
-    <div style="border-top:1px solid var(--border-color);margin:12px 0;"></div>
-    <button type="button" id="btnTts" class="btn btn-outline-secondary btn-sm btn-block" style="margin-bottom:6px;">🔊 <?php echo __h("bt_tts_start"); ?></button>
-    <small id="ttsNote" style="display:none;color:#888;margin-bottom:8px;"></small>
-    <label for="selAutoTurn" style="margin-top:8px;"><?php echo __h("bt_autoturn"); ?></label>
-    <select id="selAutoTurn" class="form-control form-control-sm" style="margin-bottom:8px;">
+    <div class="mc-sr"><label class="mc-sl" for="dimSlider"><?php echo __h("bt_dim"); ?> <span id="dimValue">0%</span></label>
+    <input type="range" id="dimSlider" min="0" max="70" step="5" value="0"></div>
+    <div class="mc-sr"><label class="mc-sl" for="selAutoTurn"><?php echo __h("bt_autoturn"); ?></label>
+    <select id="selAutoTurn" class="form-control form-control-sm">
         <option value="0"><?php echo __h("bt_off"); ?></option>
         <?php foreach ([10, 20, 30, 60] as $_at): ?><option value="<?php echo $_at; ?>"><?php echo h(sprintf(__('bt_sec'), $_at)); ?></option><?php endforeach; ?>
     </select>
-    <label style="margin-top:8px;"><input type="checkbox" id="chkWake"> <?php echo __h("bt_wake"); ?></label>
+    <button type="button" id="btnTts" class="btn btn-outline-secondary btn-sm">🔊 <?php echo __h("bt_tts_start"); ?></button></div>
+    <small id="ttsNote" style="display:none;color:#888;margin-bottom:6px;"></small>
+    <div class="mc-cks">
+        <label class="mc-ck"><input type="checkbox" id="chkReverseNav" <?php echo ($_COOKIE['epub_reverse_nav'] ?? '') === '1' ? 'checked' : ''; ?>> <?php echo __h("txt_reverse_nav"); ?></label>
+        <label class="mc-ck"><input type="checkbox" id="chkJustify"> <?php echo __h("bt_justify"); ?></label>
+        <label class="mc-ck"><input type="checkbox" id="chkWake"> <?php echo __h("bt_wake"); ?></label>
+    </div>
     <small id="wakeNote" style="display:none;color:#888;"></small>
-    <label style="margin-top:8px;"><?php echo __h("bt_dim"); ?> <span id="dimValue">0%</span></label>
-    <input type="range" id="dimSlider" min="0" max="70" step="5" value="0" style="width:100%;">
-    <div style="border-top:1px solid var(--border-color);margin:12px 0 8px;"></div>
-    <small style="display:block;color:#888;"><?php echo __h("bt_readtime"); ?></small>
-    <div id="readTime" style="font-size:13px;"></div>
-    <div style="border-top:1px solid var(--border-color);margin:12px 0 4px;"></div>
+    <div class="mc-sr mc-sr-foot"><small><?php echo __h("bt_readtime"); ?></small><div id="readTime"></div></div>
     <?php // ★ (2026-11-04 18:05) 전체화면(북모드 설정의 전체화면과 같은 동작) — 브라우저가 지원할 때만 보임(iPhone 사파리는 막혀 있어 숨김) ?>
     <div class="mc-fs-row" id="fsRow" hidden><span><?php echo __h("bt_fullscreen"); ?></span><button type="button" id="btnFullscreen" class="btn btn-outline-secondary btn-sm" aria-pressed="false"><?php echo __h("bt_fs_on"); ?></button></div>
 </div>

@@ -900,6 +900,30 @@ $txt_font_family = !empty($txt_font_name) ? "'" . h($txt_font_name) . "', 'Nanum
             font-size: 14px;
         }
         
+        /* ★ (2026-11-11 11:23 fix113, 펜닐 요청) 설정 창을 스크롤 없이(휴대폰 세로·가로·PC) — 한 줄에 이름+고르는 칸, 누르는 칸 높이 30px 이상, 낮은 가로 화면은 두 칸 */
+        .settings-panel.mc-setp { width: min(380px, calc(100vw - 20px)); padding: 10px 12px; }
+        .mc-setp .mc-sr { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; min-height: 30px; }
+        .mc-setp .mc-sl, .settings-panel.mc-setp label.mc-sl { flex: 0 0 82px; margin: 0; font-size: 12.5px; line-height: 1.25; display: block; }
+        .mc-setp .mc-sr > input[type="range"] { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
+        .mc-setp .mc-sr > select, .mc-setp .mc-sr3 select { flex: 1 1 auto; min-width: 0; width: 100%; height: 30px; padding: 2px 6px; font-size: 12.5px; margin: 0; }
+        .mc-setp .mc-sr > .btn { flex: 0 0 auto; white-space: nowrap; padding: 3px 8px; font-size: 12.5px; }
+        .mc-setp .theme-buttons { flex: 1 1 auto; margin: 0; gap: 6px; min-width: 0; }
+        .mc-setp .theme-btn, .mc-setp .mc-margin-btn, .mc-setp .mc-spread-btn { padding: 5px 2px; font-size: 12px; min-height: 30px; display: flex; align-items: center; justify-content: center; line-height: 1.15; }
+        .mc-setp .mc-sr3 { align-items: flex-end; gap: 6px; }
+        .settings-panel.mc-setp .mc-sr3 > label { flex: 1 1 0; min-width: 0; margin: 0; font-size: 11.5px; display: flex; flex-direction: column; gap: 2px; }
+        .mc-setp .mc-cks { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+        .settings-panel.mc-setp label.mc-ck { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 4px 10px; min-height: 30px; border: 1px solid var(--border-color); border-radius: 15px; font-size: 12px; cursor: pointer; }
+        .mc-setp .mc-ck input { margin: 0; }
+        .mc-setp .mc-sr-foot { gap: 6px; font-size: 12px; min-height: 0; margin-bottom: 4px; color: #888; }
+        .mc-setp .mc-sr-foot #readTime { font-size: 12px; color: inherit; }
+        .mc-setp .mc-fs-row { margin-top: 4px; }
+        @media (max-height: 520px) and (min-width: 560px) {
+            .settings-panel.mc-setp { width: min(720px, calc(100vw - 20px)); column-count: 2; column-gap: 16px; }
+            .mc-setp > * { break-inside: avoid; }
+        }
+        .mc-setp .mc-sr > .btn + .mc-sr-foot { margin: 0; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mc-setp #reverseNavRow { margin-bottom: 8px; }
+        .mc-setp #autoscrollSpeedRow[style*="block"], .mc-setp #reverseNavRow[style*="block"] { display: flex !important; } /* JS 가 보일 때 display:block 으로 켬 — 이름과 칸을 한 줄로(숨길 땐 none 그대로) */
         .settings-row {
             margin-bottom: 15px;
         }
@@ -1068,104 +1092,61 @@ render_viewer_i18n([
 </div>
 
 <!-- 설정 패널 -->
-<div class="settings-panel" id="settingsPanel">
-    <!-- 테마 설정 -->
-    <div class="settings-section-title">🎨 <?php echo __h("epub_theme"); ?></div>
-    <div class="settings-row">
-        <label for="themeSelect"><?php echo __h("txt_display_mode"); ?></label>
+<?php // ★ (2026-11-11 11:22 fix113, 펜닐 요청) 설정 창을 스크롤 없이 — 한 줄에 이름+고르는 칸, 테마·보기 방식과 글꼴·여백은 한 줄 두 칸, 체크 칸은 칩 묶음, 휴대폰 가로는 두 칸(CSS .mc-setp)
+//   칸·ID·동작은 그대로. 부연 설명(2단 안내·좌우 반전·속도 범위)은 마우스를 올리면(title). 소제목(🎨·📖·📝·⏬·🔊)은 뺌 ?>
+<div class="settings-panel mc-setp" id="settingsPanel">
+    <div class="mc-sr mc-sr3">
+        <label for="themeSelect"><?php echo __h("txt_display_mode"); ?>
         <select id="themeSelect">
             <option value="light">☀️ <?php echo __h("epub_theme_light"); ?></option>
             <option value="sepia">📜 <?php echo __h("epub_theme_sepia"); ?></option>
             <option value="dark">🌙 <?php echo __h("epub_theme_dark"); ?></option>
-        </select>
-    </div>
-    
-    <div class="settings-divider"></div>
-    
-    <!-- 레이아웃 설정 -->
-    <div class="settings-section-title">📖 <?php echo __h("txt_page_layout"); ?></div>
-    <div class="settings-row">
-        <label for="layoutSelect"><?php echo __h("txt_view_mode"); ?></label>
+        </select></label>
+        <label for="layoutSelect" title="<?php echo __h("txt_dual_note"); ?>"><?php echo __h("txt_view_mode"); ?>
         <select id="layoutSelect">
             <option value="single"><?php echo __h("txt_single"); ?></option>
             <option value="dual-ltr"><?php echo __h("txt_dual_ltr"); ?></option>
             <option value="dual-rtl"><?php echo __h("txt_dual_rtl"); ?></option>
             <option value="auto"><?php echo __h("txt_layout_auto"); ?></option><?php // ★ (2026-11-04 18:05) 자동 — 가로 화면이면 2단(1|2), 세로면 1단 · 이것만 이 기기에 기억 ?>
-        </select>
-        <small style="color:#888; display:block; margin-top:5px;"><?php echo __h("txt_dual_note"); ?></small>
+        </select></label>
     </div>
-    <div class="settings-row" id="reverseNavRow" style="display:none;">
-        <label>
+    <div class="mc-sr" id="reverseNavRow" style="display:none;">
+        <label class="mc-ck" title="◀ <?php echo __h("js_prev"); ?>/<?php echo __h("js_next"); ?> ▶ ↔ ◀ <?php echo __h("js_next"); ?>/<?php echo __h("js_prev"); ?> ▶">
             <input type="checkbox" id="chkReverseNav" <?php echo ($_COOKIE['txt_reverse_nav'] ?? '') === '1' ? 'checked' : ''; ?>>
             <?php echo __h("txt_reverse_nav"); ?>
         </label>
-        <small style="color:#888; display:block; margin-top:5px;">◀ <?php echo __h("js_prev"); ?>/<?php echo __h("js_next"); ?> ▶ ↔ ◀ <?php echo __h("js_next"); ?>/<?php echo __h("js_prev"); ?> ▶</small>
     </div>
-    
-    <div class="settings-divider"></div>
-    
-    <!-- 텍스트 설정 -->
-    <div class="settings-section-title">📝 <?php echo __h("txt_text_settings"); ?></div>
-    <div class="settings-row">
-        <label><?php echo __h("txt_font_size"); ?> <span id="fontSizeValue"><?php echo $txt_settings['default_font_size']; ?></span>px</label>
-        <input type="range" id="fontSizeSlider" min="12" max="32" value="<?php echo $txt_settings['default_font_size']; ?>">
-    </div>
-    <div class="settings-row">
-        <label><?php echo __h("txt_line_height"); ?> <span id="lineHeightValue"><?php echo $txt_settings['default_line_height']; ?></span></label>
-        <input type="range" id="lineHeightSlider" min="1.0" max="3.0" step="0.1" value="<?php echo $txt_settings['default_line_height']; ?>">
-    </div>
+    <div class="mc-sr"><label class="mc-sl" for="fontSizeSlider"><?php echo __h("txt_font_size"); ?> <span id="fontSizeValue"><?php echo $txt_settings['default_font_size']; ?></span>px</label>
+        <input type="range" id="fontSizeSlider" min="12" max="32" value="<?php echo $txt_settings['default_font_size']; ?>"></div>
+    <div class="mc-sr"><label class="mc-sl" for="lineHeightSlider"><?php echo __h("txt_line_height"); ?> <span id="lineHeightValue"><?php echo $txt_settings['default_line_height']; ?></span></label>
+        <input type="range" id="lineHeightSlider" min="1.0" max="3.0" step="0.1" value="<?php echo $txt_settings['default_line_height']; ?>"></div>
     <?php // ★ (2026-11-01 11:22) 글꼴 · 양쪽 정렬 · 좌우 여백 (이 기기에 기억) ?>
-    <div class="settings-row">
-        <label for="selFont"><?php echo __h("bt_font"); ?></label>
+    <div class="mc-sr mc-sr3">
+        <label for="selFont"><?php echo __h("bt_font"); ?>
         <select id="selFont">
             <option value=""><?php echo __h("bt_book_default"); ?></option>
             <option value="gothic"><?php echo __h("bt_font_gothic"); ?></option>
             <option value="serif"><?php echo __h("bt_font_serif"); ?></option>
-        </select>
-    </div>
-    <div class="settings-row">
-        <label><input type="checkbox" id="chkJustify"> <?php echo __h("bt_justify"); ?></label>
-    </div>
-    <div class="settings-row">
-        <label for="selMargin"><?php echo __h("bt_margin"); ?></label>
+        </select></label>
+        <label for="selMargin"><?php echo __h("bt_margin"); ?>
         <select id="selMargin">
             <?php foreach ([0, 1, 2] as $_mg): ?><option value="<?php echo $_mg; ?>"><?php echo __h('bt_margin_' . $_mg); ?></option><?php endforeach; ?>
-        </select>
+        </select></label>
     </div>
-    
-    <div class="settings-divider"></div>
-    
-    <!-- 자동 스크롤 -->
-    <div class="settings-section-title">⏬ <?php echo __h("txt_auto_scroll"); ?></div>
-    <div class="settings-row">
-        <label>
-            <input type="checkbox" id="autoscrollCheck"> <?php echo __h("txt_autoscroll_enable"); ?>
-        </label>
-    </div>
-    <div class="settings-row" id="autoscrollSpeedRow" style="display:none;">
-        <label><?php echo __h("txt_scroll_speed"); ?> <span id="scrollSpeedValue">3</span></label>
-        <input type="range" id="scrollSpeedSlider" min="1" max="10" step="1" value="3">
-        <small style="color:#666; display:block; margin-top:5px;"><?php echo __h("txt_speed_range"); ?></small>
-    </div>
+    <div class="mc-sr"><label class="mc-sl" for="dimSlider"><?php echo __h("bt_dim"); ?> <span id="dimValue">0%</span></label>
+        <input type="range" id="dimSlider" min="0" max="70" step="5" value="0"></div>
     <?php // ★ (2026-11-01) 듣기 · 화면 꺼짐 방지 ?>
-    <div class="settings-divider"></div>
-    <div class="settings-section-title">🔊 <?php echo __h("bt_read_section"); ?></div>
-    <div class="settings-row">
-        <button type="button" id="btnTts" class="btn btn-outline-secondary btn-sm btn-block">🔊 <?php echo __h("bt_tts_start"); ?></button>
-        <small id="ttsNote" style="display:none;color:#888;margin-top:5px;"></small>
+    <div class="mc-cks">
+        <label class="mc-ck"><input type="checkbox" id="chkJustify"> <?php echo __h("bt_justify"); ?></label>
+        <label class="mc-ck"><input type="checkbox" id="autoscrollCheck"> <?php echo __h("txt_autoscroll_enable"); ?></label>
+        <label class="mc-ck"><input type="checkbox" id="chkWake"> <?php echo __h("bt_wake"); ?></label>
     </div>
-    <div class="settings-row">
-        <label><input type="checkbox" id="chkWake"> <?php echo __h("bt_wake"); ?></label>
-        <small id="wakeNote" style="display:none;color:#888;"></small>
-    </div>
-    <div class="settings-row">
-        <label><?php echo __h("bt_dim"); ?> <span id="dimValue">0%</span></label>
-        <input type="range" id="dimSlider" min="0" max="70" step="5" value="0">
-    </div>
-    <div class="settings-row">
-        <small style="display:block;color:#888;"><?php echo __h("bt_readtime"); ?></small>
-        <div id="readTime" style="font-size:13px;"></div>
-    </div>
+    <small id="wakeNote" style="display:none;color:#888;"></small>
+    <div class="mc-sr" id="autoscrollSpeedRow" style="display:none;"><label class="mc-sl" for="scrollSpeedSlider" title="<?php echo __h("txt_speed_range"); ?>"><?php echo __h("txt_scroll_speed"); ?> <span id="scrollSpeedValue">3</span></label>
+        <input type="range" id="scrollSpeedSlider" min="1" max="10" step="1" value="3"></div>
+    <div class="mc-sr"><button type="button" id="btnTts" class="btn btn-outline-secondary btn-sm">🔊 <?php echo __h("bt_tts_start"); ?></button>
+        <div class="mc-sr-foot"><small><?php echo __h("bt_readtime"); ?></small> <span id="readTime"></span></div></div>
+    <small id="ttsNote" style="display:none;color:#888;margin-bottom:6px;"></small>
     <?php // ★ (2026-11-04 18:05) 전체화면(북모드 설정의 전체화면과 같은 동작) — 브라우저가 지원할 때만 보임(iPhone 사파리는 막혀 있어 숨김) ?>
     <div class="settings-row mc-fs-row" id="fsRow" hidden><span><?php echo __h("bt_fullscreen"); ?></span><button type="button" id="btnFullscreen" class="btn btn-outline-secondary btn-sm" aria-pressed="false"><?php echo __h("bt_fs_on"); ?></button></div>
 </div>

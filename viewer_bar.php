@@ -162,6 +162,15 @@ html.dark-mode .mcv-prog::before, body.dark-mode .mcv-prog::before, [data-theme=
 .mcv-mi:hover, .mcv-mi:focus-visible { background: rgba(127,127,127,.14); outline: none; color: inherit; }
 .mcv-mi[aria-disabled="true"] { opacity: .38; pointer-events: none; }
 .mcv-mi .mcv-cvpg { margin-left: -6px; opacity: .6; font-size: .92em; white-space: nowrap; } /* ★ (2026-11-11 07:59 fix111) 표지로 쓸 쪽 번호 */
+/* ★ (2026-11-11 10:35 fix112, 펜닐 요청) 메뉴를 스크롤 없이 — 보기 방식·표지는 칩 묶음, 이전/다음 권은 한 줄. 누르는 칸은 높이 34px 이상 */
+.mcv-hd .mcv-cvpg { margin-left: 0; white-space: nowrap; }
+.mcv-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 4px 8px 6px; }
+.mcv-chips > .mcv-mi { width: auto; flex: 0 0 auto; min-height: 34px; padding: 0 13px; gap: 0; border: 1px solid rgba(127,127,127,.35); border-radius: 17px; font-size: 13.5px; white-space: nowrap; }
+.mcv-chips > .mcv-mi .mcv-r { display: none; } /* 고른 것은 칩 색으로 */
+.mcv-chips > .mcv-mi.mcv-on { background: #1a73e8; border-color: #1a73e8; color: #fff; }
+.mcv-dark .mcv-chips > .mcv-mi.mcv-on, html.dark-mode .mcv-chips > .mcv-mi.mcv-on, body.dark-mode .mcv-chips > .mcv-mi.mcv-on, [data-theme="dark"] .mcv-chips > .mcv-mi.mcv-on { background: #8ab4f8; border-color: #8ab4f8; color: #202124; }
+.mcv-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+.mcv-pair > .mcv-mi { min-width: 0; }
 .mcv-mi .mcv-svg { opacity: .8; }
 .mcv-mi .mcv-r { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
 .mcv-mi.mcv-on { color: #1a73e8; font-weight: 600; }
@@ -202,9 +211,12 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
 @media (max-height: 700px) { .mcv-mi { min-height: 38px; } .mcv-hd { padding: 4px 12px 1px; } .mcv-hr { margin: 3px 4px; } }
 @media (max-height: 520px) { .mcv-mi { min-height: 34px; gap: 10px; } .mcv-pop:not(.mcv-ttl-pop) { padding: 4px; } .mcv-step { width: 30px; height: 30px; } .mcv-step.mcv-seg { height: 28px; } }
 @media (max-height: 520px) and (min-width: 540px) {
-  /* 위에서 아래로 채우고 다음 칸(줄 수는 js 가 항목 수의 절반으로) — 높이가 모자라면 세로 스크롤 */
-  #mcvMorePop:not([hidden]) { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); column-gap: 6px; align-content: start; width: min(620px, calc(100vw - 16px)); }
-  #mcvMorePop > .mcv-hr { display: none; }
+  /* ★ (2026-11-11 10:35 fix112) 두 칸 — 전엔 항목 수로 반씩 나눠(grid) 칸 높이가 달라 한쪽이 화면을 넘었음 → 높이가 고르게 나뉘는 단(columns). 묶음(칩·머리글+다음)은 칸 사이에서 안 갈림
+     북모드 보기 메뉴도 휴대폰 가로에선 두 칸 */
+  #mcvMorePop:not([hidden]), #mcvViewPop:not([hidden]) { display: block; column-count: 2; column-gap: 10px; width: min(620px, calc(100vw - 16px)); }
+  #mcvMorePop > *, #mcvViewPop > * { break-inside: avoid; }
+  #mcvMorePop > .mcv-hd, #mcvViewPop > .mcv-hd { break-after: avoid; }
+  #mcvMorePop > .mcv-hr, #mcvViewPop > .mcv-hr { display: none; }
 }
 </style>
 <div class="mcv-bar<?php echo $_mcv_book ? ' mcv-dark' : ''; ?>" id="mcvBar" role="toolbar" aria-label="<?php echo __h('mcv2_bar'); ?>">
@@ -232,9 +244,11 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
 <?php // 보기 방식 메뉴(북모드는 [보기 ▾], 툰모드는 ⋯ 안에) ?>
 <?php ob_start(); ?>
   <div class="mcv-hd"><?php echo __h('mcv2_view'); ?></div>
+  <div class="mcv-chips"><?php // ★ (2026-11-11 10:35 fix112, 펜닐 요청) 메뉴가 화면보다 길어 스크롤이 생겼음 — 보기 방식 5줄을 칩 묶음(2줄)으로. 단추·data-order·동작은 그대로 ?>
   <?php foreach ($_mcv_vlabel as $_k => $_lbl): ?>
   <button type="button" class="mcv-mi<?php echo (string)$_k === $_mcv_order ? ' mcv-on' : ''; ?>" role="menuitemradio" aria-checked="<?php echo (string)$_k === $_mcv_order ? 'true' : 'false'; ?>" data-order="<?php echo $_k; ?>"><?php echo h($_lbl); ?><?php if ((string)$_k === $_mcv_order): ?><span class="mcv-r">✓</span><?php endif; ?></button>
   <?php endforeach; ?>
+  </div>
 <?php $_mcv_view_items = ob_get_clean(); ?>
 
 <?php if ($_mcv_book): ?>
@@ -267,14 +281,18 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
   <?php endif; ?>
   <?php if (!empty($_viewer_is_admin)): // ★ (2026-11-04 07:44) 표지 지정은 관리자만 / ★ (2026-11-10 13:54, 펜닐 요청 — fix98) 지금 보는 쪽을 파일 표지·폴더 표지로, 자동으로 되돌리기(툰·북모드 둘 다) ?>
   <div class="mcv-hr"></div>
-  <div class="mcv-hd"><?php echo __h('mcv2_cover'); ?></div>
-  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-file"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_file'); ?><span class="mcv-cvpg"></span></button>
-  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-folder"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_folder'); ?><span class="mcv-cvpg"></span></button>
-  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-auto"><?php echo $_mcv_ico($_mcv_i['resume']); ?><?php echo __h('mcv2_cover_auto'); ?></button>
+  <div class="mcv-hd"><?php echo __h('mcv2_cover'); ?><span class="mcv-cvpg"></span></div><?php // ★ (2026-11-11 10:35 fix112) 세 줄을 칩 한 줄로 — 쓸 쪽 번호는 머리글에(js/viewer-bar.js 가 채움), 원래 긴 이름은 title ?>
+  <div class="mcv-chips">
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-file" title="<?php echo __h('mcv2_cover_file'); ?>"><?php echo __h('mcv2_cover_file_s'); ?></button>
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-folder" title="<?php echo __h('mcv2_cover_folder'); ?>"><?php echo __h('mcv2_cover_folder_s'); ?></button>
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-auto" title="<?php echo __h('mcv2_cover_auto'); ?>"><?php echo __h('mcv2_cover_auto_s'); ?></button>
+  </div>
   <?php endif; ?>
   <div class="mcv-hr"></div>
+  <div class="mcv-pair"><?php // ★ (2026-11-11 10:35 fix112) 이전 권·다음 권을 한 줄에 ?>
   <a class="mcv-mi" role="menuitem" href="<?php echo $_mcv_prev !== '' ? h($_mcv_prev) : '#'; ?>" data-act="vol"<?php echo $_mcv_prev === '' ? ' aria-disabled="true" tabindex="-1"' : ''; ?>><?php echo $_mcv_ico($_mcv_i['prev']); ?><?php echo __h('mcv2_prev_vol'); ?></a>
   <a class="mcv-mi" role="menuitem" href="<?php echo $_mcv_next !== '' ? h($_mcv_next) : '#'; ?>" data-act="vol"<?php echo $_mcv_next === '' ? ' aria-disabled="true" tabindex="-1"' : ''; ?>><?php echo $_mcv_ico($_mcv_i['next']); ?><?php echo __h('mcv2_next_vol'); ?></a>
+  </div>
   <div class="mcv-hr"></div>
   <div class="mcv-hd"><?php echo __h('mcv2_reopen'); ?></div>
   <button type="button" class="mcv-mi" role="menuitemcheckbox" id="mcvResume" aria-checked="<?php echo $_mcv_resume_on ? 'true' : 'false'; ?>" title="<?php echo __h('mcv2_resume_tip'); ?>"><?php echo $_mcv_ico($_mcv_i['resume']); ?><?php echo __h('mcv2_resume'); ?><span class="mcv-r"><span class="mcv-sw"></span></span></button>

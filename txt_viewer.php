@@ -901,9 +901,9 @@ $txt_font_family = !empty($txt_font_name) ? "'" . h($txt_font_name) . "', 'Nanum
         }
         
         /* ★ (2026-11-11 11:23 fix113, 펜닐 요청) 설정 창을 스크롤 없이(휴대폰 세로·가로·PC) — 한 줄에 이름+고르는 칸, 누르는 칸 높이 30px 이상, 낮은 가로 화면은 두 칸 */
-        .settings-panel.mc-setp { width: min(380px, calc(100vw - 20px)); padding: 10px 12px; }
+        .settings-panel.mc-setp { width: min(300px, calc(100vw - 20px)); padding: 10px 12px; left: auto; right: 10px; } /* ★ (2026-11-11 13:28 fix115, 펜닐 요청) 세로 화면·PC 는 좁고 길쭉하게(380px·휴대폰 화면 폭 가득 → 300px, 오른쪽 단추 아래) — 휴대폰 가로 두 칸은 그대로 */
         .mc-setp .mc-sr { display: flex; align-items: center; gap: 8px; margin: 0 0 8px; min-height: 30px; }
-        .mc-setp .mc-sl, .settings-panel.mc-setp label.mc-sl { flex: 0 0 82px; margin: 0; font-size: 12.5px; line-height: 1.25; display: block; }
+        .mc-setp .mc-sl, .settings-panel.mc-setp label.mc-sl { flex: 0 0 72px; margin: 0; font-size: 12.5px; line-height: 1.25; display: block; }
         .mc-setp .mc-sr > input[type="range"] { flex: 1 1 auto; min-width: 0; width: auto; margin: 0; }
         .mc-setp .mc-sr > select, .mc-setp .mc-sr3 select { flex: 1 1 auto; min-width: 0; width: 100%; height: 30px; padding: 2px 6px; font-size: 12.5px; margin: 0; }
         .mc-setp .mc-sr > .btn { flex: 0 0 auto; white-space: nowrap; padding: 3px 8px; font-size: 12.5px; }

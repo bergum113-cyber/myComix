@@ -170,6 +170,8 @@ html.dark-mode .mcv-prog::before, body.dark-mode .mcv-prog::before, [data-theme=
 .mcv-chips > .mcv-mi.mcv-on { background: #1a73e8; border-color: #1a73e8; color: #fff; }
 .mcv-dark .mcv-chips > .mcv-mi.mcv-on, html.dark-mode .mcv-chips > .mcv-mi.mcv-on, body.dark-mode .mcv-chips > .mcv-mi.mcv-on, [data-theme="dark"] .mcv-chips > .mcv-mi.mcv-on { background: #8ab4f8; border-color: #8ab4f8; color: #202124; }
 .mcv-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
+/* ★ (2026-11-11 13:19 fix114, 펜닐 제보) 칩 묶음은 한 줄로 늘어설 만큼 메뉴를 넓혀(PC 538px) 가로로 너무 넓었음 → 메뉴 폭을 고정(칩은 두 줄로 접힘). 휴대폰 가로 두 칸은 아래 규칙 그대로 */
+#mcvMorePop:not([hidden]), #mcvViewPop:not([hidden]) { width: min(300px, calc(100vw - 16px)); }
 .mcv-pair > .mcv-mi { min-width: 0; }
 .mcv-mi .mcv-svg { opacity: .8; }
 .mcv-mi .mcv-r { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }

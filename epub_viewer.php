@@ -747,6 +747,7 @@ render_viewer_i18n([
         .mc-setp .mc-cks { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
         .settings-panel.mc-setp label.mc-ck { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 4px 10px; min-height: 30px; border: 1px solid var(--border-color); border-radius: 15px; font-size: 12px; cursor: pointer; }
         .mc-setp .mc-ck input { margin: 0; }
+        .settings-panel.mc-setp label.mc-ck { flex: 1 1 auto; justify-content: center; } /* ★ (2026-11-11 20:29 fix117) 체크 칩 줄 오른쪽이 비어 보였음 → 줄마다 폭을 나눠 채움(만화 메뉴 fix116 과 같게) */
         .mc-setp .mc-sr-foot { gap: 6px; font-size: 12px; min-height: 0; margin-bottom: 4px; color: #888; }
         .mc-setp .mc-sr-foot #readTime { font-size: 12px; color: inherit; }
         .mc-setp .mc-fs-row { margin-top: 4px; }
@@ -762,6 +763,9 @@ render_viewer_i18n([
         /* ★ (2026-11-01) 검색 단추가 늘어 좁은 휴대폰에서 오른쪽 끝(설정)이 잘리지 않게 — 단추 안쪽 여백만 줄임 */
         @media (max-width: 480px) { .epub-toolbar { gap: 4px; padding: 10px 8px; } .epub-toolbar .btn { padding: 5px 8px; } .epub-toolbar .title { min-width: 0; } }
         @media (max-width: 370px) { .epub-toolbar .ev-back-txt { display: none; } } /* 아주 좁은 휴대폰(360px 등): '돌아가기' 글자 숨김(화살표만) — 예전부터 설정 단추가 화면 밖으로 잘렸음 */
+        /* ★ (2026-11-11 20:29 fix117) 관리자는 '폴더 표지' 단추가 하나 더 있어 375·390px(아이폰)에서 ⚙ 가 화면 밖으로 14~29px 밀렸고, 320px 은 글자를 숨겨도 24px 넘쳤음 → '돌아가기' 글자는 400px 까지 숨김(옛 아이폰 사파리는 :has 를 몰라 관리자만 고르지 않음), 340px 이하 단추 간격·안쪽 여백 줄임 */
+        @media (max-width: 400px) { .epub-toolbar .ev-back-txt { display: none; } }
+        @media (max-width: 340px) { .epub-toolbar { gap: 2px; padding: 10px 6px; } .epub-toolbar .btn { padding: 5px 6px; } }
         
         /* 모바일 */
         @media (max-width: 767px) {

@@ -914,6 +914,7 @@ $txt_font_family = !empty($txt_font_name) ? "'" . h($txt_font_name) . "', 'Nanum
         .mc-setp .mc-cks { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
         .settings-panel.mc-setp label.mc-ck { display: inline-flex; align-items: center; gap: 5px; margin: 0; padding: 4px 10px; min-height: 30px; border: 1px solid var(--border-color); border-radius: 15px; font-size: 12px; cursor: pointer; }
         .mc-setp .mc-ck input { margin: 0; }
+        .settings-panel.mc-setp label.mc-ck { flex: 1 1 auto; justify-content: center; } /* ★ (2026-11-11 20:29 fix117) 체크 칩 줄 오른쪽이 비어 보였음 → 줄마다 폭을 나눠 채움(만화 메뉴 fix116 과 같게) */
         .mc-setp .mc-sr-foot { gap: 6px; font-size: 12px; min-height: 0; margin-bottom: 4px; color: #888; }
         .mc-setp .mc-sr-foot #readTime { font-size: 12px; color: inherit; }
         .mc-setp .mc-fs-row { margin-top: 4px; }
@@ -921,7 +922,8 @@ $txt_font_family = !empty($txt_font_name) ? "'" . h($txt_font_name) . "', 'Nanum
             .settings-panel.mc-setp { width: min(720px, calc(100vw - 20px)); column-count: 2; column-gap: 16px; }
             .mc-setp > * { break-inside: avoid; }
         }
-        .mc-setp .mc-sr > .btn + .mc-sr-foot { margin: 0; flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mc-setp .mc-sr > .btn + .mc-sr-foot { margin: 0; flex: 1 1 auto; min-width: 0; line-height: 1.3; } /* ★ (2026-11-11 20:29 fix117) 300px 창에서 읽은 시간이 '이 책 0…' 으로 잘렸음 → 줄바꿈 */
+        .mc-setp .mc-fs-row:not([hidden]) { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 0; } /* ★ (2026-11-11 20:29 fix117) '켜기'가 글자 옆에 붙어 오른쪽이 비었음 → 전자책처럼 오른쪽 끝 */
         .mc-setp #reverseNavRow { margin-bottom: 8px; }
         .mc-setp #autoscrollSpeedRow[style*="block"], .mc-setp #reverseNavRow[style*="block"] { display: flex !important; } /* JS 가 보일 때 display:block 으로 켬 — 이름과 칸을 한 줄로(숨길 땐 none 그대로) */
         .settings-row {

@@ -3724,13 +3724,15 @@ if(($type === 'zip' || $type === 'images' || $type === 'video') && $_viewer_is_a
     // ★ (2026-11-04 07:44) 표지 지정은 관리자만 / ★ (2026-11-04 09:43) 압축·이미지 폴더만(동영상엔 쓸 그림이 없어 '설정됨'만 떴음)
 ?>
 <tr><td align="right">
-<br>
-<?php if ($type === 'video'): ?>
-<button class="btn btn-sm btn-success mt-2 p-0" onclick="mcCoverFromVideo();"><?php echo __h("viewer_cover_frame"); ?></button>
+<?php if ($type === 'video'): /* ★ (2026-11-11 20:29 fix117, 펜닐 요청) 빈 줄(<br>)·붙은 단추(p-0) → 빈 줄 없이 단추 사이 간격·안쪽 여백 */ ?>
+<div class="mcvv-cvrow">
+<button class="btn btn-sm btn-success" onclick="mcCoverFromVideo();"><?php echo __h("viewer_cover_frame"); ?></button>
 <?php /* ★ (2026-11-10 13:55, 펜닐 요청 — fix98) 지금 장면을 이 파일 표지로 · 자동으로 되돌리기 */ ?>
-<button class="btn btn-sm btn-success mt-2 p-0" onclick="mcCoverFromVideo('file');"><?php echo __h("viewer_cover_frame_file"); ?></button>
-<button class="btn btn-sm btn-secondary mt-2 p-0" onclick="mcCoverAuto(function (t) { var i = document.getElementById('info'); if (i) i.value = t; });"><?php echo __h("mcv2_cover_auto"); ?></button>
+<button class="btn btn-sm btn-success" onclick="mcCoverFromVideo('file');"><?php echo __h("viewer_cover_frame_file"); ?></button>
+<button class="btn btn-sm btn-secondary" onclick="mcCoverAuto(function (t) { var i = document.getElementById('info'); if (i) i.value = t; });"><?php echo __h("mcv2_cover_auto"); ?></button>
+</div>
 <?php else: ?>
+<br>
 <button class="btn btn-sm btn-success mt-2 p-0" onclick="set_cover();"><?php echo __h("viewer_set_cover"); ?></button>
 <?php endif; ?>
 </td></tr>

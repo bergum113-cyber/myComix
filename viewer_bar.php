@@ -172,6 +172,8 @@ html.dark-mode .mcv-prog::before, body.dark-mode .mcv-prog::before, [data-theme=
 .mcv-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; }
 /* ★ (2026-11-11 13:19 fix114, 펜닐 제보) 칩 묶음은 한 줄로 늘어설 만큼 메뉴를 넓혀(PC 538px) 가로로 너무 넓었음 → 메뉴 폭을 고정(칩은 두 줄로 접힘). 휴대폰 가로 두 칸은 아래 규칙 그대로 */
 #mcvMorePop:not([hidden]), #mcvViewPop:not([hidden]) { width: min(300px, calc(100vw - 16px)); }
+/* ★ (2026-11-11 19:04 fix116, 펜닐 제보) 칩 줄이 왼쪽에 붙어 오른쪽이 비어 보였음 → 줄마다 칩이 폭을 나눠 채움(줄바꿈 위치는 그대로) */
+.mcv-chips > .mcv-mi { flex: 1 1 auto; justify-content: center; }
 .mcv-pair > .mcv-mi { min-width: 0; }
 .mcv-mi .mcv-svg { opacity: .8; }
 .mcv-mi .mcv-r { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
@@ -202,6 +204,12 @@ html.dark-mode .mcv-prog::before, body.dark-mode .mcv-prog::before, [data-theme=
   font-family: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif; font-size: 14px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
 .mcv-end { width: max-content; } /* ★ (2026-11-02 19:06) left:50% 라 휴대폰 세로에서 폭이 화면 절반으로 줄어 다음 권 제목이 잘렸음(최대 폭은 그대로) */
 .mcv-end.mcv-show { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+/* ★ (2026-11-11 23:02 fix119, 펜닐 제보) 휴대폰 세로에서 제목이 길면 안내가 화면 폭 가득(좌우 16px)이라 오른쪽 아래 다크모드·맨 위로 단추(오른쪽 20~60px)와 겹쳤음 → 양쪽에서 단추 자리만큼 비움(넘치는 제목은 … 로). 넓은 화면은 그대로 */
+.mcv-end { max-width: calc(100vw - 136px); }
+@media (max-width: 600px) { /* (위 .mcv-show 뒤에 둬야 이김) 좁은 화면은 왼쪽에 붙여 제목 자리를 넓게(오른쪽 단추 자리 68px 만 비움) */
+  .mcv-end { left: 12px; right: 68px; margin: 0 auto; max-width: calc(100vw - 80px); transform: translateY(20px); } /* ★ (2026-11-12 00:28 fix120) 짧은 제목은 이 칸(왼쪽 12px ~ 단추 자리 앞) 가운데로, 길면 칸을 다 씀 */
+  .mcv-end.mcv-show { transform: translateY(0); }
+}
 html.dark-mode .mcv-end, body.dark-mode .mcv-end, [data-theme="dark"] .mcv-end { background: #26262b; color: #e8eaed; border-color: #38383f; }
 .mcv-end-t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .mcv-end a { flex: 0 0 auto; display: inline-flex; align-items: center; gap: 4px; height: 36px; padding: 0 14px; border-radius: 18px; background: #1a73e8; color: #fff !important; font-weight: 600; text-decoration: none !important; }

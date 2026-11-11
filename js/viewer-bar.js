@@ -73,7 +73,7 @@
     toastT = setTimeout(function () { el.classList.remove('mcv-show'); }, String(msg).length > 30 ? 4000 : 2200); // ★ (2026-11-03 01:24) 긴 안내(책갈피는 하나만 남음)는 조금 더 오래
   }
   // 기존 함수들은 결과를 숨은 #info 칸에 적음 → 바뀌면 알림으로 보여 줌
-  function watchInfo(run) {
+  function watchInfo(run, max) { // ★ (2026-11-11 07:59 fix111) max: 기다릴 횟수(0.1초 단위, 기본 40=4초) — 표지는 서버 응답이 늦으면 4초가 지나 결과 알림이 안 떴음(펜닐: 반응이 없음)
     var info = $id('info');
     var before = info ? info.value : '';
     try { run(); } catch (e) { return; }
@@ -89,7 +89,7 @@
         // ★ (2026-11-03 00:10) 메뉴의 책갈피 상태도 바로('책갈피 · N쪽 저장됨')
         if (m) { var bl = $id('mcvBmLbl'), bb = $id('mcvBm'); if (bl && T.bm_at) bl.textContent = String(T.bm_at).replace('%s', parseInt(m[1], 10) + 1); if (bb) bb.classList.add('mcv-on'); }
       }
-      if (n > 40) clearInterval(iv); // 4초
+      if (n > (max || 40)) clearInterval(iv); // 4초(표지는 30초)
     }, 100);
   }
 
@@ -138,6 +138,10 @@
     closePop();
     pop.hidden = false;
     document.documentElement.classList.add('mcv-popopen'); // ★ (2026-11-02 16:55) 열려 있는 동안 다크모드·맨 위로 단추 숨김(메뉴를 가렸음)
+    if (pop.id === 'mcvMorePop') try { // ★ (2026-11-11 07:59 fix111, 펜닐 요청) '이 쪽을 파일/폴더 표지로' 옆에 실제로 쓸 쪽 번호(viewer.php mcCoverPageNo — 누를 때 고르는 쪽과 같은 계산)
+      var cpn = (typeof window.mcCoverPageNo === 'function') ? window.mcCoverPageNo(hereIdx()) : 0;
+      Array.prototype.forEach.call(pop.querySelectorAll('.mcv-cvpg'), function (s) { s.textContent = cpn > 0 ? ' ' + String(T.cover_pg || '%s').replace('%s', cpn) : ''; });
+    } catch (e) {}
     if (pop.id === 'mcvMorePop') { // ★ (2026-11-02 16:57) 가로 모드 두 칸 — 보이는 항목 수의 절반씩 위에서 아래로
       pop.style.gridTemplateRows = '';
       if (pop.offsetWidth && getComputedStyle(pop).display === 'grid') {
@@ -265,7 +269,7 @@
     if (act === 'fav') { closePop(); toggleFav(); return; }
     if (act === 'cover') { closePop(); if (typeof window.set_cover === 'function') watchInfo(window.set_cover); return; }
     // ★ (2026-11-10 13:54, 펜닐 요청 — fix98) 지금 보는 쪽(위 막대 쪽 번호와 같은 쪽)을 파일 표지·폴더 표지로 / 자동으로 되돌리기 — viewer.php mcCoverPage
-    if (act === 'cover-file' || act === 'cover-folder' || act === 'cover-auto') { closePop(); if (typeof window.mcCoverPage === 'function') { var ci = hereIdx(); watchInfo(function () { window.mcCoverPage(act.slice(6), ci); }); } return; }
+    if (act === 'cover-file' || act === 'cover-folder' || act === 'cover-auto') { closePop(); if (typeof window.mcCoverPage === 'function') { var ci = hereIdx(); watchInfo(function () { window.mcCoverPage(act.slice(6), ci); }, 300); } return; }
     if (act === 'bright-down' && typeof window.bright_down === 'function') { watchInfo(window.bright_down); saveBright(); return; }
     if (act === 'bright-up' && typeof window.bright_up === 'function') { watchInfo(window.bright_up); saveBright(); return; }
     if (act === 'bright-zero' && typeof window.bright === 'function') { watchInfo(window.bright); saveBright(); return; }

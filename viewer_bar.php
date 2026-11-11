@@ -52,7 +52,7 @@ $_mcv_cfg = [
     'isFav'     => $_mcv_is_fav,
     't' => [
         'fav_add' => __('mcv2_fav_add'), 'fav_remove' => __('mcv2_fav_remove'),
-        'goto' => __('mcv2_goto'), 'next_label' => __('mcv2_next_label'), 'saved' => __('mcv2_done'), 'bm_at' => __('mcv2_bm_at'), 'copied' => __('mcv2_copied'),
+        'goto' => __('mcv2_goto'), 'next_label' => __('mcv2_next_label'), 'saved' => __('mcv2_done'), 'bm_at' => __('mcv2_bm_at'), 'cover_pg' => __('mcv2_cover_pg'), 'copied' => __('mcv2_copied'),
         'resume_on' => __('mcv2_resume_on'), 'resume_off' => __('mcv2_resume_off'),
         'port1_on' => __('mcv2_port1_on'), 'port1_off' => __('mcv2_port1_off'), // ★ (2026-11-04 18:00) 세로 화면은 한 쪽 · 화면 맞춤
         'solo_on' => __('mcv2_solo_on'), 'solo_off' => __('mcv2_solo_off'), 'shift_on' => __('mcv2_shift_on'), 'shift_off' => __('mcv2_shift_off'),
@@ -161,6 +161,7 @@ html.dark-mode .mcv-prog::before, body.dark-mode .mcv-prog::before, [data-theme=
 .mcv-mi { display: flex; align-items: center; gap: 12px; width: 100%; min-height: 42px; padding: 0 12px; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; border-radius: 8px; cursor: pointer; text-decoration: none !important; }
 .mcv-mi:hover, .mcv-mi:focus-visible { background: rgba(127,127,127,.14); outline: none; color: inherit; }
 .mcv-mi[aria-disabled="true"] { opacity: .38; pointer-events: none; }
+.mcv-mi .mcv-cvpg { margin-left: -6px; opacity: .6; font-size: .92em; white-space: nowrap; } /* ★ (2026-11-11 07:59 fix111) 표지로 쓸 쪽 번호 */
 .mcv-mi .mcv-svg { opacity: .8; }
 .mcv-mi .mcv-r { margin-left: auto; display: inline-flex; align-items: center; gap: 4px; }
 .mcv-mi.mcv-on { color: #1a73e8; font-weight: 600; }
@@ -267,8 +268,8 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
   <?php if (!empty($_viewer_is_admin)): // ★ (2026-11-04 07:44) 표지 지정은 관리자만 / ★ (2026-11-10 13:54, 펜닐 요청 — fix98) 지금 보는 쪽을 파일 표지·폴더 표지로, 자동으로 되돌리기(툰·북모드 둘 다) ?>
   <div class="mcv-hr"></div>
   <div class="mcv-hd"><?php echo __h('mcv2_cover'); ?></div>
-  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-file"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_file'); ?></button>
-  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-folder"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_folder'); ?></button>
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-file"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_file'); ?><span class="mcv-cvpg"></span></button>
+  <button type="button" class="mcv-mi" role="menuitem" data-act="cover-folder"><?php echo $_mcv_ico($_mcv_i['image']); ?><?php echo __h('mcv2_cover_folder'); ?><span class="mcv-cvpg"></span></button>
   <button type="button" class="mcv-mi" role="menuitem" data-act="cover-auto"><?php echo $_mcv_ico($_mcv_i['resume']); ?><?php echo __h('mcv2_cover_auto'); ?></button>
   <?php endif; ?>
   <div class="mcv-hr"></div>

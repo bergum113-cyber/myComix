@@ -203,7 +203,9 @@ if ($type !== 'cover' && function_exists('mc_file_cover_path')) {
         if ($__fcd !== false && $__fcd !== '') {
             header('Content-Type: image/jpeg');
             header('Content-Length: ' . strlen($__fcd));
-            header('Cache-Control: private, max-age=86400');
+            // ★ (2026-11-11 07:59 fix111) 주소의 cv 가 이 표지의 시각과 다르면(버전 없는 옛 주소 등) 브라우저에 저장하지 않음 — 저장되면 자동으로 되돌린 뒤에도
+            //   같은 주소에서 지운 표지가 하루 동안 보여 강력 새로고침이 필요했음. 목록·즐겨찾기 등 지금 주소는 cv=시각이라 그대로 저장
+            header(((string)($_GET['cv'] ?? '') === (string)(int)@filemtime($__fc)) ? 'Cache-Control: private, max-age=86400' : 'Cache-Control: no-store');
             echo $__fcd;
             exit;
         }

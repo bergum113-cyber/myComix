@@ -793,7 +793,8 @@ if (isset($_GET['thumb']) && $_GET['thumb'] === 'video' && isset($_GET['file']))
     if (file_exists($thumb_path)) {
         header('Content-Type: image/jpeg');
         header('Content-Length: ' . filesize($thumb_path));
-        header('Cache-Control: private, max-age=86400');
+        // ★ (2026-11-11 07:59 fix111) 직접 고른 표지를 cv 가 맞지 않는 주소로 줄 땐 저장 안 함(thumb.php 와 같음 — 자동으로 되돌린 뒤 지운 표지가 남아 보이던 것)
+        header((strpos($thumb_path, '.video_thumb.jpg') === false && (string)($_GET['cv'] ?? '') !== (string)(int)@filemtime($thumb_path)) ? 'Cache-Control: no-store' : 'Cache-Control: private, max-age=86400');
         readfile($thumb_path);
         exit;
     }

@@ -285,6 +285,7 @@ $rhwp_v = function ($f) { return (string)(@filemtime(__DIR__ . '/js/rhwp/' . $f)
     }
 
     // ★ (2026-11-10 14:55, 펜닐 요청 — fix99) 지금 보는 쪽(위 쪽 번호)의 SVG 를 높이 1000px 이하 JPEG 로 — 표지 메뉴(function.php mc_doc_cover_btn)가 씀
+    window.mcDocCoverPageNo = function () { return currentPage + 1; }; // ★ (2026-11-11 07:59 fix111) 표지 메뉴에 보일 쪽 번호 — 아래 mcDocCoverPage 가 쓰는 쪽(currentPage)
     window.mcDocCoverPage = function () {
         return new Promise(function (res) {
             const svg = body.querySelector('.page-container[data-page="' + currentPage + '"] svg');

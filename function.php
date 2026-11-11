@@ -2071,7 +2071,27 @@ function mc_folder_cover_auto($dir) {
     foreach ((@scandir($dir) ?: []) as $n) {
         if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $n) && is_file($dir . '/' . $n)) $arcs[] = $n;
     }
-    if (!$arcs) return true;
+    if (!$arcs) {
+        // ★ (2026-11-11 07:59 fix111, 펜닐 제보) 압축 책이 없는 폴더는 지우기만 하고 끝나 기본 폴더 표지가 다시 안 생겼음(새로고침해도) —
+        //   이미지 폴더 책이면 이름 순 첫 책의 썸네일(목록이 만든 '책이름.image_files.json')로, 동영상·문서 폴더면 목록 배경과 같은 방식(mc_media_folder_cover_make)으로
+        $books = [];
+        foreach ((@scandir($dir) ?: []) as $n) {
+            if ($n === '' || $n[0] === '.' || !is_dir($dir . '/' . $n)) continue;
+            if (is_file($dir . '/' . $n . '.image_files.json')) $books[] = $n;
+        }
+        if ($books) {
+            foreach (n_sort($books) as $n) {
+                $j = @json_decode((string)@file_get_contents($dir . '/' . $n . '.image_files.json'), true);
+                if (is_array($j) && !empty($j['thumbnail']) && is_string($j['thumbnail']) && strlen($j['thumbnail']) > 100) {
+                    $d = base64_decode($j['thumbnail'], true);
+                    if (is_string($d) && $d !== '') { @file_put_contents($cf, $d, LOCK_EX); break; }
+                }
+            }
+        } elseif (function_exists('mc_media_folder_cover_make')) {
+            try { mc_media_folder_cover_make($dir, false); } catch (\Throwable $e) {} // 영상 장면 뽑기(ffmpeg)는 하지 않음 — 응답이 늦어짐. 없으면 목록 배경이 나중에 만듦
+        }
+        return true;
+    }
     $arcs = n_sort($arcs);
     $j = @json_decode((string)@file_get_contents(get_cache_json_path($dir . '/' . reset($arcs))), true);
     if (is_array($j) && !empty($j['thumbnail']) && is_string($j['thumbnail']) && strlen($j['thumbnail']) > 100) {
@@ -2212,12 +2232,12 @@ function mc_doc_cover_btn($getfile, $bidx, $class = '', $page = false) {
     $gf = str_replace('\\', '/', (string)$getfile);
     $dir = rtrim(str_replace('\\', '/', dirname($gf)), '/');
     $csrf = function_exists('generate_csrf_token') ? generate_csrf_token() : '';
-    $it = function ($a, $k) { return '<button type="button" class="mc-dcv-mi" data-a="' . $a . '" onclick="mcDocCoverDo(this)">' . __h($k) . '</button>'; };
+    $it = function ($a, $k) { return '<button type="button" class="mc-dcv-mi" data-a="' . $a . '" onclick="mcDocCoverDo(this)">' . __h($k) . (strpos($a, 'page-') === 0 ? '<span class="mc-dcv-pg" style="opacity:.6"></span>' : '') . '</button>'; }; // ★ (2026-11-11 07:59 fix111) 쪽 그림 항목엔 쓸 쪽 번호 칸
     $items = $page
         ? $it('page-file', 'mcv2_cover_file') . $it('page-folder', 'mcv2_cover_folder') . $it('book', 'doc_cover_book') // ★ (2026-11-10 16:08 fix101) rhwp 도 예전 '책 표지(문서 안 미리보기 등)를 폴더 표지로'를 그대로 둠
         : $it('book', 'doc_cover_book') . $it('pick-file', 'doc_cover_pick_file') . $it('pick-folder', 'doc_cover_pick_folder');
     $items .= $it('auto', 'mcv2_cover_auto');
-    return '<span class="mc-dcv" style="position:relative;display:inline-block" data-url="' . h($url) . '" data-file="' . h($gf) . '" data-dir="' . h($dir) . '" data-bidx="' . (int)$bidx . '" data-csrf="' . h($csrf) . '" data-q="' . __h('mcv2_cover_auto_q') . '" data-none="' . __h('viewer_cover_none') . '">'
+    return '<span class="mc-dcv" style="position:relative;display:inline-block" data-url="' . h($url) . '" data-file="' . h($gf) . '" data-dir="' . h($dir) . '" data-bidx="' . (int)$bidx . '" data-csrf="' . h($csrf) . '" data-pg="' . __h('mcv2_cover_pg') . '" data-q="' . __h('mcv2_cover_auto_q') . '" data-none="' . __h('viewer_cover_none') . '">'
         . '<button type="button" class="' . h($class) . '" title="' . $lbl . '" aria-label="' . $lbl . '" aria-haspopup="true" onclick="mcDocCoverMenu(this)">🖼️</button>'
         . '<span class="mc-dcv-menu" hidden>' . $items . '</span>'
         . '<input type="file" accept="image/*" hidden></span>'
@@ -2225,7 +2245,9 @@ function mc_doc_cover_btn($getfile, $bidx, $class = '', $page = false) {
         . '<style>.mc-dcv .mc-dcv-menu{position:fixed;z-index:3000;display:block;background:#fff;color:#222;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.25);padding:4px 0;min-width:190px;max-width:calc(100vw - 16px);text-align:left;white-space:nowrap;font-size:14px;line-height:1.3}.mc-dcv .mc-dcv-menu[hidden]{display:none!important}'
         . '.mc-dcv .mc-dcv-menu .mc-dcv-mi{display:block!important;width:100%!important;height:auto!important;min-height:0!important;background:none!important;border:0!important;border-radius:0!important;margin:0!important;color:#222!important;padding:8px 14px!important;font-size:14px!important;text-align:left!important;cursor:pointer;white-space:nowrap;box-shadow:none!important}.mc-dcv .mc-dcv-menu .mc-dcv-mi:hover{background:#eef2f7!important}</style>'
         . '<script>(function(){if(window.mcDocCoverDo)return;'
-        . 'window.mcDocCoverMenu=function(b){var m=b.parentNode.querySelector(".mc-dcv-menu");m.hidden=!m.hidden;if(m.hidden)return;var r=b.getBoundingClientRect(),w=m.offsetWidth,h=m.offsetHeight,vw=document.documentElement.clientWidth,vh=window.innerHeight;'
+        . 'window.mcDocCoverMenu=function(b){var m=b.parentNode.querySelector(".mc-dcv-menu");m.hidden=!m.hidden;if(m.hidden)return;'
+        . 'try{var pn=typeof window.mcDocCoverPageNo==="function"?window.mcDocCoverPageNo():0;m.querySelectorAll(".mc-dcv-pg").forEach(function(s){s.textContent=pn>0?" "+String(b.parentNode.getAttribute("data-pg")||"%s").replace("%s",pn):"";});}catch(e){}' // ★ (2026-11-11 07:59 fix111) 쓸 쪽 번호
+        . 'var r=b.getBoundingClientRect(),w=m.offsetWidth,h=m.offsetHeight,vw=document.documentElement.clientWidth,vh=window.innerHeight;'
         . 'm.style.left=Math.max(8,Math.min(r.right-w,vw-w-8))+"px";m.style.top=((r.bottom+4+h>vh&&r.top-4-h>0)?(r.top-4-h):(r.bottom+4))+"px";};'
         . 'document.addEventListener("click",function(e){document.querySelectorAll(".mc-dcv-menu").forEach(function(m){if(!m.hidden&&!(e.target.closest&&e.target.closest(".mc-dcv")===m.parentNode))m.hidden=true;});});'
         . 'window.addEventListener("scroll",function(){document.querySelectorAll(".mc-dcv-menu").forEach(function(m){m.hidden=true;});},true);' // 화면 기준 메뉴라 스크롤하면 닫음

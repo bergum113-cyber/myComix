@@ -3281,6 +3281,7 @@ Cache tab → Regen stats / Delete folder cache
     // ★ (2026-11-10 13:56 fix98) choose covers by hand (admin) — file cover · folder cover · back to automatic
     'mcv2_cover_file' => 'Use this page as file cover',
     'mcv2_cover_folder' => 'Use this page as folder cover',
+    'mcv2_cover_pg' => '· p. %s', // ★ (2026-11-11 07:59 fix111)
     'mcv2_cover_auto' => 'Back to automatic',
     'mcv2_cover_auto_q' => 'Reset covers to automatic (first page)? The cover chosen for this file and this folder\'s cover ([cover].jpg) will be removed and made again.',
     'mcv2_cover_auto_done' => 'Reset to automatic',

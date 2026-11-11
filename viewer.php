@@ -3571,10 +3571,8 @@ function mcCoverAuto(done) {
 }
 /* ★ (2026-11-10 13:55, 펜닐 요청 — fix98) 만화(압축·이미지 폴더): 지금 보는 쪽(idx — 위 막대 쪽 번호와 같은 쪽)을 파일 표지·폴더 표지로, 또는 자동으로
    화면에 띄운 그 쪽 그림(viewer.php?img=번호, 나눠 보기면 그 반쪽)을 높이 1000px 이하 JPEG 로 다시 그려 보냄 */
-function mcCoverPage(target, idx) {
-	var inf = document.getElementById('info'), say = function (t) { if (inf) inf.value = t; };
-	if (target === 'auto') { mcCoverAuto(say); return; }
-	idx = Math.max(0, parseInt(idx, 10) || 0);
+/* ★ (2026-11-11 07:59 fix111, 펜닐 요청) 표지로 쓸 쪽 그림 고르기 — mcCoverPage 안에 있던 그대로 옮김(동작 같음). 메뉴의 '· N쪽' 표시(js/viewer-bar.js)도 이 계산을 씀 */
+function mcCoverPickEl(idx) {
 	var els = ['image' + idx, 'image' + idx + '_left', 'image' + idx + '_right'].map(function (id) { return document.getElementById(id); }).filter(Boolean), el = els[0] || null;
 	// ★ (2026-11-10 16:42, 펜닐 제보 — fix102) 화면(위 막대 아래 ~ 화면 아래)에 가장 넓게 보이는 쪽 그림으로 — 전엔 위 막대 아래 줄에 걸친 쪽(위 막대 쪽 번호)이라
 	//   앞 쪽 끝이 조금만 남아 있어도 그 앞 쪽이 표지가 됐음(펜닐: 화면에 보이는 것과 다름). 넓이가 같으면(펼침 두 장) 쪽 번호가 작은 쪽. 반으로 나눔(3·4)의 반쪽도 같은 기준
@@ -3593,6 +3591,18 @@ function mcCoverPage(target, idx) {
 		// ★ (2026-11-10 17:45 fix103) 위 막대의 '보이는 쪽'(window.mcVisibleIdx — 쪽 번호·서재 %·책갈피와 같은 기준)이 있으면 그 쪽으로(나눔 보기의 반쪽은 위 넓이 판정 그대로)
 		if (typeof window.mcVisibleIdx === 'function') { var _vi = window.mcVisibleIdx(); if (_vi >= 0 && (!el || !/^image\d+_(left|right)$/.test(el.id)) && document.getElementById('image' + _vi)) el = document.getElementById('image' + _vi); }
 	} catch (e) {}
+	return el;
+}
+window.mcCoverPageNo = function (idx) {
+	idx = Math.max(0, parseInt(idx, 10) || 0);
+	var el = mcCoverPickEl(idx), m = el && el.id ? /^image(\d+)/.exec(el.id) : null;
+	return (m ? parseInt(m[1], 10) : idx) + 1;
+};
+function mcCoverPage(target, idx) {
+	var inf = document.getElementById('info'), say = function (t) { if (inf) inf.value = t; };
+	if (target === 'auto') { mcCoverAuto(say); return; }
+	idx = Math.max(0, parseInt(idx, 10) || 0);
+	var el = mcCoverPickEl(idx);
 	var src = el ? (el.getAttribute('data-src') || el.currentSrc || el.src || '') : '';
 	// ★ (2026-11-10 15:41 fix100) 북모드에서 지금 슬라이드에 그림이 하나면(한 쪽·반으로 나눔) 화면에 띄운 그 그림 그대로 — 나눔(3·4)은 슬라이드가 반쪽이라 쪽 번호만으로는 다른 반쪽이 표지가 됐음. 펼침(두 장)은 위 쪽 번호의 쪽
 	try { var lgc = document.querySelectorAll('.lg-current img.lg-image'); if (lgc.length === 1 && lgc[0].getAttribute('src') && !/^data:/.test(lgc[0].getAttribute('src'))) src = lgc[0].getAttribute('src'); } catch (e) {}
@@ -5157,12 +5167,12 @@ function downloadFile(url) {
                 <div class="pdf-toolbar-divider"></div>
                 <?php /* ★ (2026-11-10 13:56, 펜닐 요청 — fix98) 누르면 작은 메뉴: 이 쪽을 파일 표지로 · 이 쪽을 폴더 표지로 · 자동으로 되돌리기 */ ?>
                 <span style="position:relative;display:inline-block">
-                <button class="pdf-toolbar-btn" id="mcPdfCoverBtn" onclick="var m=document.getElementById('mcPdfCoverMenu'); if (m) m.hidden=!m.hidden;" title="<?php echo __h('pdf_cover_page'); ?>" aria-haspopup="true">
+                <button class="pdf-toolbar-btn" id="mcPdfCoverBtn" onclick="var m=document.getElementById('mcPdfCoverMenu'); if (m) { m.hidden=!m.hidden; /* ★ (2026-11-11 07:59 fix111) 쓸 쪽 번호 */ if (!m.hidden) m.querySelectorAll('.mc-pdfcv-pg').forEach(function (s) { s.textContent = ' ' + <?php echo h(js(__('mcv2_cover_pg'))); ?>.replace('%s', Math.max(1, Math.min(totalPages || 1, current_page || 1))); }); }" title="<?php echo __h('pdf_cover_page'); ?>" aria-haspopup="true">
                     🖼️<span class="btn-text"> <?php echo __h("pdf_cover_page_short"); ?></span>
                 </button>
                 <span id="mcPdfCoverMenu" hidden style="position:absolute;top:100%;right:0;z-index:2000;background:#fff;color:#222;border:1px solid #ccc;border-radius:6px;box-shadow:0 4px 14px rgba(0,0,0,.25);padding:4px 0;min-width:190px;text-align:left;white-space:nowrap">
-                    <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'file');"><?php echo __h('mcv2_cover_file'); ?></button>
-                    <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'folder');"><?php echo __h('mcv2_cover_folder'); ?></button>
+                    <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'file');"><?php echo __h('mcv2_cover_file'); ?><span class="mc-pdfcv-pg" style="opacity:.6"></span></button>
+                    <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'folder');"><?php echo __h('mcv2_cover_folder'); ?><span class="mc-pdfcv-pg" style="opacity:.6"></span></button>
                     <button type="button" class="mc-pdfcv-mi" onclick="document.getElementById('mcPdfCoverMenu').hidden=true; mcPdfCover(document.getElementById('mcPdfCoverBtn'), 'auto');"><?php echo __h('mcv2_cover_auto'); ?></button>
                 </span>
                 </span>

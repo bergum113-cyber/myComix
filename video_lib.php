@@ -7,8 +7,8 @@
  *  · mcv_probe($file, $ffprobe_json) 길이·영상 코덱·해상도·음성 트랙(캐시) — FFprobe 결과가 있으면 그것, 없으면 ffmpeg -i 로
  *  · mcv_sidecar_subs($file)          같은 폴더의 자막 파일(srt·smi·sami·vtt·ass·ssa) — FileStation 과 같은 찾기·순위·인코딩 처리
  *  · mcv_zip_subs($zipfile, $entry)   압축 파일 속 동영상 옆 자막
- *  · mcv_slot_lock($kind, $max)       ffmpeg 동시 실행 자리(넘치면 기다리지 않고 '바쁨')
- *  · mcv_frame_send / mcv_transcode_send  장면 그림 / 실시간 변환 재생(조각 MP4)
+ *  · mcv_frames_gc()                  장면 캐시 정리(cache/_vframes — fix146, 종전 src/video/vframes 도)
+ *  ★ (2026-11-13 14:41 fix143) 장면 그림·변환 재생은 video_fs.php(FileStation 코드 그대로 — fix141)로 바뀌어 mcv_slot_lock·mcv_slot_unlock·mcv_proc_open·mcv_frame_send·mcv_transcode_send·mcv_tmp_dir(cache/_vlock)는 뺌(다른 곳에서 안 씀)
  */
 
 if (!function_exists('mcv_ffmpeg')) {
@@ -43,6 +43,7 @@ function mcv_cache_dir($sub) {
     if (!is_dir($d)) @mkdir($d, 0755, true);
     return is_dir($d) ? $d : '';
 }
+
 
 /** 파일 하나를 가리키는 캐시 열쇠(경로·크기·수정 시각) — 파일이 바뀌면 새 열쇠 */
 function mcv_file_key($file) {
@@ -212,144 +213,44 @@ function mcv_zip_subs($zipfile, $entry) {
     return $out;
 }
 
-/**
- * ffmpeg 동시 실행 자리 — 비어 있는 자리를 잡으면 파일 손잡이(잡고 있는 동안 자리 차지), 다 차 있으면 null(기다리지 않음)
- */
-function mcv_slot_lock($kind, $max) {
-    $d = mcv_cache_dir('vlock');
-    if ($d === '') return null;
-    for ($i = 0; $i < $max; $i++) {
-        $fp = @fopen($d . '/' . preg_replace('/[^a-z0-9_]/', '', $kind) . '_' . $i . '.lock', 'c');
-        if (!$fp) continue;
-        if (@flock($fp, LOCK_EX | LOCK_NB)) return $fp;
-        @fclose($fp);
-    }
-    return null;
-}
-
-function mcv_slot_unlock($fp) {
-    if ($fp) { @flock($fp, LOCK_UN); @fclose($fp); }
-}
-
-/** proc_open — 윈도우는 cmd 를 거치지 않고(bypass_shell) 바로, 리눅스는 exec 로 셸을 ffmpeg 로 바꿔(끊을 때 ffmpeg 까지 정확히 끝나게) */
-function mcv_proc_open($cmd, $desc, &$pipes) {
-    if (!function_exists('proc_open')) return false;
-    if (mcv_is_windows()) return @proc_open($cmd, $desc, $pipes, null, null, ['bypass_shell' => true]);
-    return @proc_open('exec ' . $cmd, $desc, $pipes);
-}
 
 /**
  * ★ (2026-10-31) 장면 캐시 정리 — 30일 넘게 새 장면이 안 생긴 영상 폴더를 지움(가끔 한 번, 한 번에 50개까지 · 쌓이기만 하던 것 방지)
- *   영상 하나 = src/video/vframes/<열쇠>/ 폴더(파일이 바뀌면 열쇠가 바뀌어 옛 폴더는 더 안 쓰임)
+ * ★ (2026-11-13 18:08, 펜닐 요청 — fix147) 장면 캐시는 FileStation 원본처럼 한 폴더(cache/_vframes/<md5>.jpg · .jpg.fail · .slot0·1) — 정리는 10일 넘은 장면·실패 표시(fix148 펜닐 지시 — 종전 30일)
+ *   종전 자리 src/video/vframes(장면·실패 표시·작업 자리·예전 영상 폴더)는 날짜와 상관없이 지우고 비면 폴더도 — 이름이 맞는 것만 하나씩
+ *   init.php 1시간 정리 때 + 장면 요청 300번에 한 번(종전처럼)
  */
 function mcv_frames_gc() {
-    $root = __DIR__ . '/src/video/vframes'; // ★ (2026-11-03 22:14) cache 밖으로
-    if (!is_dir($root)) return;
-    $limit = time() - 30 * 86400;
     $n = 0;
-    foreach ((@scandir($root) ?: []) as $d) {
-        if (!preg_match('/^[0-9a-f]{32}$/', $d)) continue;
-        $p = $root . '/' . $d;
-        if (!is_dir($p) || is_link($p) || (int)@filemtime($p) > $limit) continue;
-        foreach ((@scandir($p) ?: []) as $f) { if ($f !== '.' && $f !== '..' && is_file($p . '/' . $f)) @unlink($p . '/' . $f); }
-        @rmdir($p);
-        if (++$n >= 50) break;
-    }
-}
-
-/**
- * 재생바 미리보기 장면(작은 JPEG) — 캐시(src/video/vframes/<파일 열쇠>/<초>.jpg), 동시 2개까지(넘치면 503 → 플레이어가 잠시 뒤 다시)
- */
-function mcv_frame_send($file, $t) {
-    $ff = mcv_ffmpeg();
-    if ($ff === '') { http_response_code(404); exit; }
-    if (mt_rand(1, 300) === 1) mcv_frames_gc();
-    $t = max(0, (int)floor((float)$t));
-    $cdir = mcv_cache_dir('vframes/' . mcv_file_key($file));
-    if ($cdir === '') { http_response_code(500); exit; }
-    $cf = $cdir . '/' . $t . '.jpg';
-    if (!is_file($cf) || filesize($cf) === 0) {
-        $slot = mcv_slot_lock('frame', 2);
-        if ($slot === null) { http_response_code(503); header('Retry-After: 1'); exit; }
-        if (!is_file($cf)) {
-            $tmp = $cf . '.' . bin2hex(random_bytes(4)) . '.tmp.jpg'; // ★ (2026-11-02 09:57) Windows Apache 는 스레드끼리 pid 가 같아 겹쳤음
-            $cmd = mcv_arg($ff) . ' -hide_banner -loglevel error -nostdin -ss ' . $t . ' -i ' . mcv_arg($file)
-                 . ' -map 0:v:0 -frames:v 1 -vf "scale=320:-2" -q:v 6 -f image2 -y ' . mcv_arg($tmp);
-            @exec($cmd . (mcv_is_windows() ? ' 2>NUL' : ' 2>/dev/null'), $o, $rc);
-            if (is_file($tmp) && filesize($tmp) > 0) { if (!@rename($tmp, $cf)) @unlink($tmp); }
-            else @unlink($tmp);
+    // 지금 자리 cache/_vframes — 10일 넘은 장면·실패 표시(★ 2026-11-13 21:26 fix148 펜닐 지시 — 종전 30일), 1시간 넘은 묶음 임시 파일 · 폴더를 통째로 지워도 다음 장면 요청 때 다시 만듦(video_fs.php frameCacheDir)
+    $root = __DIR__ . '/cache/_vframes';
+    if (is_dir($root) && !is_link($root)) {
+        $limit = time() - 10 * 86400;
+        foreach ((@scandir($root) ?: []) as $f) {
+            $p = $root . '/' . $f;
+            if (preg_match('/^[0-9a-f]{32}\.jpg(\.fail)?$/', $f)) { if ((int)@filemtime($p) > $limit) continue; }
+            elseif (preg_match('/^(b\d+_\d+_\d+|[0-9a-f]{32}\.jpg\.\d+\.\d+)\.tmp\.jpg$/', $f)) { if ((int)@filemtime($p) > time() - 3600) continue; }
+            else continue;
+            if (is_file($p) && !is_link($p)) @unlink($p);
+            if (++$n >= 200) return;
         }
-        mcv_slot_unlock($slot);
     }
-    if (!is_file($cf)) { http_response_code(404); exit; }
-    while (ob_get_level()) ob_end_clean();
-    header('Content-Type: image/jpeg');
-    header('Content-Length: ' . filesize($cf));
-    header('Cache-Control: private, max-age=86400');
-    readfile($cf);
-    exit;
+    // 종전 자리 src/video/vframes — fix141~145 의 <md5>.jpg·.jpg.fail·.slot0·1·임시, 그 전의 영상 폴더(<32자>/)
+    $old = __DIR__ . '/src/video/vframes'; // ★ (2026-11-03 22:14) cache 밖으로 → ★ fix146 다시 cache/_vframes 로(지워져도 되는 것)
+    if (!is_dir($old) || is_link($old)) return;
+    foreach ((@scandir($old) ?: []) as $f) {
+        $p = $old . '/' . $f;
+        if (preg_match('/^[0-9a-f]{32}$/', $f) && is_dir($p) && !is_link($p)) {
+            foreach ((@scandir($p) ?: []) as $g) { if ($g !== '.' && $g !== '..' && is_file($p . '/' . $g) && !is_link($p . '/' . $g)) @unlink($p . '/' . $g); }
+            @rmdir($p);
+        } elseif (preg_match('/^([0-9a-f]{32}\.jpg(\.fail|\.\d+\.\d+\.tmp\.jpg)?|\.slot[01]|b\d+_\d+_\d+\.tmp\.jpg)$/', $f) && is_file($p) && !is_link($p)) {
+            @unlink($p);
+        } else continue;
+        if (++$n >= 500) return;
+    }
+    @rmdir($old);
 }
 
-/**
- * 실시간 변환 재생 — 조각 MP4(H.264 + AAC 2ch)를 그대로 흘려보냄(FileStation transcodeShareStream 과 같은 방식)
- * @param float $ss 시작 위치(초 — 이 위치부터 변환, 브라우저 시각 0 = 실제 ss 초)
- * @param int   $a  음성 트랙 순번(0부터)
- * @param int   $q  화질(세로 픽셀 1080·720·480, 0 = 원본 크기)
- */
-function mcv_transcode_send($file, $ss, $a, $q) {
-    $ff = mcv_ffmpeg();
-    if ($ff === '') { http_response_code(501); header('X-Transcode-Error: ffmpeg not set'); exit; }
-    if (!function_exists('proc_open')) { http_response_code(501); header('X-Transcode-Error: proc_open disabled'); exit; }
-    // 동시 변환 자리: 서버 전체 4개 — 넘치면 503(화면에 '바쁨' 안내). 영상을 옮기면 브라우저가 앞 요청을 끊어 자리가 곧 빔
-    $slot = mcv_slot_lock('tc', 4);
-    if ($slot === null) { http_response_code(503); header('Retry-After: 2'); header('X-Transcode-Error: busy'); exit; }
-    $info = mcv_probe($file);
-    $ss = max(0.0, min((float)$ss, max(0.0, (float)($info['dur'] ?? 0) - 1)));
-    $na = count($info['audio'] ?? []);
-    $a = ($na > 0) ? max(0, min((int)$a, $na - 1)) : -1;
-    $vf = '';
-    if (in_array((int)$q, [1080, 720, 480], true) && (int)($info['h'] ?? 0) > (int)$q) $vf = ' -vf "scale=-2:' . (int)$q . '"';
-    $cmd = mcv_arg($ff) . ' -hide_banner -loglevel error -nostdin'
-         . ($ss > 0 ? ' -ss ' . sprintf('%.3F', $ss) : '')
-         . ' -i ' . mcv_arg($file)
-         . ' -map 0:v:0' . ($a >= 0 ? ' -map 0:a:' . $a : '')
-         . ' -sn -dn' . $vf
-         . ' -c:v libx264 -preset veryfast -crf 23 -profile:v high -level 4.1 -pix_fmt yuv420p -g 48 -keyint_min 48 -sc_threshold 0'
-         . ($a >= 0 ? ' -c:a aac -b:a 160k -ac 2' : ' -an')
-         . ' -movflags frag_keyframe+empty_moov+default_base_moof -frag_duration 500000 -f mp4 pipe:1';
-    $errLog = mcv_cache_dir('vlock');
-    $desc = [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ($errLog !== '' ? ['file', $errLog . '/ffmpeg_tc_err.log', 'w'] : ['pipe', 'w'])];
-    $pipes = [];
-    $proc = mcv_proc_open($cmd, $desc, $pipes);
-    if (!is_resource($proc)) { mcv_slot_unlock($slot); http_response_code(500); header('X-Transcode-Error: start failed'); exit; }
-    @fclose($pipes[0]);
-    if (isset($pipes[2]) && is_resource($pipes[2])) @fclose($pipes[2]);
-    @set_time_limit(0);
-    @ignore_user_abort(true);   // 브라우저가 끊으면 아래에서 알아채고 ffmpeg 를 끝냄
-    while (ob_get_level()) ob_end_clean();
-    if (function_exists('apache_setenv')) @apache_setenv('no-gzip', '1');
-    @ini_set('zlib.output_compression', 'Off');
-    header_remove('Content-Length');
-    header('Content-Type: video/mp4');
-    header('Cache-Control: no-cache, no-store');
-    header('Accept-Ranges: none');
-    header('X-Accel-Buffering: no');
-    $sent = 0;
-    while (!feof($pipes[1])) {
-        $chunk = fread($pipes[1], 65536);
-        if ($chunk === false) break;
-        if ($chunk === '') { usleep(20000); if (connection_aborted()) break; continue; }
-        echo $chunk;
-        $sent += strlen($chunk);
-        @flush();
-        if (connection_aborted()) break;
-    }
-    @fclose($pipes[1]);
-    $st = @proc_get_status($proc);
-    if (is_array($st) && !empty($st['running'])) @proc_terminate($proc);
-    @proc_close($proc);
-    mcv_slot_unlock($slot);
-    exit;
-}
+
 
 }

@@ -763,3 +763,29 @@ body.fsvs-active .fsvs-on .video-seek-overlay.show[data-chev="2"]::before { anim
     body.fsvs-active .fsvs-on.playing.fsvs-idle .transcode-duration,
     body.fsvs-active .fsvs-on.playing.fsvs-idle .fs-vp-toggle { opacity: 0 !important; pointer-events: none !important; transition: opacity 0.3s; }
 }
+
+/* ★ (2026-11-12 10:09, 96차 펜닐 요청 VSET-A) 공유 페이지 설정 창 — 플레이어 안에 다 안 들어갈 때만 '아래에서 올라오는 시트'(시안 A, 스킨 JS fitSheetA).
+   종전엔 PC 는 플레이어 위로 넘치고 휴대폰은 조작 줄 위로 떠 플레이어 밖까지 덮었다(재현). 뒤는 반투명 어둡게, 위 모서리 20px, 손잡이 막대, 줄 높이 52px,
+   PC·휴대폰 모두 화면 아래 가운데 폭 최대 420px. 항목·하위 목록은 종전 그대로(같은 시트 안에서 바뀜). 탐색기 미리보기엔 이 클래스가 붙지 않는다. */
+.fsvs-root .fsvs-sheetbg { display: none; position: fixed; inset: 0; z-index: 2147482999; background: rgba(0, 0, 0, 0.5); pointer-events: auto; }
+.fsvs-root .fsvs-sheetbg.is-on { display: block; }
+.fsvs-root .fsvs-menu.fsvs-lst.fsvs-sheet.fsvs-asheet { left: 0; right: 0; bottom: 0; width: auto; max-width: 420px; margin: 0 auto; border-radius: 20px 20px 0 0;
+    padding: 20px 0 calc(8px + env(safe-area-inset-bottom, 0px)); animation: fsvs-sheet-up .2s ease-out; }
+.fsvs-root .fsvs-menu.fsvs-asheet::before { content: ''; position: absolute; top: 8px; left: 50%; width: 36px; height: 4px; margin-left: -18px; border-radius: 2px; background: rgba(255, 255, 255, 0.3); }
+.fsvs-root .fsvs-menu.fsvs-asheet .fsvs-mrow { min-height: 52px; }
+@keyframes fsvs-sheet-up { from { transform: translateY(100%); } to { transform: none; } }
+@media (prefers-reduced-motion: reduce) { .fsvs-root .fsvs-menu.fsvs-asheet { animation: none; } }
+
+/* ★ (2026-11-13 10:16, 펜닐 요청 — fix141) myComix 전용(FileStation 최신 스킨 CSS 위에 다시 얹음 — fix139 의 휴대폰 판 규칙) */
+/* ★ (2026-11-13 08:16 fix139) 휴대폰 판을 옮겨 두는 화면 맨 앞 칸(body 바로 아래) — 화면 전체·누르기는 통과(판만 받음)·가장 위.
+   플레이어 상자(overflow: hidden) 밖이라 아이폰이 판을 잘라 그리지 않고, 플레이어 칸(z-index 15)에 묶이지 않음. 자동 로그아웃 경고·가림막(2147483647)보다는 아래 */
+.fsvs-root.fsvs-sheethost { position: fixed; top: 0; left: 0; right: 0; bottom: 0; z-index: 2147483000; pointer-events: none; }
+/* ★ (2026-11-12 08:08, 펜닐 요청) 휴대폰 가로 판: 높이가 모자라 줄 간격을 조금 줄임(42 → 36px) — 6줄이 위 막대 아래까지 스크롤 없이 */
+.fsvs-root .fsvs-menu.fsvs-lst.fsvs-sheet.fsvs-sheet-tight .fsvs-mrow { min-height: 36px; padding-top: 3px; padding-bottom: 3px; }
+.fsvs-root .fsvs-menu.fsvs-lst.fsvs-sheet.fsvs-sheet-tight .fsvs-menuhead { padding-bottom: 2px; }
+@media (max-height: 340px) { /* 아주 낮은 가로 화면(568×320 등) — 36px 로도 25px 넘쳐 한 번 더(32px) */
+    .fsvs-root .fsvs-menu.fsvs-lst.fsvs-sheet.fsvs-sheet-tight { padding-top: 4px; }
+    .fsvs-root .fsvs-menu.fsvs-lst.fsvs-sheet.fsvs-sheet-tight .fsvs-mrow { min-height: 32px; padding-top: 2px; padding-bottom: 2px; }
+}
+/* 판이 열린 동안 오른쪽 아래 떠 있는 단추(다크모드·맨 위로)가 판 위에 겹치지 않게 숨김 */
+html.fsvs-sheet-open #darkmode-toggle, html.fsvs-sheet-open .darkmode-toggle, html.fsvs-sheet-open #scrollTopBtn { visibility: hidden !important; pointer-events: none !important; }

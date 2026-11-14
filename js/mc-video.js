@@ -457,8 +457,268 @@
 
         // ── 실시간 변환 재생
         var switching = false;
-        function tcUrl(ss) { return tc.url + '&ss=' + (Math.round(ss * 1000) / 1000) + '&a=' + tcAudio + '&q=' + tcQ; }
+        // ★ (2026-11-13 10:33 fix141) 서버가 FileStation transcodeShareStream 그대로가 되어 인자도 같게(&audio=·&seek= — 이 대체 경로엔 화질이 없음, FileStation 과 같음)
+        function tcUrl(ss) { return tc.url + '&audio=' + tcAudio + (ss > 0 ? '&seek=' + (+ss).toFixed(2) : ''); }
+        /*
+         * ★ (2026-11-13 10:33, 펜닐 요청 — fix141) 조각 MP4 받기 — FileStation share.php _fallbackToMMS 그대로
+         *   ManagedMediaSource(아이폰)·MediaSource 가 'avc1.640029 + mp4a' 를 받으면 fetch 로 읽어 조각을 차례로 붙임(가득 차면 재생한 앞부분을 지우고 다시),
+         *   못 받거나 읽기가 실패하면 종전처럼 video.src = 주소(파이프). 소스를 바꾸면(닫히면) 읽기를 멈춰 서버 ffmpeg 도 끝나게
+         */
+        var mmsOn = false;
+        function mmsStop() { if (mmsOn) { mmsOn = false; try { if (video.srcObject) video.srcObject = null; } catch (e) {} } }
+        function mmsStart(url) {
+            var MSApi = window.ManagedMediaSource || window.MediaSource;
+            var mimeType = 'video/mp4; codecs="avc1.640029,mp4a.40.2"';
+            var pipe = function () { mmsStop(); video.src = url; video.load(); };
+            if (!(MSApi && typeof MSApi.isTypeSupported === 'function' && MSApi.isTypeSupported(mimeType))) { pipe(); return; }
+            try {
+                var mediaSource = new MSApi();
+                mmsOn = true;
+                if (window.ManagedMediaSource) { video.disableRemotePlayback = true; video.srcObject = mediaSource; }
+                else video.src = URL.createObjectURL(mediaSource);
+                mediaSource.addEventListener('sourceopen', function () {
+                    var sourceBuffer = mediaSource.addSourceBuffer(mimeType);
+                    var queue = [], appending = false, userPaused = false, retryT = 0;
+                    video.addEventListener('pause', function () { userPaused = true; });
+                    video.addEventListener('play', function () { userPaused = false; });
+                    function appendNext() {
+                        if (appending || queue.length === 0 || sourceBuffer.updating || mediaSource.readyState !== 'open') return;
+                        appending = true;
+                        var chunk = queue.shift();
+                        try { sourceBuffer.appendBuffer(chunk); } catch (e) {
+                            appending = false;
+                            if (e && e.name === 'QuotaExceededError') {
+                                queue.unshift(chunk);
+                                try {
+                                    if (sourceBuffer.buffered.length > 0) {
+                                        var s0 = sourceBuffer.buffered.start(0), ct = video.currentTime;
+                                        if (ct - s0 > 5) { sourceBuffer.remove(s0, ct - 5); return; }
+                                    }
+                                } catch (_e) {}
+                                if (!retryT) retryT = setTimeout(function () { retryT = 0; appendNext(); }, 1000);
+                            }
+                        }
+                    }
+                    sourceBuffer.addEventListener('updateend', function () {
+                        appending = false;
+                        appendNext();
+                        if (!userPaused && video.paused && sourceBuffer.buffered.length > 0) { var p = video.play(); if (p && p.catch) p.catch(function () {}); }
+                    });
+                    fetch(url, { credentials: 'same-origin' }).then(function (resp) {
+                        if (!resp.ok || !resp.body) throw new Error('fetch failed');
+                        var reader = resp.body.getReader();
+                        var pump = function () {
+                            if (mediaSource.readyState !== 'open') { try { reader.cancel().catch(function () {}); } catch (_e) {} return; }
+                            return reader.read().then(function (r) {
+                                if (r.done) {
+                                    var fin = function () { if (mediaSource.readyState === 'open') { try { mediaSource.endOfStream(); } catch (e) {} } };
+                                    if (!sourceBuffer.updating) fin(); else sourceBuffer.addEventListener('updateend', fin, { once: true });
+                                    return;
+                                }
+                                queue.push(r.value);
+                                appendNext();
+                                var wait = function () { return (queue.length > 8 && mediaSource.readyState === 'open') ? new Promise(function (res) { setTimeout(res, 250); }).then(wait) : Promise.resolve(); };
+                                return wait().then(pump);
+                            });
+                        };
+                        return pump();
+                    }).catch(function () { if (mmsOn) pipe(); });
+                }, { once: true });
+            } catch (e) { pipe(); }
+        }
         function setBusy(on) { if (wrap) wrap.classList.toggle('mcv-busy', !!on); }
+        /*
+         * ★ (2026-11-13 09:43, 펜닐 요청 — fix140 · 10:29 fix141 서버가 FileStation hlsShareStream 그대로가 되어 인자·응답도 같게) HLS 변환 재생 — FileStation share.php startTranscode 와 같은 흐름
+         *   hls_action=start(&audio=&seek=&quality=1080p…) → JSON {success, session, playlist} → hls.js(new Hls · loadSource · attachMedia · MANIFEST_PARSED 에 재생)
+         *   hls.js 를 못 쓰고 기본 HLS 가 되면(아이폰 등) video.src = 재생 목록
+         *   재생 목록 응답의 X-Current-Encoder 로 배지에 'HW : NVIDIA' · 'SW : CPU' 표시(FileStation 과 같음)
+         *   치명 오류: 재생 목록 오류·bufferAppendError·404 면 세션을 끝내고 한 번만 &force_sw=1(CPU 인코더)로 다시, 그래도 안 되거나 다른 오류면 종전 조각 MP4(FileStation _fallbackToMMS 자리)
+         *   기본 HLS 는 영상 오류면 한 번 SW 로 다시, 그다음 조각 MP4 · 브라우저 시각 0 = 실제 tcOff 초(_qualitySeekOffset) · 바꿀 때·창을 떠날 때 sendBeacon 으로 stop
+         */
+        var hls = null, hlsSid = '', hlsGen = 0, hlsBroken = false, hlsLazyAt = null, hlsNative = false, hlsJsWait = null, hlsSwRetried = false, hlsEnc = '';
+        function hlsOk() { return !!(tc && tc.hls) && !hlsBroken && (!!o.hlsJs || canNativeHls()); }
+        function canNativeHls() { try { return !!video.canPlayType && video.canPlayType('application/vnd.apple.mpegurl') !== ''; } catch (e) { return false; } }
+        function hlsUrl(act) { return tc.hls + '&hls_action=' + act; }
+        var QN = { 1080: '1080p', 720: '720p', 480: '480p', 360: '360p', 240: '240p', 144: '144p' };
+        function loadHlsJs(cb) {
+            if (window.Hls || !o.hlsJs) { cb(); return; }
+            if (hlsJsWait) { hlsJsWait.push(cb); return; }
+            hlsJsWait = [cb];
+            var sc = document.createElement('script');
+            var done = function () { var l = hlsJsWait || []; hlsJsWait = null; l.forEach(function (f) { try { f(); } catch (e) {} }); };
+            sc.src = o.hlsJs; sc.onload = done; sc.onerror = done;
+            document.head.appendChild(sc);
+        }
+        function hlsBeaconStop(sid) {
+            var u = hlsUrl('stop') + '&session=' + encodeURIComponent(sid);
+            try { if (!(navigator.sendBeacon && navigator.sendBeacon(u))) fetch(u, { credentials: 'same-origin', keepalive: true }); } catch (e) {}
+        }
+        function hlsStop() {
+            hlsGen++; hlsLazyAt = null;
+            mmsStop();   // ★ fix141 조각 MP4(MMS) 받던 것도 정리(소스가 바뀌면 읽기가 멈춤)
+            if (hls) { try { hls.destroy(); } catch (e) {} hls = null; }
+            if (hlsNative) { hlsNative = false; try { video.removeAttribute('src'); video.load(); } catch (e) {} }
+            if (hlsSid) { var sid = hlsSid; hlsSid = ''; hlsBeaconStop(sid); }
+        }
+        function hlsSetEnc(enc) {   // 배지 끝에 ' · HW : NVIDIA' 등(FileStation xhrSetup 과 같은 이름)
+            enc = String(enc || '').replace(/[^A-Za-z0-9_]/g, '');
+            if (!enc || enc === hlsEnc) return;
+            hlsEnc = enc; updateBadge();
+        }
+        function hlsEncText() {
+            if (!hlsEnc || !isTc() || hlsBroken) return '';
+            var names = { h264_nvenc: 'NVIDIA', h264_qsv: 'Intel', h264_amf: 'AMD', h264_vaapi: 'VA-API', libx264: 'CPU' };
+            return ' · ' + (hlsEnc !== 'libx264' ? 'HW' : 'SW') + ' : ' + (names[hlsEnc] || hlsEnc);
+        }
+        function hlsFail(status) {
+            // HLS 가 안 됨 → 같은 위치부터 종전 조각 MP4 로
+            var at = absNow(), pl = playReq || !video.paused;
+            hlsStop();
+            hlsBroken = true;
+            startTc(at, pl, !pl);
+        }
+        function hlsOpen(ss, play, forceSw) {
+            var gen = ++hlsGen;
+            setBusy(true);
+            video.preload = 'auto';   // none 이면 크롬이 MediaSource 를 열지 않음(hls.js 가 붙지 못함 — 재현)
+            var url = hlsUrl('start') + '&audio=' + tcAudio + (ss > 0 ? '&seek=' + (+ss).toFixed(2) : '') + (QN[tcQ] ? '&quality=' + QN[tcQ] : '') + (forceSw ? '&force_sw=1' : '');
+            var swRetry = function () {   // 한 번만 CPU 인코더로 다시(FileStation _shareHlsSwRetried)
+                if (forceSw || hlsSwRetried) return false;
+                hlsSwRetried = true;
+                var at = absNow(), pl = play || playReq || !video.paused;
+                hlsStop();
+                if (badge) { badge.classList.remove('native', 'err'); badge.classList.add('tc'); badge.textContent = '⚡ ' + (T.tc_sw_retry || 'HW failed — retrying with SW...'); }
+                hlsOpen(at, pl, true);
+                return true;
+            };
+            fetch(url, { credentials: 'same-origin', cache: 'no-store' })
+                .then(function (r) { var ct = r.headers.get('content-type') || ''; return (ct.indexOf('json') >= 0 ? r.json() : Promise.resolve(null)).catch(function () { return null; }).then(function (j) { return { st: r.status, j: j }; }); })
+                .then(function (x) {
+                    var j = x.j;
+                    if (gen !== hlsGen) { if (j && j.session) hlsBeaconStop(j.session); return; }
+                    if (!j || !j.success || !j.playlist || !/^[A-Za-z0-9_-]+$/.test(j.session || '')) { hlsFail(x.st); return; }
+                    hlsSid = j.session;
+                    var src = j.playlist;
+                    loadHlsJs(function () {
+                        if (gen !== hlsGen) return;
+                        if (window.Hls && window.Hls.isSupported()) {
+                            var h = hls = new window.Hls({
+                                maxBufferLength: 30, maxMaxBufferLength: 60, startLevel: -1,
+                                xhrSetup: function (xhr, u) { xhr.addEventListener('load', function () { if (u && u.indexOf('hls_action=playlist') !== -1) { try { hlsSetEnc(xhr.getResponseHeader('X-Current-Encoder')); } catch (e) {} } }); }
+                            });
+                            h.on(window.Hls.Events.MANIFEST_PARSED, function () { if (gen === hlsGen && play) playNow(true); });
+                            h.on(window.Hls.Events.ERROR, function (ev, d) {
+                                if (gen !== hlsGen || !d || !d.fatal) return;
+                                var isManifestErr = (d.details === 'manifestLoadError' || d.details === 'manifestLoadTimeOut' || d.details === 'manifestParsingError');
+                                var is404 = d.response && (d.response.code === 404 || d.response.code === 410);
+                                if ((isManifestErr || d.details === 'bufferAppendError' || is404) && swRetry()) return;
+                                hlsFail(0);
+                            });
+                            h.loadSource(src);
+                            h.attachMedia(video);
+                        } else if (canNativeHls()) {
+                            hlsNative = true;
+                            if (forceSw) hlsSetEnc('libx264');
+                            video.src = src;
+                            video.load();
+                            if (play) playNow(true);
+                        } else hlsFail(0);
+                    });
+                })
+                .catch(function () { if (gen === hlsGen) hlsFail(0); });
+        }
+        // 미뤄 둔 HLS(lazy) — 재생을 누르면 그때 세션 시작
+        video.addEventListener('play', function () { if (isTc() && hlsLazyAt !== null) { var t = hlsLazyAt; hlsLazyAt = null; hlsOpen(t, true); } });
+        window.addEventListener('pagehide', function () { if (hlsSid) hlsStop(); });
+        /*
+         * ★ (2026-11-13 10:22, 펜닐 요청 — fix141) 빠른 시작(원본 스트리밍) — FileStation share.php _shareFastNative 그대로
+         *   mp4 H.264(애플 기기는 HEVC 도)를 다시 인코딩 없이 키프레임 조각 HLS(VOD — 처음부터 전체 길이)로. 시각 보정 0 이라 탐색·구간 반복은 일반 재생과 같음
+         *   시작 전 실패·첫 화면 준비 1.5초 뒤에도 영상 크기 0 → 종전 일반 재생(원본 주소)으로 조용히(HEVC 는 변환 재생으로)
+         *   변환 재생으로 바뀌면(화질·재생 방식·일반 재생 실패) 정리하고 복귀를 막음(dsOff) · 음성 바꾸기는 같은 위치에서 그 음성으로 다시 붙임
+         */
+        var dir = (o.direct && o.direct.url && o.native) ? o.direct : null;
+        var dsHls = null, dsOn = false, dsOff = false, dsFell = false, dsGen = 0, dsAudio = 0, dsStarted = false, dsResumeFn = null;
+        function dsDestroy() { if (dsHls) { try { dsHls.destroy(); } catch (e) {} dsHls = null; } }
+        function dsStopAll() { dsGen++; dsDestroy(); dsOff = true; dsOn = false; }
+        function dsToNative(why) {
+            if (dsFell || dsOff) return;
+            dsFell = true; dsOn = false;
+            try { console.warn('[MCVideo] 빠른 시작 중단:', why); } catch (e) {}
+            dsDestroy();
+            var at = Number(video.currentTime) || 0;
+            if (dir.codec === 'hevc' && tc) { nativeBad = true; startTc(at, playReq || !video.paused, false); return; }   // HEVC 는 일반 재생도 못 풀 가능성이 커 변환 재생으로
+            try { video.removeAttribute('src'); } catch (e) {}
+            video.querySelectorAll('source').forEach(function (x) { x.remove(); });
+            var so = document.createElement('source'); so.src = o.native; so.type = 'video/mp4'; video.appendChild(so);
+            var pl = playReq || !video.paused;
+            var go = function () { video.removeEventListener('loadedmetadata', go); try { if (at > 0) video.currentTime = at; } catch (e) {} if (pl) playNow(true); };
+            video.addEventListener('loadedmetadata', go);
+            try { video.load(); } catch (e) {}
+        }
+        function dsAttach(a, start, play) {
+            var my = ++dsGen;
+            dsStarted = false; var recover = 0;
+            dsDestroy(); mmsStop();
+            dsAudio = a; dsOn = true; dsOff = false; mode = 'native'; tcOff = 0; video._qualitySeekOffset = 0;
+            var url = dir.url + '&a=' + a;
+            var checkDims = function () { setTimeout(function () {
+                if (my !== dsGen || dsFell || dsOff) return;
+                if (video.videoWidth > 0 || video.videoHeight > 0) return;
+                dsToNative('no_video');
+            }, 1500); };
+            var afterReady = function () { if (play) playNow(true); };
+            loadHlsJs(function () {
+                if (my !== dsGen || dsOff) return;
+                if (window.Hls && window.Hls.isSupported()) {
+                    var back = (window.matchMedia && matchMedia('(pointer: coarse)').matches) ? 30 : 90;
+                    var h = dsHls = new window.Hls({ enableWorker: true, lowLatencyMode: false, maxBufferLength: 30, maxMaxBufferLength: 120, backBufferLength: back, startPosition: start || 0 });
+                    var later = function (why) { setTimeout(function () { if (my === dsGen) dsToNative(why); }, 0); };
+                    h.on(window.Hls.Events.ERROR, function (ev, d) {
+                        if (!d || !d.fatal || my !== dsGen || dsFell || dsOff || dsHls !== h) return;
+                        if (!dsStarted) { later(d.details || 'error'); return; }
+                        if (++recover > 3) { later('fatal:' + (d.details || '')); return; }
+                        if (d.type === window.Hls.ErrorTypes.NETWORK_ERROR) { try { h.startLoad(); } catch (e) { later('restart'); } }
+                        else if (d.type === window.Hls.ErrorTypes.MEDIA_ERROR) { try { h.recoverMediaError(); } catch (e) { later('recover'); } }
+                        else later(d.details || 'fatal');
+                    });
+                    video.addEventListener('loadedmetadata', function () { if (my !== dsGen) return; dsStarted = true; afterReady(); }, { once: true });
+                    video.addEventListener('loadeddata', function () { if (my === dsGen) checkDims(); }, { once: true });
+                    // 아이폰(ManagedMediaSource): 받기를 멈춘 뒤 받아 둔 범위 밖으로 옮기면 다시 받으라는 신호가 없어 멈춤 → 그때 지금 위치부터 다시 받게(FileStation 과 같음)
+                    var resumeIfNeeded = function (ev) {
+                        var why = (ev && ev.type === 'seeking') ? 'seek' : 'waiting';
+                        if (my !== dsGen || dsHls !== h || dsFell || !dsStarted) return;
+                        var tt = video.currentTime || 0, b = video.buffered;
+                        for (var i = 0; i < b.length; i++) if (tt >= b.start(i) - 0.3 && tt < b.end(i) - 0.5) return;
+                        var sc = h.streamController;
+                        if (!sc) return;
+                        if (why === 'seek' && sc.state === 'FRAG_LOADING') {
+                            var f = sc.fragCurrent, tol = (h.config && h.config.maxFragLookUpTolerance) || 0.25;
+                            if (f && f.loader && isFinite(f.start) && tt < f.start - tol) { try { f.abortRequests(); sc.resetLoadingState(); } catch (e) {} }
+                            return;
+                        }
+                        if (sc.state !== 'STOPPED') return;
+                        try { h.resumeBuffering(); } catch (e) {}
+                    };
+                    if (dsResumeFn) { video.removeEventListener('seeking', dsResumeFn); video.removeEventListener('waiting', dsResumeFn); }
+                    dsResumeFn = resumeIfNeeded;
+                    video.addEventListener('seeking', resumeIfNeeded);
+                    video.addEventListener('waiting', resumeIfNeeded);
+                    h.loadSource(url);
+                    h.attachMedia(video);
+                } else if (canNativeHls()) {
+                    // 사파리 내장 HLS — 시작 전 오류는 여기서 받아(일반 재생 실패 → 변환 재생 처리까지 가지 않게)
+                    var onErr = function (e) { if (my !== dsGen || dsStarted || dsFell) return; try { e.stopImmediatePropagation(); } catch (x) {} dsToNative('native_hls'); };
+                    video.addEventListener('error', onErr, true);
+                    video.addEventListener('loadedmetadata', function () { if (my !== dsGen) return; dsStarted = true; video.removeEventListener('error', onErr, true); if (start > 0) { try { video.currentTime = start; } catch (e) {} } afterReady(); }, { once: true });
+                    video.addEventListener('loadeddata', function () { if (my === dsGen) checkDims(); }, { once: true });
+                    video.src = url;
+                } else {
+                    dsToNative('no_hls');
+                }
+            });
+        }
+        var nativeBad = false;   // 이 브라우저가 원본을 제대로 못 트는 영상(일반 재생 실패로 변환 재생이 된 것) — 화질 '원본'을 골라도 원본으로 돌아가지 않음(FileStation _nativeBad)
+        var qAuto = false;       // 일반 재생 중 화질을 골라 변환 재생이 된 것(FileStation CASE 2) — '원본'을 고르면 일반 재생으로 돌아감(CASE 3)
         function startTc(ss, play, lazy) {
             if (!tc) return;
             clearTimeout(tcPendT); tcPend = null; tcPendPlay = false;
@@ -469,7 +729,17 @@
             switching = true;
             setBusy(!(lazy && !play));
             try { video.removeAttribute('src'); while (video.firstChild && video.firstChild.tagName === 'SOURCE') video.removeChild(video.firstChild); } catch (e) {}
+            hlsStop();
+            if (dsOn || dsHls) dsStopAll();   // ★ fix141 빠른 시작 정리·복귀 막음(FileStation _directOff)
+            if (hlsOk()) {   // ★ fix140 HLS 먼저(FileStation 과 같음) — lazy 면 재생을 누를 때 세션 시작
+                video.preload = 'none';
+                if (lazy && !play) { hlsLazyAt = tcOff; }
+                else { hlsLazyAt = null; hlsOpen(tcOff, play); }
+                if (wasMode !== 'tc') { abClear(); updateBadge(); }
+                return;
+            }
             video.preload = (lazy && !play) ? 'none' : 'auto';   // lazy: 재생을 누를 때 변환 시작(미리 ffmpeg 를 돌리지 않음)
+            if (!(lazy && !play)) { mmsStart(tcUrl(tcOff)); if (play) playNow(true); if (wasMode !== 'tc') { abClear(); updateBadge(); } return; }   // ★ fix141 FileStation MMS
             video.src = tcUrl(tcOff);
             if (!(lazy && !play)) video.load();   // src 를 바꾸면 다시 읽음 — 미룰 때는 load() 를 부르지 않음(크롬은 load() 때 preload=none 을 무시하기도)
             if (wasMode !== 'tc') { abClear(); updateBadge(); }
@@ -477,7 +747,16 @@
         }
         function startNative(ss, play) {
             if (!o.native) return;
+            hlsStop();
+            if (dir && !dsFell) {   // ★ fix141 빠른 시작이 되는 영상이면 다시 빠른 시작으로(FileStation 은 '일반 재생'을 고르면 페이지를 다시 열어 빠른 시작)
+                switching = true; qAuto = false; tcQ = 0;
+                try { video.removeAttribute('src'); video.querySelectorAll('source').forEach(function (x) { x.remove(); }); } catch (e) {}
+                dsAttach((tcAudio > 0 && tcAudio < (+dir.audio || 0)) ? tcAudio : 0, ss, play);   // 고른 음성 그대로
+                updateBadge(); syncSelects();
+                return;
+            }
             mode = 'native'; tcOff = 0; video._qualitySeekOffset = 0;
+            tcQ = 0; qAuto = false;   // ★ fix141 일반 재생은 원본 화질
             switching = true;
             video.src = o.native;
             video.load();
@@ -499,19 +778,27 @@
             if (srcFail && ev.target.nextElementSibling && ev.target.nextElementSibling.tagName === 'SOURCE') return;
             setBusy(false);
             var err = video.error, code = err ? err.code : (srcFail ? 4 : 0);
+            if (!isTc() && dsOn && !dsStarted) return;   // ★ fix141 빠른 시작 시작 전 오류는 빠른 시작이 처리(일반 재생으로)
             if (!isTc() && tc && (code === 3 || code === 4)) {
+                nativeBad = true;
                 // 일반 재생이 형식·코덱 문제로 실패 → 같은 위치부터 변환 재생(FileStation 과 같음)
                 var at = absNow();
                 say(T.tc_fallback || 'Switching to transcoding', 2500);
                 startTc(at, playReq, true);
                 return;
             }
+            if (isTc() && hlsNative && !hlsBroken) {   // ★ fix140·fix141 기본 HLS(아이폰 등) 실패 → 한 번 SW 로 다시(FileStation), 그다음 조각 MP4
+                if (!hlsSwRetried) { hlsSwRetried = true; var _at = absNow(), _pl = playReq || !video.paused; hlsStop(); hlsOpen(_at, _pl, true); return; }
+                hlsFail(0); return;
+            }
+            if (isTc() && hls && !hlsBroken) { hlsFail(0); return; }   // hls.js 가 붙은 영상 요소 자체 오류(hls.js 가 치명 오류를 안 낼 때도 있음 — 재현: 붙이기 거부) → 조각 MP4
             if (isTc()) setBadgeErr(T.tc_error || 'Transcoding failed');
         }, true);
 
         // ★ 크롬 등이 영상 코덱(HEVC 등)을 못 열면 오류 없이 소리만 나옴(화면 0x0) → 같은 위치부터 변환 재생(서버가 영상 트랙이 있다고 본 파일만)
         video.addEventListener('loadeddata', function () {
-            if (isTc() || !tc || !(+tc.h > 0) || video.videoWidth > 0) return;
+            if (isTc() || dsOn || !tc || !(+tc.h > 0) || video.videoWidth > 0) return;   // ★ fix141 빠른 시작은 자기 확인(1.5초)으로
+            nativeBad = true;
             say(T.tc_fallback || 'Switching to transcoding', 2500);
             startTc(absNow(), playReq, true);
         });
@@ -524,17 +811,27 @@
                 [['native', T.mode_native || 'Direct play'], ['tc', T.mode_tc || 'Transcoding']].forEach(function (x) { var op = el('option', null, x[1]); op.value = x[0]; selMode.appendChild(op); });
                 selMode.addEventListener('change', function () {
                     var at = absNow(), pl = !video.paused;
-                    if (selMode.value === 'tc' && !isTc()) startTc(at, pl);
+                    if (selMode.value === 'tc' && !isTc()) { qAuto = false; startTc(at, pl); }
                     else if (selMode.value === 'native' && isTc()) startNative(at, pl);
                 });
             }
             selQ = el('select'); selQ.id = 'mcv-quality';
             var qh = +tc.h || 0;
-            [[0, T.q_orig || 'Original'], [1080, '1080p'], [720, '720p'], [480, '480p']].forEach(function (x) {
+            [[0, T.q_orig || 'Original'], [1080, '1080p'], [720, '720p'], [480, '480p'], [360, '360p'], [240, '240p'], [144, '144p']].forEach(function (x) {   // ★ fix141 FileStation 화질 7단계
                 if (x[0] && qh && x[0] >= qh) return;   // 원본보다 큰 화질은 뺌
                 var op = el('option', null, x[0] ? x[1] : (x[1] + (qh ? ' (' + qh + 'p)' : ''))); op.value = String(x[0]); selQ.appendChild(op);
             });
-            selQ.addEventListener('change', function () { tcQ = parseInt(selQ.value, 10) || 0; if (isTc()) startTc(absNow(), !video.paused); });
+            selQ.addEventListener('change', function () {
+                tcQ = parseInt(selQ.value, 10) || 0;
+                var at = absNow(), pl = !video.paused;
+                // ★ (2026-11-13 10:22 fix141) FileStation 화질 바꾸기와 같음 — CASE 2: 일반 재생 중 원본 아닌 화질 → 그 화질로 변환 재생
+                //   CASE 3: 그렇게 변환 재생이 된 뒤 '원본' → 일반 재생으로(원본을 못 트는 영상은 원본 화질 변환 재생 — CASE 4) · CASE 4: 변환 재생끼리는 새 화질로
+                if (isTc()) {
+                    if (tcQ === 0 && qAuto && !nativeBad && o.native) { qAuto = false; startNative(at, pl); }
+                    else startTc(at, pl);
+                } else if (tcQ > 0) { qAuto = true; startTc(at, pl); }
+                syncSelects();
+            });
             if ((tc.audio || []).length >= 2) {
                 selAudio = el('select', 'audio-track-select'); selAudio.id = 'audio-track-picker';
                 tc.audio.forEach(function (a, i) { var op = el('option', null, a.label || ('Track ' + (i + 1))); op.value = String(i); selAudio.appendChild(op); });
@@ -542,6 +839,7 @@
                 selAudio.addEventListener('change', function () {
                     var n = parseInt(selAudio.value, 10) || 0;
                     if (n === tcAudio && isTc()) return;
+                    if (!isTc() && dsOn) { tcAudio = n; if (n !== dsAudio) dsAttach(n, video.currentTime || 0, !video.paused); return; }   // ★ fix141 빠른 시작은 그 음성으로 다시 붙임(서버가 음성을 골라 줌 — FileStation _shareDirectSwitch)
                     tcAudio = n;
                     // 일반 재생은 첫 음성만 나오므로 다른 음성을 고르면 변환 재생으로(FileStation 과 같음)
                     if (isTc() || n !== 0 || !o.native) startTc(absNow(), !video.paused);
@@ -550,7 +848,8 @@
         }
         function syncSelects() {
             if (selMode) selMode.value = isTc() ? 'tc' : 'native';
-            if (selAudio) selAudio.value = String(isTc() ? tcAudio : 0);
+            if (selAudio) selAudio.value = String(isTc() ? tcAudio : (dsOn ? dsAudio : 0));
+            if (selQ) selQ.value = String(isTc() ? tcQ : 0);   // ★ fix141 일반 재생으로 돌아오면 '원본'
         }
 
         // ── 배지
@@ -558,7 +857,7 @@
         function updateBadge() {
             if (!badge) return;
             badge.classList.remove('err', 'native', 'tc');
-            if (isTc()) { badge.classList.add('tc'); badge.textContent = '⚡ ' + ((o.badge && o.badge.src) ? o.badge.src + ' → ' : '') + (T.badge_tc || 'Transcoding'); }
+            if (isTc()) { badge.classList.add('tc'); badge.textContent = '⚡ ' + ((o.badge && o.badge.src) ? o.badge.src + ' → ' : '') + (T.badge_tc || 'Transcoding') + hlsEncText(); }   // ★ fix141 ' · HW : NVIDIA' 등
             else { badge.classList.add('native'); badge.textContent = (T.badge_native || 'Direct play') + ((o.badge && o.badge.src) ? ' · ' + o.badge.src : ''); }
             syncSelects();
         }
@@ -718,6 +1017,8 @@
                         } catch (er) {}
                     },
                     toggleFs: fsToggle,
+                    menuSheet: true,    // ★ (2026-11-13 10:16 fix141) FileStation 공유 페이지와 같게 — 설정 창이 플레이어 안에 다 안 들어가면 아래에서 올라오는 시트(어두운 뒤판·바깥 누르면 닫힘)
+                    phoneSheet: true,   // ★ (2026-11-13 10:16 fix141) 휴대폰은 늘 시트(fix139 펜닐 요청 그대로)
                     menuRoomAbove: function () { return 0; },   // 플레이어 틀이 넘침을 잘라내므로(.video-container overflow:hidden) 틀 안에서만
                     hasList: function () { return list.length > 1; },
                     canPrev: function () { return playableFrom(curIdx() - 1, -1) >= 0; },
@@ -752,7 +1053,7 @@
                     selects: function () {
                         var r = [];
                         if (selMode) r.push(selMode);
-                        if (isTc() && selQ && selQ.options.length > 1) r.push(selQ);
+                        if (selQ && selQ.options.length > 1) r.push(selQ);   // ★ fix141 일반 재생 중에도 화질(고르면 그 화질로 변환 재생 — FileStation 과 같음)
                         if (selAudio && !(IOS && !isTc() && video.audioTracks && video.audioTracks.length >= 2)) r.push(selAudio);
                         return r;
                     },
@@ -767,6 +1068,9 @@
                 };
                 if (o.info) ctx.showInfo = infoShow;   // 동영상 정보(ⓘ) — 정보가 있는 화면만
                 if (o.frameUrl) ctx.frameUrl = function (sec) { return o.frameUrl + '&t=' + Math.max(0, Math.floor(sec || 0)); };
+                // ★ (2026-11-13 10:20 fix141) FileStation 과 같게 — 장면 묶음(ffmpeg 1번에 여러 장)·mp4 키프레임 시각(키프레임마다 한 장)
+                if (o.framesUrl) ctx.framesUrl = function (secs) { return o.framesUrl + '&ts=' + (Array.isArray(secs) ? secs : []).map(function (x) { return Math.max(0, Math.floor(x || 0)); }).join(','); };
+                if (o.keysUrl) ctx.keyTimesUrl = function () { return o.keysUrl; };
                 if (window.FSVideoSkin.attach({ video: video, wrap: wrap, ctx: ctx })) {
                     skinOn = true;
                     wrap.classList.add('mcv-skin');
@@ -787,6 +1091,7 @@
 
         // ── 처음 재생 준비: 이어보기 · 변환 재생 · 자동 재생
         if (Array.isArray(o.subs) && o.subs.length) api.setSubs(o.subs);
+        if (dir && mode === 'native') dsAttach(0, 0, false);   // ★ (2026-11-13 10:22 fix141) 빠른 시작 — FileStation 처럼 열자마자 붙임(조각 목록·첫 조각만 받음)
         var res = readResume();
         if (skinOn) {
             if (mode === 'tc' && tc) {
@@ -794,7 +1099,7 @@
                 tcOff = res ? res.t : 0; video._qualitySeekOffset = tcOff;
                 try { video.removeAttribute('src'); while (video.firstChild && video.firstChild.tagName === 'SOURCE') video.removeChild(video.firstChild); } catch (e) {}
                 video.preload = 'none';
-                video.src = tcUrl(tcOff);
+                if (hlsOk()) hlsLazyAt = tcOff; else video.src = tcUrl(tcOff);   // ★ fix140 HLS 는 재생을 누를 때 세션 시작
                 updateBadge();
                 if (res) vpToast((T.resume_from || 'Resumed from') + ' ' + fmtT(res.t), T.resume_no || 'From start', function () { lsDel(key); startTc(0, true); }, 6000);
                 if (o.autoplay) { setBusy(true); playNow(true); }

@@ -1001,6 +1001,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'dupli
     exit;
 }
 
+// ★ (2026-11-13 10:31, 펜닐 요청 — fix141) 동영상 변환 재생 하드웨어 가속 테스트(FileStation 설정 화면의 [테스트]) — 저장된 설정으로 다시 감지
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'hw_accel_test') {
+    header('Content-Type: application/json; charset=utf-8');
+    if (!verify_csrf_token($_POST['csrf_token'] ?? '')) { echo json_encode(['success' => false, 'error' => __('api_csrf_invalid')]); exit; }
+    require_once __DIR__ . '/video_lib.php';
+    require_once __DIR__ . '/video_fs.php';
+    @set_time_limit(120);
+    echo json_encode((new MCVfs())->hwRedetect(), JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
+    exit;
+}
+
 // 검색 취소/정리
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'duplicate_cancel') {
     header('Content-Type: application/json');
@@ -1185,6 +1196,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     };
     $settings['ffmpeg_path'] = $sanitize_path($_POST['ffmpeg_path'] ?? '');
     $settings['ffprobe_path'] = $sanitize_path($_POST['ffprobe_path'] ?? '');
+    // ★ (2026-11-13 10:31 fix141) 변환 재생 하드웨어 가속(FileStation 과 같은 값 — 비움 = 자동)·VA-API 렌더 노드(리눅스)
+    $settings['hw_accel_mode'] = in_array(($_POST['hw_accel_mode'] ?? ''), ['', 'h264_nvenc', 'h264_qsv', 'h264_amf', 'h264_vaapi'], true) ? $_POST['hw_accel_mode'] : '';
+    $settings['vaapi_device'] = $sanitize_path(is_string($_POST['vaapi_device'] ?? null) ? $_POST['vaapi_device'] : '');
     $settings['vips_path'] = $sanitize_path($_POST['vips_path'] ?? '');
     $settings['unrar_path'] = $sanitize_path($_POST['unrar_path'] ?? '');
     $settings['sevenzip_path'] = $sanitize_path($_POST['sevenzip_path'] ?? '');
@@ -3891,6 +3905,39 @@ $ffprobe_ok_check = !empty($ffprobe_path) && file_exists($ffprobe_path);
         <?php echo __("adm_ffprobe_not_set"); ?>
     <?php endif; ?>
 </small>
+</td></tr>
+<?php // ★ (2026-11-13 10:31, 펜닐 요청 — fix141) 변환 재생 하드웨어 가속 — FileStation 설정 화면과 같은 항목(자동·NVENC·QSV·AMF·VA-API · 렌더 노드 · 테스트)
+$_hw_mode = (string)(($_loaded_settings ?? [])['hw_accel_mode'] ?? '');
+$_hw_dev = (string)(($_loaded_settings ?? [])['vaapi_device'] ?? '');
+$_hw_cur = '';
+if (is_file(__DIR__ . '/video_fs.php')) { require_once __DIR__ . '/video_lib.php'; require_once __DIR__ . '/video_fs.php'; $_hw_cur = MCVfs::hwCachedEncoder(); }
+?>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_hw_accel"); ?></td><td class="">
+<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+<select name="hw_accel_mode" class="form-control" style="width:auto;min-width:210px;">
+<?php foreach (['' => __('adm_hw_auto'), 'h264_nvenc' => 'NVENC (NVIDIA)', 'h264_qsv' => __('adm_hw_qsv'), 'h264_amf' => 'AMF (AMD)', 'h264_vaapi' => __('adm_hw_vaapi')] as $_hk => $_hl): ?>
+<option value="<?php echo h($_hk); ?>"<?php echo $_hw_mode === $_hk ? ' selected' : ''; ?>><?php echo h($_hl); ?></option>
+<?php endforeach; ?>
+</select>
+<input type="text" name="vaapi_device" class="form-control" style="flex:1;min-width:210px;" value="<?php echo h($_hw_dev); ?>" placeholder="<?php echo __h('adm_hw_vaapi_ph'); ?>">
+<button type="button" class="btn btn-sm btn-outline-secondary" id="hwAccelTestBtn"><?php echo __h('adm_hw_test'); ?></button>
+</div>
+<small class="text-muted d-block"><?php echo __h('adm_hw_now'); ?>: <b id="hwAccelCur"><?php echo h($_hw_cur !== '' ? $_hw_cur : __('adm_hw_not_yet')); ?></b> · <?php echo __('adm_hw_help'); ?></small>
+<pre id="hwAccelLog" class="small mt-1 mb-0 p-2 bg-light" style="display:none;max-height:240px;overflow:auto;white-space:pre-wrap;"></pre>
+<script>
+(function () {
+    var b = document.getElementById('hwAccelTestBtn'); if (!b) return;
+    b.addEventListener('click', function () {
+        var lg = document.getElementById('hwAccelLog'), cur = document.getElementById('hwAccelCur');
+        b.disabled = true; lg.style.display = ''; lg.textContent = <?php echo json_encode(__('adm_hw_testing'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+        var f = new FormData(); f.append('action', 'hw_accel_test'); f.append('csrf_token', <?php echo json_encode(generate_csrf_token()); ?>);
+        fetch('admin.php', { method: 'POST', body: f, credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
+            if (!j || !j.success) { lg.textContent = '❌ ' + ((j && j.error) || 'error'); return; }
+            cur.textContent = j.encoder || '?'; lg.textContent = j.log || '';
+        }).catch(function (e) { lg.textContent = '❌ ' + e; }).then(function () { b.disabled = false; });
+    });
+})();
+</script>
 </td></tr>
 
 <tr class="border-top"><td colspan="2" class="bg-light"><strong><?php echo __("adm_section_vips"); ?></strong> <small class="text-muted"><?php echo __("adm_help_vips"); ?></small></td></tr>

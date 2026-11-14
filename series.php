@@ -109,15 +109,38 @@ if ($prog_only) {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: no-store');
     $_pv = [];
-    foreach ($vols as $i => $v) $_pv[] = [(int)$i, (int)$v['_pct'], $v['_fin'] ? 1 : 0, mc_lib_view_url((int)$v['bidx'], $v['path'], (!$v['_fin'] && $v['_page'] > 0) ? $v['_page'] : null)];
+    foreach ($vols as $i => $v) $_pv[] = [(int)$i, (int)$v['_pct'], $v['_fin'] ? 1 : 0, mc_lib_view_url((int)$v['bidx'], $v['path'])]; // ★ (2026-11-13 00:03 fix133) 쪽을 붙이지 않음 — 이어 볼지는 뷰어 설정대로
     echo json_encode(['ok' => $series ? 1 : 0, 'vols' => $_pv,
         'meta' => __('lib_vol_count', count($vols)) . ' · ' . __('lib_read_count', $read_count, count($vols)),
-        'resume' => $resume ? [mc_lib_view_url((int)$resume[0]['bidx'], $resume[0]['path'], $resume[1]), '▶ ' . __('lib_resume') . ' · ' . mc_lib_vol_title($resume[0], $implicit_one)] : null],
+        'resume' => null], // ★ (2026-11-13 00:03 fix133) 이어보기 단추 없앰
         JSON_UNESCAPED_UNICODE | JSON_INVALID_UTF8_SUBSTITUTE);
     exit;
 }
 $first = $vols[0] ?? null;
+$sr_pickable = $series && count($all_vols) > 1; // ★ (2026-11-12 23:14 fix132) 권(사본 포함)이 둘 이상이면 권을 눌렀을 때 위 표지·단추가 그 권으로(한 번 더 누르면 열림)
 $cover = $first ? mc_lib_thumb_url((int)$first['bidx'], $first['path']) : '';
+// ★ (2026-11-12 21:22, 펜닐 요청 — 시안 10 · fix131) '같은 작가의 다른 작품'(작가 → 없으면 그룹, 볼 수 있는 작품만 12개)
+//   ★ (2026-11-12 23:12 fix132) 정보 표의 '파일' 줄(쪽수·용량)은 뺌 — 펜닐 요청
+$same = [];
+if ($db && $series) {
+    $__src = $terms['author'] ?: $terms['group'];
+    $__tids = array_values(array_unique(array_map(function ($t) { return (int)$t['id']; }, $__src)));
+    if ($__tids) {
+        $__q = $db->prepare('SELECT DISTINCT st.series_id FROM series_terms st WHERE st.term_id IN (' . implode(',', array_fill(0, count($__tids), '?')) . ') AND st.series_id <> ? LIMIT 40');
+        $__q->execute(array_merge($__tids, [(int)$sid]));
+        $__fv = $db->prepare('SELECT bidx, path FROM volumes WHERE series_id=? AND missing=0 ORDER BY (vol_no IS NULL), vol_no, filename LIMIT 5');
+        $__nm = $db->prepare('SELECT name FROM series WHERE id=?');
+        foreach ($__q->fetchAll(PDO::FETCH_COLUMN) as $__s) {
+            $__fv->execute([(int)$__s]);
+            $__hit = null;
+            foreach ($__fv->fetchAll() as $__v) { if (mc_lib_can_access((int)$__v['bidx'], $__v['path'])) { $__hit = $__v; break; } }
+            if (!$__hit) continue;
+            $__nm->execute([(int)$__s]);
+            $same[] = ['id' => (int)$__s, 'name' => (string)$__nm->fetchColumn(), 'bidx' => (int)$__hit['bidx'], 'path' => $__hit['path']];
+            if (count($same) >= 12) break;
+        }
+    }
+}
 $status_label = ['completed' => __('lib_status_completed'), 'ongoing' => __('lib_status_ongoing'), 'hiatus' => __('lib_status_hiatus')];
 $csrf_token = generate_csrf_token();
 if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((microtime(true) - $_lib_t0) * 1000, 1)); // ★ (2026-10-29) 처리 시간(개발자 도구 → 네트워크 → 타이밍)
@@ -206,15 +229,49 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   @media (max-width:576px) { .vol-bar { flex-wrap:wrap; } .vol-duptoggle { order:9; flex-basis:100%; } }
   .dark-mode .vol-duptoggle, [data-theme="dark"] .vol-duptoggle { color:#bbb; }
   .lib-empty { text-align:center; color:#888; padding:60px 10px; }
-  @media (max-width:576px) {
-    .sr-head { gap:12px; padding:12px; }
-    .sr-cover { flex-basis:110px; width:110px; }
-    .sr-info h1 { font-size:1.2rem; }
+  /* ★ (2026-11-12 21:22, 펜닐 요청 — 시안 10 · fix131) 정보 표(라벨:값) · 파일 줄 · 같은 작가의 다른 작품 / PC 는 큰 표지 + 표 2단, 휴대폰 세로는 위아래로 쌓음 */
+  .sr-tbl { display:grid; grid-template-columns:auto minmax(0, 1fr); gap:6px 12px; margin:8px 0 6px; font-size:.9rem; }
+  .sr-tbl dt { color:#777; font-weight:400; white-space:nowrap; padding-top:3px; }
+  .sr-tbl dd { margin:0; display:flex; flex-wrap:wrap; gap:5px; align-items:center; min-width:0; }
+  .sr-same { margin-top:26px; }
+  .sr-same h2 { font-size:1.1rem; margin:0 0 10px; }
+  .sr-same-row { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:14px 12px; }
+  .sr-same-it { color:inherit; text-decoration:none !important; display:block; min-width:0; }
+  .sr-same-it .vol-cover { width:100%; aspect-ratio:3/4; border-radius:3px; overflow:hidden; background:#ddd; box-shadow:0 4px 8px -3px rgba(0,0,0,.4); }
+  /* ★ (2026-11-13 15:17 fix145) 표지는 처음부터 잘리지 않게(contain) + 옅은 회색 바탕 — 전엔 그림이 받아진 뒤 js/mc-thumb-fit.js 가 바꿔서 잘린 표지가 먼저 보였다가 바뀌었음. 색은 mc-thumb-fit.js 와 같음 */
+  .sr-cover > img, .vol-cover > img { object-fit:contain; }
+  .sr-cover, .vols-grid .vol-cover, .vols-list .vol-cover, .sr-same-it .vol-cover { background:#eceef1; }
+  html.dark-mode .sr-cover, html.dark-mode .vols-grid .vol-cover, html.dark-mode .vols-list .vol-cover, html.dark-mode .sr-same-it .vol-cover,
+  [data-theme="dark"] .sr-cover, [data-theme="dark"] .vols-grid .vol-cover, [data-theme="dark"] .vols-list .vol-cover, [data-theme="dark"] .sr-same-it .vol-cover { background:#2b2e33; }
+  .sr-same-it .sr-same-nm { font-size:.82rem; margin-top:5px; line-height:1.3; word-break:keep-all; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  @media (min-width:992px) {
+    .sr-head { gap:28px; padding:24px; }
+    .sr-cover { flex-basis:240px; width:240px; }
+    .sr-info h1 { font-size:1.75rem; }
+    .sr-tbl { grid-template-columns:auto minmax(0, 1fr) auto minmax(0, 1fr); gap:10px 14px; }
   }
+  @media (max-width:576px) {
+    .sr-head { gap:12px; padding:12px; flex-direction:column; align-items:center; }
+    .sr-cover { flex-basis:auto; width:150px; }
+    .sr-info { width:100%; }
+    .sr-info h1 { font-size:1.2rem; text-align:center; }
+    .sr-meta { text-align:center; }
+    .sr-same-row { display:flex; overflow-x:auto; gap:10px; padding-bottom:6px; -webkit-overflow-scrolling:touch; }
+    .sr-same-it { flex:0 0 96px; }
+  }
+  /* ★ (2026-11-12 23:13 fix132) 고른 권 — 위 표지·단추가 그 권으로, 목록에서는 테두리 */
+  .sr-pick { font-size:.85rem; color:#555; margin:-2px 0 6px; overflow-wrap:anywhere; }
+  .sr-pick-l { color:#888; } .sr-pick-hint { color:#999; font-size:.8rem; }
+  .vol.is-pick .vol-cover { outline:3px solid #198754; outline-offset:2px; }
+  .vols-list .vol.is-pick { background:rgba(25,135,84,.08); }
+  @media (max-width:576px) { .sr-pick { text-align:center; } }
+  .dark-mode .sr-pick, [data-theme="dark"] .sr-pick { color:#ccc; }
+  .dark-mode .vols-list .vol.is-pick, [data-theme="dark"] .vols-list .vol.is-pick { background:rgba(25,135,84,.18); }
   /* 다크모드 */
   .dark-mode body, [data-theme="dark"] body, body.dark-mode { background:#121212 !important; }
   .dark-mode .sr-head, [data-theme="dark"] .sr-head { background:#1e1e1e; box-shadow:none; }
   .dark-mode .sr-desc, [data-theme="dark"] .sr-desc { color:#ccc; }
+  .dark-mode .sr-tbl dt, [data-theme="dark"] .sr-tbl dt { color:#aaa; }
   .dark-mode .chip-author, [data-theme="dark"] .chip-author { background:#1a2a45; border-color:#34507f; color:#9ec1ff !important; }
   .dark-mode .chip-group, [data-theme="dark"] .chip-group { background:#17331f; border-color:#2f6b40; color:#9be3b0 !important; }
   .dark-mode .chip-genre, [data-theme="dark"] .chip-genre { background:#3c1f1c; border-color:#6e3a33; color:#ffb4a8 !important; }
@@ -234,7 +291,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
 <body>
 <div class="lib-wrap">
   <div class="lib-top">
-    <a id="libBack" class="btn btn-sm btn-outline-secondary" href="index.php<?php echo $bidx_query; ?>">← <?php echo __h('fav_shelf_back'); ?></a>
+    <a id="libBack" class="btn btn-sm btn-outline-secondary" href="browse.php<?php echo $bidx_query; /* ★ (2026-11-12 23:11 fix132) 기본 = 서재(들어온 목록을 알면 mc_up_back_js 가 그 목록으로 바꿈) */ ?>">← <?php echo __h('fav_shelf_back'); ?></a>
     <a class="btn btn-sm btn-outline-secondary" href="browse.php<?php echo $bidx_query; ?>"><svg class="mc-ico" width="15" height="15" style="vertical-align:-2px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg> <?php echo __h('lib_browse'); ?></a><?php // ★ (2026-11-04 00:29) 서재 아이콘(다른 화면과 같게, 예전 🔎) / ★ (2026-11-04 09:40) 📚 이모지는 다른 그림(세로줄 넷)으로 바뀌어 browse 서재 제목과 같은 '꽂힌 책' 선 그림으로 ?>
     <span class="spacer"></span>
   </div>
@@ -249,31 +306,29 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
   </div>
 <?php else: ?>
   <div class="sr-head">
-    <div class="sr-cover"><img src="<?php echo h($cover); ?>" alt="" onerror="this.style.visibility='hidden'"></div>
+    <div class="sr-cover"><img id="srCover" src="<?php echo h($cover); ?>" alt="" onerror="this.style.visibility='hidden'"></div>
     <div class="sr-info">
       <h1 id="srName"><?php echo h($series['name']); ?><?php if ($series['status'] !== '' && isset($status_label[$series['status']])): ?><span class="sr-status <?php echo h($series['status']); ?>"><?php echo h($status_label[$series['status']]); ?></span><?php endif; ?></h1>
       <div class="sr-meta"><?php echo __h('lib_vol_count', count($vols)); ?> · <?php echo __h('lib_read_count', $read_count, count($vols)); ?></div>
+      <?php if ($sr_pickable): ?><div class="sr-pick" id="srPick" hidden><span class="sr-pick-l"><?php echo __h('lib_pick_sel'); ?></span> <b class="sr-pick-nm"></b> <span class="sr-pick-hint">· <?php echo __h('lib_pick_hint'); ?></span></div><?php endif; ?>
       <?php
         // ★ (2026-11-02 21:48) 서재에서 다른 폴더 하나를 골라 둔 채면 '전체'로 — 그 폴더 범위로 찾아 0건·칩 없음이 됐음.
         //   전체·이 폴더를 보던 중이면 범위를 건드리지 않음(scope 는 세션에 기억되므로 늘 붙이면 보던 범위가 바뀜)
         $__ss = $_SESSION['mc_lib_scope'] ?? 'all';
         $__chip_scope = (is_string($__ss) && $__ss !== 'all' && $__ss !== (string)(int)$bidx) ? '&amp;scope=all' : '';
       ?>
+      <dl class="sr-tbl"><?php // ★ (2026-11-12 21:22 시안 10 · fix131) 라벨:값 표 — 값은 종전 칩 그대로(누르면 서재에서 같은 작가·태그 찾기), 빈 칸은 줄을 만들지 않음 / ★ (2026-11-12 23:12 fix132) 파일 줄 뺌 ?>
       <?php foreach (['author' => 'lib_author', 'group' => 'lib_group', 'genre' => 'lib_genre', 'tag' => 'lib_tag'] as $kind => $lk): if (empty($terms[$kind])) continue; ?>
-      <div class="chips"><span class="chip-label"><?php echo __h($lk); ?></span>
-        <?php foreach ($terms[$kind] as $t): ?>
-          <a class="chip chip-<?php echo $kind; ?>" href="browse.php?<?php echo $kind; ?>=<?php echo (int)$t['id']; ?>&amp;bidx=<?php echo (int)$bidx; ?><?php echo $__chip_scope; ?>"><?php echo h($t['name']); ?></a>
-        <?php endforeach; ?>
-      </div>
+        <dt><?php echo __h($lk); ?></dt>
+        <dd><?php foreach ($terms[$kind] as $t): ?><a class="chip chip-<?php echo $kind; ?>" href="browse.php?<?php echo $kind; ?>=<?php echo (int)$t['id']; ?>&amp;bidx=<?php echo (int)$bidx; ?><?php echo $__chip_scope; ?>"><?php echo h($t['name']); ?></a><?php endforeach; ?></dd>
       <?php endforeach; ?>
+      </dl>
       <?php if (trim($series['description']) !== ''): ?><div class="sr-desc"><?php echo h($series['description']); ?></div><?php endif; ?>
       <div class="sr-actions">
-        <?php if ($resume): ?>
-          <a id="srResume" class="btn btn-warning btn-sm" href="<?php echo h(mc_lib_view_url((int)$resume[0]['bidx'], $resume[0]['path'], $resume[1])); ?>">▶ <?php echo __h('lib_resume'); ?> · <?php echo h(mc_lib_vol_title($resume[0], $implicit_one)); ?></a>
-        <?php endif; ?>
+        <?php if ($sr_pickable): ?><a id="srPickOpen" class="btn btn-success btn-sm" href="#" hidden></a><?php endif; ?>
+        <?php /* ★ (2026-11-13 00:03, 펜닐 요청 — fix133) '이어보기'·'처음부터' 단추 뺌 — 뷰어 설정 '이어보기'를 꺼도 여기서 열면 이어 봤음(서재 기록의 쪽을 주소에 붙였음). 이제 어느 쪽부터 열지는 뷰어 설정대로 */ ?>
         <?php if ($first): ?>
-          <a class="btn btn-primary btn-sm" href="<?php echo h(mc_lib_view_url((int)$first['bidx'], $first['path'], null, true)); /* ★ (2026-11-03 07:51) 처음부터는 정말 처음부터(이어 보기 기록이 있으면 뷰어가 그 자리로 열었음) */ ?>">⏮ <?php echo __h('lib_from_start'); ?></a>
-          <a class="btn btn-outline-secondary btn-sm" href="index.php?dir=<?php echo encode_url($first['folder']); ?>&amp;bidx=<?php echo (int)$first['bidx']; ?>">📁 <?php echo __h('lib_open_folder'); ?></a>
+          <a id="srFolder" class="btn btn-outline-secondary btn-sm" href="index.php?dir=<?php echo encode_url($first['folder']); ?>&amp;bidx=<?php echo (int)$first['bidx']; ?>">📁 <?php echo __h('lib_open_folder'); ?></a>
         <?php endif; ?>
         <?php if ($is_admin): ?>
           <button type="button" class="btn btn-outline-dark btn-sm" id="srEditBtn">✏️ <?php echo __h('lib_edit'); ?></button>
@@ -308,10 +363,10 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
   };
   foreach ($vols as $i => $v):
       $name = $vol_name($v);
-      $url = mc_lib_view_url((int)$v['bidx'], $v['path'], (!$v['_fin'] && $v['_page'] > 0) ? $v['_page'] : null);
+      $url = mc_lib_view_url((int)$v['bidx'], $v['path']); // ★ (2026-11-13 00:03 fix133) 서재 기록의 쪽(#imageN)을 붙이지 않음 — 뷰어 설정 '이어보기'를 꺼도 이어 봤던 것. 켜져 있으면 뷰어가 자기 기록으로 이어 봄
       $ncopy = count($v['_copies']);
   ?>
-    <a class="vol" data-i="<?php echo (int)$i; ?>" data-j="0" href="<?php echo h($url); ?>" title="<?php echo h($v['filename']); ?>">
+    <a class="vol" data-i="<?php echo (int)$i; ?>" data-j="0" href="<?php echo h($url); ?>" title="<?php echo h($v['filename']); ?>" data-dir="index.php?dir=<?php echo encode_url($v['folder']); ?>&amp;bidx=<?php echo (int)$v['bidx']; ?>">
       <div class="vol-cover">
         <img src="<?php echo h(mc_lib_thumb_url((int)$v['bidx'], $v['path'])); ?>" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
         <?php if ($v['_fin']): ?><span class="vol-fin" title="<?php echo __h('lib_finished'); ?>">✓</span><?php endif; ?>
@@ -325,7 +380,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
       </div>
     </a>
     <?php foreach (array_slice($v['_copies'], 1) as $j => $c): // 같은 책의 다른 사본 — '사본도 보기'를 켰을 때만 보임 ?>
-    <a class="vol vol-copy" data-i="<?php echo (int)$i; ?>" data-j="<?php echo (int)$j + 1; ?>" href="<?php echo h(mc_lib_view_url((int)$c['bidx'], $c['path'])); ?>" title="<?php echo h($c['filename']); ?>">
+    <a class="vol vol-copy" data-i="<?php echo (int)$i; ?>" data-j="<?php echo (int)$j + 1; ?>" href="<?php echo h(mc_lib_view_url((int)$c['bidx'], $c['path'])); ?>" title="<?php echo h($c['filename']); ?>" data-dir="index.php?dir=<?php echo encode_url($c['folder']); ?>&amp;bidx=<?php echo (int)$c['bidx']; ?>">
       <div class="vol-cover">
         <img src="<?php echo h(mc_lib_thumb_url((int)$c['bidx'], $c['path'])); ?>" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
         <span class="vol-copytag"><?php echo __h('lib_dup_copy'); ?></span>
@@ -338,6 +393,19 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
     <?php endforeach; ?>
   <?php endforeach; ?>
   </div>
+  <?php if ($same): ?>
+  <div class="sr-same"><?php // ★ (2026-11-12 21:22 시안 10 · fix131) 같은 작가(없으면 같은 그룹)의 다른 작품 — 볼 수 있는 것만 12개 ?>
+    <h2><?php echo __h('lib_same_author'); ?></h2>
+    <div class="sr-same-row">
+    <?php foreach ($same as $s): ?>
+      <a class="sr-same-it" href="series.php?sid=<?php echo (int)$s['id']; ?>&amp;bidx=<?php echo (int)$s['bidx']; ?>" title="<?php echo h($s['name']); ?>">
+        <div class="vol-cover"><img src="<?php echo h(mc_lib_thumb_url((int)$s['bidx'], $s['path'])); ?>" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'"></div>
+        <div class="sr-same-nm"><?php echo h($s['name']); ?></div>
+      </a>
+    <?php endforeach; ?>
+    </div>
+  </div>
+  <?php endif; ?>
 <?php endif; ?>
 </div>
 
@@ -381,11 +449,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
     window.addEventListener('scroll', function () { top.style.display = (document.documentElement.scrollTop > 200 || document.body.scrollTop > 200) ? 'block' : 'none'; }, { passive: true });
     top.onclick = function () { window.scrollTo({ top: 0, behavior: 'smooth' }); };
   }
-  var back = document.getElementById('libBack');
-  if (back) back.addEventListener('click', function (ev) {
-    try { var ref = document.referrer ? new URL(document.referrer) : null;
-      if (ref && ref.origin === location.origin && history.length > 1) { ev.preventDefault(); history.back(); } } catch (e) {}
-  });
+  // ★ (2026-11-12 23:11 fix132) '← 돌아가기'는 아래 mc_up_back_js — 예전 '바로 앞 화면으로 뒤로'는 같은 작가 작품으로 옮긴 뒤 앞 작품으로 갔음
 })();
 </script>
 <?php render_darkmode_script(); ?>
@@ -431,13 +495,59 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
         if (!rs) { var acts = document.querySelector('.sr-actions'); if (acts) { rs = document.createElement('a'); rs.id = 'srResume'; rs.className = 'btn btn-warning btn-sm'; acts.insertBefore(rs, acts.firstChild); } }
         if (rs) { rs.setAttribute('href', j.resume[0]); rs.textContent = String(j.resume[1]); }
       } else if (rs) rs.remove();
+      if (window.mcSrPickSync) window.mcSrPickSync(); // ★ (2026-11-12 23:13 fix132) 고른 권 단추도 새 주소·이어보기 여부로
     }).catch(function () {});
   }
 })();
 </script>
+<?php if ($sr_pickable): ?>
+<script>
+// ★ (2026-11-12 23:13, 펜닐 요청 — fix132) 권을 누르면 바로 뷰어 대신 위 상세가 그 권으로(표지·'N권 보기' 단추·폴더 열기) — 같은 권을 한 번 더 누르면 열림
+//   권이 하나뿐인 작품은 예전처럼 바로 열림. Ctrl·가운데 클릭(새 탭)은 그대로 열림. 고른 권은 이 탭에 기억(뷰어에서 돌아와도 그대로)
+(function () {
+  var box = document.getElementById('vols'), pick = document.getElementById('srPick'), btn = document.getElementById('srPickOpen');
+  if (!box || !pick || !btn) return;
+  var T = <?php echo json_encode(['open' => __('lib_pick_open')], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+  var KEY = 'mc_sr_pick|<?php echo (int)$sid; ?>';
+  var cov = document.getElementById('srCover'), fold = document.getElementById('srFolder'), cur = null;
+  function name(a) { var n = a.querySelector('.vol-name'); if (!n) return ''; n = n.cloneNode(true); var p = n.querySelector('.vol-pct'); if (p) p.remove(); return n.textContent.trim(); }
+  function sync() {
+    if (!cur) return;
+    var nm = name(cur);
+    btn.setAttribute('href', cur.getAttribute('href'));
+    btn.textContent = '▶ ' + String(T.open).replace('%s', nm); // ★ (2026-11-13 00:03 fix133) 이어 볼지는 뷰어 설정대로라 늘 'N권 보기'
+    pick.querySelector('.sr-pick-nm').textContent = nm;
+    btn.hidden = false;
+  }
+  function sel(a, scroll) {
+    if (cur) cur.classList.remove('is-pick');
+    cur = a; a.classList.add('is-pick');
+    var im = a.querySelector('.vol-cover > img');
+    if (cov && im) { cov.style.visibility = ''; cov.setAttribute('src', im.getAttribute('src')); }
+    if (fold && a.getAttribute('data-dir')) fold.setAttribute('href', a.getAttribute('data-dir'));
+    pick.hidden = false; sync();
+    try { sessionStorage.setItem(KEY, a.getAttribute('data-i') + ':' + a.getAttribute('data-j')); } catch (e) {}
+    if (scroll) { var h = document.querySelector('.sr-head'); if (h && h.getBoundingClientRect().bottom < 80) h.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
+  }
+  box.addEventListener('click', function (ev) {
+    var a = ev.target && ev.target.closest ? ev.target.closest('a.vol') : null;
+    if (!a || !box.contains(a)) return;
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
+    if (a === cur) return; // 고른 권을 한 번 더 → 링크대로 열림
+    ev.preventDefault(); sel(a, true);
+  });
+  window.mcSrPickSync = sync;
+  try { var k = (sessionStorage.getItem(KEY) || '').split(':'); if (k.length === 2) { var a = box.querySelector('.vol[data-i="' + (parseInt(k[0], 10) || 0) + '"][data-j="' + (parseInt(k[1], 10) || 0) + '"]'); if (a) sel(a, false); } } catch (e) {}
+})();
+</script>
+<?php endif; ?>
 <?php if (function_exists('mc_lib_scroll_script')) echo mc_lib_scroll_script(); /* ★ (2026-11-02 16:21) 돌아왔을 때 보던 위치 */ ?>
 <?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 <?php if (function_exists('mc_perf_script')) echo mc_perf_script('series'); // ★ (2026-11-03 14:10) 속도 기록(src/perf) ?>
+<?php if (function_exists('mc_up_back_js')) echo mc_up_back_js('libBack', 'L'); /* ★ (2026-11-12 23:11 fix132) ← = 처음 들어온 목록(서재·즐겨찾기·북마크·폴더) */ ?>
 <?php if (function_exists('mc_back_origin_list_js')) echo mc_back_origin_list_js(); /* ★ (2026-11-05) 뷰어 뒤로가기가 이 화면(주소·스크롤 위치)으로 돌아오게 — function.php */ ?>
+<?php /* ★ (2026-11-12 11:16, 펜닐 요청) 표지를 목록 화면과 같게 — 잘리지 않게 + 흐린 배경(js/mc-thumb-fit.js) */ ?>
+<script src="js/mc-thumb-fit.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-thumb-fit.js'); ?>"></script>
+<script src="js/mc-seen.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-seen.js'); /* ★ (2026-11-14 18:48 fix161) 서재·즐겨찾기·북마크처럼 권·다른 작품에도 hover·본 항목 회색·돌아온 항목 주황 테두리 */ ?>" data-hold="<?php echo function_exists('get_app_settings') ? (float)max(0, (float)get_app_settings('viewed_mark_seconds', 2)) : 2; ?>"></script>
 </body>
 </html>

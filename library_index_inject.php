@@ -98,7 +98,10 @@ $_lib_cfg = [
       b.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); location.href = seriesUrl(d); });
     }
     card.appendChild(b);
+    // ★ (2026-11-12 21:20, 펜닐 요청 — fix131) 목록 보기 정보 줄(js/mc-list-info.js)이 쓸 파일 경로 — 주소 속 {dt}·{pl}·{pc} 를 원래 글자로
+    try { card.setAttribute('data-mcli', d.bidx + '|' + d.plain.replace(/\{dt\}/g, '.').replace(/\{pl\}/g, '+').replace(/\{pc\}/g, '%')); } catch (e) {}
   });
+  try { if (window.mcListInfo) window.mcListInfo.scan(); } catch (e) {}
 
   // 2) 상단: 작품 탐색 아이콘(책장 아이콘 왼쪽)
   var shelf = document.querySelector('.mc-fav-shelf-link');
@@ -222,3 +225,4 @@ $_lib_cfg = [
   });
 })();
 </script>
+<?php if (function_exists('mc_list_info_script')) echo mc_list_info_script(); /* ★ (2026-11-12 21:20 fix131) 목록 보기에서 제목 아래 작가·태그·쪽수(js/mc-list-info.js) */ ?>

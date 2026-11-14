@@ -415,13 +415,16 @@ function lib_card($c, $compact = false) {
     $terms = $c['terms'] ?? [];
     $limit = ['author' => 20, 'group' => 10, 'genre' => $compact ? 0 : 6, 'tag' => $compact ? 0 : 10];
     $out = '';
+    $__tk_lbl = ['author' => __('lib_author'), 'group' => __('lib_group'), 'genre' => __('lib_genre'), 'tag' => __('lib_tag')];
     foreach (['author', 'group', 'genre', 'tag'] as $kind) { // ★ (2026-11-02 01:53) 그룹(서클)
         $list = $terms[$kind] ?? [];
         $shown = array_slice($list, 0, $limit[$kind]);
+        $__tk0 = $out; // ★ (2026-11-13 00:15, 펜닐 요청 — fix133) 종류마다 묶음(.sc-tk) + 종류 이름(.sc-tl) — 목록 보기에서만 '작가 [칩]' 줄로, 그리드는 예전과 똑같이 한 줄로 이어짐(CSS)
         foreach ($shown as $t) {
             $out .= '<a class="sc-t sc-t-' . $kind . '" href="browse.php?' . $kind . '=' . (int)$t['id'] . '&amp;bidx=' . $cb . ($multi_base ? '&amp;scope=' . h($scope) : '') . '">' . h($t['name']) . '</a>'; // ★ (2026-11-02 22:15) 지금 보는 범위 그대로(다른 탭·뒤로가기로 세션 범위가 바뀌어도)
         }
         if (count($list) > count($shown) && $limit[$kind] > 0) $out .= '<a class="sc-t sc-more" href="' . $href . '">+' . (count($list) - count($shown)) . '</a>';
+        if ($out !== $__tk0) $out = $__tk0 . '<span class="sc-tk"><span class="sc-tl">' . h($__tk_lbl[$kind]) . '</span>' . substr($out, strlen($__tk0)) . '</span>';
     }
     if ($out !== '') echo '<div class="sc-terms">' . $out . '</div>';
     echo '<div class="sc-sub2">' . __h('lib_vol_count', $c['count']) . ($c['fin'] > 0 ? ' · ' . __h('lib_read_count', $c['fin'], $c['count']) : '') . '</div>';
@@ -547,6 +550,10 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
   .sc a { text-decoration:none !important; }
   .sc-cover { position:relative; display:block; width:100%; aspect-ratio:3/4; border-radius:4px; overflow:hidden; background:#ddd; box-shadow:0 5px 10px -4px rgba(0,0,0,.45); }
   .sc-cover img { width:100%; height:100%; object-fit:cover; display:block; }
+  /* ★ (2026-11-13 15:17 fix145) 표지는 처음부터 잘리지 않게(contain) + 옅은 회색 바탕 — 전엔 그림이 받아진 뒤 js/mc-thumb-fit.js 가 바꿔서, 뒤로가기로 다시 열릴 때 잘린 표지가 먼저 보였다가 바뀌었음(두 번 뜨는 느낌). 색은 mc-thumb-fit.js 와 같음 */
+  .sc-cover > img { object-fit:contain; }
+  .sc-cover { background:#eceef1; }
+  html.dark-mode .sc-cover, [data-theme="dark"] .sc-cover { background:#2b2e33; }
   .sc-count { position:absolute; right:4px; top:4px; background:rgba(0,0,0,.62); color:#fff; font-size:.72rem; line-height:1.5; border-radius:3px; padding:0 5px; }
   .sc-fin { position:absolute; top:4px; left:4px; background:#28a745; color:#fff; border-radius:50%; width:22px; height:22px; font-size:13px; line-height:22px; text-align:center; }
   .sc-prog { position:absolute; left:0; right:0; bottom:0; height:4px; background:rgba(0,0,0,.25); }
@@ -570,6 +577,12 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
   .sc-t-genre  { background:#fdf0ee; border-color:#efc3bc; color:#b23121 !important; }
   .sc-t-tag    { background:#f1f2f4; border-color:#d3d6db; color:#444 !important; }
   .sc-more { background:transparent; border-color:transparent; color:#888 !important; }
+  /* ★ (2026-11-13 00:15 fix133) 종류 묶음 — 그리드·가로 줄(.sc-row)은 묶음이 없는 것처럼(예전 그대로), 목록 보기만 '작가 [칩] [칩]' 줄 */
+  .sc-tk { display:contents; } .sc-tl { display:none; }
+  .sc-list .sc-terms { display:block; margin-top:2px; }
+  .sc-list .sc-tk { display:flex; flex-wrap:wrap; align-items:center; gap:3px 4px; margin-top:3px; }
+  .sc-list .sc-tl { display:inline; font-size:.75rem; color:#6c757d; margin-right:2px; white-space:nowrap; }
+  .dark-mode .sc-list .sc-tl, [data-theme="dark"] .sc-list .sc-tl { color:#adb5bd; }
   .sc-t:hover { filter:brightness(.93); }
   .sc-grid .sc-sub2, .sc-row .sc-sub2 { display:none; }
   .sc-base { font-size:.7rem; color:#888; margin-top:2px; overflow-wrap:anywhere; } /* ★ (2026-10-30) 통합 보기의 폴더 이름 */
@@ -1036,16 +1049,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
   function idxRef() { try { var r = document.referrer ? new URL(document.referrer) : null; return (r && r.origin === location.origin && /\/index\.php$/.test(r.pathname)) ? r : null; } catch (e) { return null; } }
   var r0 = idxRef();
   if (r0) { try { sessionStorage.setItem(KEY, r0.pathname + r0.search); } catch (e) {} }
-  var back = document.getElementById('libBack');
-  if (!back) return;
-  back.addEventListener('click', function (ev) {
-    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return; // 새 탭은 그대로
-    try {
-      if (idxRef() && history.length > 1) { ev.preventDefault(); history.back(); return; }
-      var u = sessionStorage.getItem(KEY);
-      if (u && /^\/[^\s]*index\.php(\?|$)/.test(u)) { ev.preventDefault(); location.href = u; }
-    } catch (e) { /* 실패하면 링크 그대로 */ }
-  });
+  // ★ (2026-11-12 23:11 fix132) 누를 때 처리는 mc_up_back_js(아래) — 들어올 때의 폴더로(서재 안에서 거르기·쪽 이동, 즐겨찾기·북마크 탭·작품 화면을 오간 뒤에도)
 })();
 </script>
 <script>
@@ -1085,6 +1089,10 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
 <?php if (function_exists('mc_lib_scroll_script')) echo mc_lib_scroll_script(); /* ★ (2026-11-02 16:21) 돌아왔을 때 보던 위치 */ ?>
 <?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 <?php if (function_exists('mc_perf_script')) echo mc_perf_script('browse'); // ★ (2026-11-03 14:10) 속도 기록(src/perf) ?>
+<?php if (function_exists('mc_up_back_js')) echo mc_up_back_js('libBack', 'I'); /* ★ (2026-11-12 23:11 fix132) ← = 들어오기 전 폴더(즐겨찾기·북마크 탭을 오가도) */ ?>
 <?php if (function_exists('mc_back_origin_list_js')) echo mc_back_origin_list_js(); /* ★ (2026-11-05) 뷰어 뒤로가기가 이 화면(주소·스크롤 위치)으로 돌아오게 — function.php */ ?>
+<?php /* ★ (2026-11-12 11:16, 펜닐 요청) 표지를 목록 화면과 같게 — 잘리지 않게 + 흐린 배경(js/mc-thumb-fit.js) */ ?>
+<script src="js/mc-thumb-fit.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-thumb-fit.js'); ?>"></script>
+<script src="js/mc-seen.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-seen.js'); /* ★ (2026-11-14 16:45 fix158) 폴더 목록처럼 hover 청록·본 항목 회색 */ ?>" data-hold="<?php echo function_exists('get_app_settings') ? (float)max(0, (float)get_app_settings('viewed_mark_seconds', 2)) : 2; /* ★ (2026-11-14 17:32 fix159) 돌아온 항목 주황 테두리 유지 시간(관리자 '복귀 표시 유지 시간') */ ?>"></script>
 </body>
 </html>

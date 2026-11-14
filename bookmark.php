@@ -63,6 +63,29 @@ function sanitize_page_order($val) {
 $getfile = decode_file_param($_GET['file'] ?? $_POST['file'] ?? '');
 $mode = $_GET['mode'] ?? $_POST['mode'] ?? '';
 if (!is_string($mode)) $mode = ''; // ★ (2026-11-02 11:35) 배열이면 기본(북마크 저장)으로 빈 키가 저장되던 것
+// ★ (2026-11-12 16:36, 펜닐 요청 — fix127) 뷰어 표지 단추 요청 기록(src/perf/thumb_날짜.log — function.php mc_thumb_log) — 끝날 때(거절·실패로 끝나도) 결과 코드·걸린 시간·받은 그림 크기·브라우저가 먼저 떠났는지. 동작은 그대로
+if (in_array($mode, ['set_cover', 'set_cover_img', 'cover_auto'], true) && function_exists('mc_thumb_log')) {
+    $__cv_t0 = microtime(true);
+    register_shutdown_function(function () use ($mode, $getfile, $__cv_t0) {
+        $img = $_POST['image'] ?? '';
+        $saved = '';
+        try { // 저장된 그림 크기(성공일 때) — 파일 표지는 src/covers, 폴더 표지는 [cover].jpg
+            global $base_dir;
+            $bf = (http_response_code() === 200 && function_exists('validate_file_path')) ? validate_file_path($getfile, $base_dir) : false;
+            if ($bf !== false) {
+                $p = ($mode === 'set_cover_img' && ($_POST['target'] ?? '') === 'file' && function_exists('mc_file_cover_path')) ? mc_file_cover_path($bf) : rtrim(dirname($bf), '/\\') . '/[cover].jpg';
+                clearstatcache(true, $p);
+                $saved = is_file($p) ? mc_thumb_wh((string)@file_get_contents($p)) : '없음';
+            }
+        } catch (\Throwable $e) {}
+        mc_thumb_log('cover_req', [
+            'saved' => $saved,
+            'mode' => $mode, 'target' => ($mode === 'set_cover_img') ? ((($_POST['target'] ?? '') === 'file') ? 'file' : 'folder') : ($mode === 'cover_auto' ? 'auto' : 'folder(첫 쪽)'),
+            'file' => (string)$getfile, 'code' => (int)http_response_code(), 'ms' => (int)round((microtime(true) - $__cv_t0) * 1000),
+            'in_kb' => is_string($img) ? (int)round(strlen($img) / 1024) : 0, 'left' => connection_aborted() ? '브라우저가 먼저 떠남' : '',
+        ]);
+    });
+}
 // ★ (2026-11-02 11:35) 저장하는 요청은 빈 경로·'..' 경로·볼 수 없는 폴더를 받지 않음 — 저장해 두고 북마크·즐겨찾기 화면의 '파일 없음' 표시로 서버 파일·숨긴 폴더 파일이 있는지 알아낼 수 있었음
 if (!in_array($mode, ['delete_bookmark', 'delete_autosave', 'delete_epub_progress', 'delete_txt_progress', 'delete_favorite', 'check_favorite', 'list_favorites', 'set_cover', 'set_cover_img', 'cover_auto'], true)) {
     $__gf = str_replace('\\', '/', (string)$getfile);

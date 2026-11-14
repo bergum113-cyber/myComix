@@ -1419,25 +1419,11 @@ class ArchiveHandler {
                 // 썸네일 리사이즈 및 저장
                 $thumb = @imagecreatefromstring($thumb_data);
                 if ($thumb !== false) {
-                    $width = imagesx($thumb);
-                    $height = imagesy($thumb);
-
-                    // 정사각형 크롭
-                    $size = min($width, $height);
-                    $x = ($width - $size) / 2;
-                    $y = ($height - $size) / 2;
-
-                    $cropped = imagecrop($thumb, ['x' => $x, 'y' => $y, 'width' => $size, 'height' => $size]);
-                    if ($cropped !== false) {
-                        $resized = imagecreatetruecolor(400, 400);
-                        imagecopyresampled($resized, $cropped, 0, 0, 0, 0, 400, 400, $size, $size);
-
-                        ob_start();
-                        imagejpeg($resized, null, 75);
-                        $cache_data['thumbnail'] = base64_encode(ob_get_clean());
-
-                        imagedestroy($resized);
-                        imagedestroy($cropped);
+                    // ★ (2026-11-12 10:12, 펜닐 요청) 정사각형으로 자르지 않고 원본 비율 그대로(긴 변 400px) — mc_thumb_fit_from_gd(function.php)
+                    $__fit = function_exists('mc_thumb_fit_from_gd') ? mc_thumb_fit_from_gd($thumb) : false;
+                    if ($__fit !== false) {
+                        $cache_data['thumbnail'] = base64_encode($__fit);
+                        $cache_data['thumb_fit'] = 1;
                     }
                     imagedestroy($thumb);
                 }

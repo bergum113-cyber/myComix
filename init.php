@@ -363,6 +363,19 @@ if (!empty($_SESSION['user_id'])) {
             } catch (\Throwable $e) {}
             @rmdir($_vd);
         }
+        // ★ (2026-11-13 14:41, 펜닐 요청 — fix143) 더 안 쓰는 동영상 자리 표시·기록 지움 — 동시 실행 자리(tc_N.lock·frame_N.lock)·변환 오류 기록(ffmpeg_tc_err.log)
+        //   cache/_vlock(fix138~fix140) · src/video/vlock(그 전) — 변환·장면이 FileStation 코드(video_fs.php)로 바뀌어 쓰지 않음. 이 이름만 하나씩 지우고 빈 폴더면 폴더도
+        foreach ([$cache_dir . '/_vlock', __DIR__ . '/src/video/vlock'] as $_vl) {
+            if (!is_dir($_vl) || is_link($_vl)) continue;
+            foreach ((@scandir($_vl) ?: []) as $_vf) {
+                if (preg_match('/^((tc|frame)_\d+\.lock|ffmpeg_tc_err\.log)$/', $_vf) && is_file($_vl . '/' . $_vf)) @unlink($_vl . '/' . $_vf);
+            }
+            @rmdir($_vl);
+        }
+        // ★ (2026-11-13 16:55, 펜닐 요청 — fix146 → 18:08 fix147) 재생바 장면 정리 — cache/_vframes 10일 넘은 것(fix148)·종전 자리 src/video/vframes(mcv_frames_gc)
+        if (is_dir($cache_dir . '/_vframes') || is_dir(__DIR__ . '/src/video/vframes')) {
+            try { require_once __DIR__ . '/video_lib.php'; if (function_exists('mcv_frames_gc')) mcv_frames_gc(); } catch (\Throwable $e) {}
+        }
         if (is_dir($cache_dir)) {
             // 모든 사용자 캐시 폴더 순회
             foreach (glob($cache_dir . '/*', GLOB_ONLYDIR) as $user_cache_dir) {
@@ -384,5 +397,21 @@ if (!empty($_SESSION['user_id'])) {
             }
         }
     }
+}
+
+// ★ (2026-11-13 11:11, fix141 재검토) 버려진 HLS 변환 세션 정리 — FileStation 과 같은 방식(api.php storages: 페이지를 열 때 5분에 한 번 hlsCleanupStale)
+//   [재현] 창을 그냥 닫거나 아이폰이 백그라운드로 끝내 '끝내기'(sendBeacon)가 안 가면, 다른 사람이 변환을 끝낼 때까지 ffmpeg 가 영상 끝까지 돌고
+//   조각 파일(cache/_hls)이 남았음(15분 지난 세션이 페이지를 몇 번 열어도 그대로). 기준은 FileStation 과 같음 — 10분 동안 재생 목록·조각 요청이 없는 세션만
+//   cache/_hls 가 있을 때만 · 5분 표시 파일 cache/_vds/hls_last_cleanup.txt · 실패해도 페이지에는 영향 없음
+if (!empty($_SESSION['user_id']) && is_dir(__DIR__ . '/cache/_hls')) {
+    try {
+        $_hlsFlag = __DIR__ . '/cache/_vds/hls_last_cleanup.txt';
+        if (time() - (int)@file_get_contents($_hlsFlag) > 300) {
+            if (!is_dir(__DIR__ . '/cache/_vds')) @mkdir(__DIR__ . '/cache/_vds', 0755, true);
+            @file_put_contents($_hlsFlag, (string)time(), LOCK_EX);
+            require_once __DIR__ . '/video_fs.php';
+            (new MCVfs())->hlsCleanupStale();
+        }
+    } catch (\Throwable $e) {}
 }
 ?>

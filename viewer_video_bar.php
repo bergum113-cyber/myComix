@@ -118,12 +118,13 @@ body.mcvv nav.viewer-bottom-nav { display: none !important; } /* ★ (2026-11-11
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !pop.hidden) setOpen(false); });
   // 결과는 예전처럼 숨은 #info 칸에 적힘 → 바뀌면 알림으로(만화 메뉴와 같은 방식, 서버가 늦어도 30초까지)
   var toastT = 0;
-  function toast(msg) { var el = document.getElementById('mcvvToast'); if (!el || !msg) return; el.textContent = String(msg); el.classList.add('mcvv-show'); clearTimeout(toastT); toastT = setTimeout(function () { el.classList.remove('mcvv-show'); }, String(msg).length > 30 ? 4000 : 2200); }
+  // ★ (2026-11-12 15:33 fix126) hold: '설정중...'은 결과 안내가 올 때까지(최대 30초) 그대로 — 만화 메뉴(js/viewer-bar.js)와 같음
+  function toast(msg, hold) { var el = document.getElementById('mcvvToast'); if (!el || !msg) return; el.textContent = String(msg); el.classList.add('mcvv-show'); clearTimeout(toastT); toastT = setTimeout(function () { el.classList.remove('mcvv-show'); }, hold || (String(msg).length > 30 ? 4000 : 2200)); }
   function watchInfo(run) {
     var info = document.getElementById('info'), last = info ? info.value : '', n = 0;
     try { run(); } catch (e) { return; }
     if (!info) return;
-    var iv = setInterval(function () { n++; var v = info.value; if (v && v !== last) { last = v; toast(v); } if (n > 300) clearInterval(iv); }, 100);
+    var iv = setInterval(function () { n++; var v = info.value; if (v && v !== last) { last = v; toast(v, (window._vi18n && v === window._vi18n.setting) ? 30000 : 0); } if (n > 300) clearInterval(iv); }, 100);
   }
   pop.addEventListener('click', function (e) {
     // ★ fix119 이전/다음 영상 — 예전 아래 줄처럼 지금 기록을 바꿔치기(뒤로 가기가 목록으로)

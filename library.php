@@ -2489,3 +2489,47 @@ function mc_lib_is_admin() {
     return isset($_SESSION['user_group']) && trim($_SESSION['user_group']) === 'admin';
 }
 
+/**
+ * ★ (2026-11-12 21:19, 펜닐 요청 — fix131) 목록 보기 정보 줄 — [[bidx, 경로], ...] → "bidx|경로" => ['who' => 작가·그룹 이름들, 'tags' => 태그 이름들, 'pages' => 쪽수]
+ *   서재 DB 에 들어 있는 권만(아직 훑지 않은 파일은 빠짐 — 정보 줄 없이 예전 모양). 읽기만 함. 권한 확인은 부르는 쪽(library_info.php)
+ *   한 번에 300개까지, 이름은 종류마다 앞에서부터(작가·그룹 합쳐 4개, 태그 5개)
+ */
+function mc_lib_list_info(PDO $db, array $items) {
+    $byB = [];
+    foreach (array_slice($items, 0, 300) as $it) {
+        if (!is_array($it) || count($it) < 2) continue;
+        $p = mc_lib_norm_path((string)$it[1]);
+        if ($p === '') continue;
+        $byB[(int)$it[0]][$p] = true;
+    }
+    $vols = [];
+    foreach ($byB as $b => $paths) {
+        $paths = array_keys($paths);
+        foreach (array_chunk($paths, 200) as $chunk) {
+            $st = $db->prepare('SELECT bidx, path, series_id, pages FROM volumes WHERE missing=0 AND bidx=? AND path IN (' . implode(',', array_fill(0, count($chunk), '?')) . ')');
+            $st->execute(array_merge([(int)$b], $chunk));
+            foreach ($st->fetchAll() as $r) $vols[(int)$r['bidx'] . '|' . $r['path']] = $r;
+        }
+    }
+    $sids = [];
+    foreach ($vols as $r) if ((int)$r['series_id'] > 0) $sids[(int)$r['series_id']] = true;
+    $terms = [];
+    if ($sids) {
+        $q = $db->query('SELECT st.series_id, t.kind, t.name FROM series_terms st JOIN terms t ON t.id=st.term_id WHERE st.series_id IN (' . implode(',', array_keys($sids)) . ') ORDER BY t.kind, t.name');
+        foreach ($q->fetchAll() as $r) $terms[(int)$r['series_id']][$r['kind']][] = (string)$r['name'];
+    }
+    $out = [];
+    foreach ($vols as $k => $r) {
+        $t = $terms[(int)$r['series_id']] ?? [];
+        // ★ (2026-11-13 00:14, 펜닐 요청 — fix133) 목록 보기에 '작가 [칩]'처럼 종류별 줄로 보여 주려고 종류를 나눠 돌려줌(a 작가·g 그룹·n 장르·t 태그). 개수는 줄이 길어지지 않게
+        $a = array_slice($t['author'] ?? [], 0, 4);
+        $g = array_slice($t['group'] ?? [], 0, 3);
+        $n = array_slice($t['genre'] ?? [], 0, 4);
+        $tags = array_slice($t['tag'] ?? [], 0, 6);
+        $pages = (int)$r['pages'];
+        if (!$a && !$g && !$n && !$tags && $pages <= 0) continue;
+        $out[$k] = ['a' => $a, 'g' => $g, 'n' => $n, 't' => $tags, 'pages' => $pages];
+    }
+    return $out;
+}
+

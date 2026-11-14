@@ -52,6 +52,10 @@ $_mcv_cfg = [
     'isFav'     => $_mcv_is_fav,
     't' => [
         'fav_add' => __('mcv2_fav_add'), 'fav_remove' => __('mcv2_fav_remove'),
+        'pages' => __('mcv2_pages'), 'pages_close' => __('mcv2_pages_close'), // ★ (2026-11-13 00:07 fix133) 쪽 목록(js/mcv-pages.js)
+        'rp_back' => __('mcv2_rp_back'), // ★ (2026-11-14 02:25 fix154) 쪽 고르기 판 '원래 쪽' (fix153 의 ep_* 문구는 판을 바꾸며 안 씀)
+        'rp_open' => __('mcv2_rp_open'), 'tip_rp' => __('mcv2_tip_rp'), 'tip_prog' => __('mcv2_tip_prog'), 'tip_ok' => __('mcv2_tip_ok'), // ★ (2026-11-14 21:21 fix164) 처음 안내 → 확인 뒤 모양 표시(js/mcv-pages.js)
+        'tip_pos' => __($_mcv_book ? 'mcv2_tip_pos_book' : 'mcv2_tip_pos_toon'),
         'goto' => __('mcv2_goto'), 'next_label' => __('mcv2_next_label'), 'saved' => __('mcv2_done'), 'bm_at' => __('mcv2_bm_at'), 'cover_pg' => __('mcv2_cover_pg'), 'copied' => __('mcv2_copied'),
         'resume_on' => __('mcv2_resume_on'), 'resume_off' => __('mcv2_resume_off'),
         'port1_on' => __('mcv2_port1_on'), 'port1_off' => __('mcv2_port1_off'), // ★ (2026-11-04 18:00) 세로 화면은 한 쪽 · 화면 맞춤
@@ -72,6 +76,7 @@ $_mcv_i = [
     'mark'  => '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>',
     'star'  => '<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/>',
     'sun'   => '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    'grid'  => '<rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/>', // ★ (2026-11-13 00:07 fix133) 쪽 목록
     'full'  => '<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
     'prev'  => '<path d="m11 17-5-5 5-5"/><path d="m18 17-5-5 5-5"/>',
     'next'  => '<path d="m6 17 5-5-5-5"/><path d="m13 17 5-5-5-5"/>',
@@ -131,6 +136,9 @@ body.mcv2-book .lg-outer .lg-toolbar, body.mcv2-book .lg-outer .lg-sub-html { di
   -webkit-user-select: text; user-select: text; -webkit-touch-callout: default; cursor: text; }
 .mcv-pos { font-size: 13px; opacity: .78; font-variant-numeric: tabular-nums; white-space: nowrap; flex: 0 0 auto; border: 0; background: transparent; color: inherit; padding: 2px 6px; border-radius: 6px; font-family: inherit; }
 button.mcv-pos { cursor: pointer; }
+/* ★ (2026-11-13 00:52, 펜닐 요청 — fix135) 쪽 번호가 글자처럼 보여 누를 수 있는 줄 몰랐음 → 테두리·그림자로 단추처럼(툰·북 같게, 휴대폰은 아래에서 여백만 작게) */
+button.mcv-pos { border: 1px solid rgba(0,0,0,.18); box-shadow: 0 1px 2px rgba(0,0,0,.12); padding: 3px 9px; opacity: .9; }
+.mcv-dark button.mcv-pos, html.dark-mode button.mcv-pos, body.dark-mode button.mcv-pos, [data-theme="dark"] button.mcv-pos { border-color: rgba(255,255,255,.28); box-shadow: 0 1px 3px rgba(0,0,0,.5); }
 button.mcv-pos:hover { background: rgba(127,127,127,.18); }
 .mcv-pos-sep { margin-left: auto; }
 @media (max-width: 767px) {
@@ -139,6 +147,7 @@ button.mcv-pos:hover { background: rgba(127,127,127,.18); }
   .mcv-ttl { font-size: 14.5px; }
   .mcv-bar { min-height: 52px; }
   .mcv-pos { font-size: 11.5px; padding: 0; }
+  button.mcv-pos { padding: 1px 7px; } /* ★ fix135 테두리 안 여백 */
   .mcv-pos-sep { margin-left: 0; } /* 휴대폰: 제목 아래 왼쪽 */
   .mcv-tb { padding: 0 10px; }
   .mcv-tb .mcv-tb-lbl { display: none; }
@@ -236,7 +245,7 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
     <?php if ($_mcv_book): ?>
     <button type="button" class="mcv-pos mcv-pos-sep" id="mcvPos" title="<?php echo __h('mcv2_goto'); ?>" aria-label="<?php echo __h('mcv2_goto'); ?>" aria-haspopup="dialog" aria-expanded="false">&nbsp;</button>
     <?php else: ?>
-    <span class="mcv-pos mcv-pos-sep" id="mcvPos">&nbsp;</span>
+    <button type="button" class="mcv-pos mcv-pos-sep" id="mcvPos" title="<?php echo __h('mcv2_pages_tip'); ?>" aria-label="<?php echo __h('mcv2_pages'); ?>" aria-haspopup="dialog">&nbsp;</button><?php // ★ (2026-11-13 00:07 fix133) 툰모드 쪽 번호도 누르면 쪽 목록(js/mcv-pages.js) — 예전엔 글자만 ?>
     <?php endif; ?>
   </div>
   <?php if ($_mcv_book): ?>
@@ -247,9 +256,8 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
   <?php endif; ?>
   <button type="button" class="mcv-ib" id="mcvMore" aria-haspopup="menu" aria-expanded="false" title="<?php echo __h('mcv2_settings'); ?>" aria-label="<?php echo __h('mcv2_settings'); ?>"><?php echo $_mcv_ico($_mcv_i['gear'], 22); ?></button>
 </div>
-<?php if (!$_mcv_book): ?>
+<?php // ★ (2026-11-14 02:25, 펜닐 요청 — fix154) 진행 줄을 북모드에도(누르거나 끌면 쪽 고르기 판 — js/mcv-pages.js) ?>
 <div class="mcv-prog" id="mcvProg" title="<?php echo __h('mcv2_prog'); ?>"><i></i></div>
-<?php endif; ?>
 
 <?php // 보기 방식 메뉴(북모드는 [보기 ▾], 툰모드는 ⋯ 안에) ?>
 <?php ob_start(); ?>
@@ -276,6 +284,7 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
 </div>
 <div class="mcv-pop mcv-dark" id="mcvGotoPop" role="dialog" aria-label="<?php echo __h('mcv2_goto'); ?>" hidden>
   <form class="mcv-goto" id="mcvGotoForm" novalidate><input type="number" id="mcvGotoIn" min="1" step="1" inputmode="numeric" aria-label="<?php echo __h('mcv2_goto'); ?>"><span id="mcvGotoMax"></span><button type="submit"><?php echo __h('mcv2_go'); ?></button></form>
+  <button type="button" class="mcv-mi" id="mcvPagesBtn"><?php echo $_mcv_ico($_mcv_i['grid']); ?><?php echo __h('mcv2_pages'); ?></button><?php // ★ (2026-11-13 00:07 fix133) 북모드: 쪽 번호 창에서 쪽 목록(작은 그림)으로 ?>
 </div>
 <?php endif; ?>
 
@@ -319,3 +328,4 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
 <div class="mcv-toast" id="mcvToast" role="status" aria-live="polite"></div>
 <script>window.MCV_BAR = <?php echo json_encode($_mcv_cfg, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) ?: 'null'; /* ★ (2026-11-02 08:59) 깨진 글자 파일명이어도 막대 스크립트가 멈추지 않게 */ ?>;</script>
 <script src="js/viewer-bar.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/viewer-bar.js'); ?>" defer></script>
+<script src="js/mcv-pages.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mcv-pages.js'); ?>" defer></script><?php // ★ (2026-11-13 00:07 fix133) 쪽 목록 · 진행 줄 끌기 미리보기 ?>

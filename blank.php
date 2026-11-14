@@ -44,6 +44,7 @@ $_login_url = $base_path . '/login.php';
   <div class="spinner"></div>
   <div><?php echo __h("loading"); ?></div>
 </div>
+<?php if (function_exists('mc_back_seek_js')) echo mc_back_seek_js(); /* ★ (2026-11-12 20:02 fix130) 뷰어 ← 찾아가기가 이 화면에 닿으면 바로 지나감 + 가림막 기록(src/perf/back_날짜.log) */ ?>
 <script>
 (function(){
   // ✅ 서버에서 생성한 동적 경로 사용
@@ -117,6 +118,7 @@ $_login_url = $base_path . '/login.php';
             // ✅ 복귀 직후 목록(index)에서 가림막 탭의 고스트클릭/빠른 2번째 탭이 항목을 눌러 엉뚱하게
             //    진입하는 것을 막기 위한 플래그. index가 로드 시 이 플래그를 읽어 짧게 첫 클릭을 흡수함.
             try { sessionStorage.setItem('mycomix_curtain_return', String(Date.now())); } catch(e){}
+            try { if (window.mcBackLog) window.mcBackLog('blank_ret', {}); } catch(e){} // ★ (2026-11-12 20:02 fix130) 기록만
             location.replace(returnUrl);
           } else {
             // 세션 만료 → 로그인 페이지로 (보던 화면 URL을 함께 전달)

@@ -313,7 +313,7 @@ if ($_mc_thumb_css !== ''): ?>
     <div class="bm-sec-empty"<?php echo $sec['items'] ? ' style="display:none;"' : ''; ?>><?php echo __h('bm_sec_empty'); ?></div>
     <div class="bm-items bm-grid">
 <?php foreach ($sec['items'] as $it): ?>
-      <div class="bm-item<?php echo $it['missing'] ? ' is-missing' : ''; ?>" data-name="<?php echo $it['title']; ?>">
+      <div class="bm-item<?php echo $it['missing'] ? ' is-missing' : ''; ?>" data-name="<?php echo $it['title']; ?>"<?php if (!$it['missing']) echo ' data-mcli="' . (int)$it['bidx'] . '|' . h($it['path']) . '"'; /* ★ (2026-11-12 21:20 fix131) 목록 보기 정보 줄(js/mc-list-info.js) */ ?>>
         <a class="bm-link" <?php echo $it['missing'] ? 'href="javascript:void(0)" aria-disabled="true"' : 'href="' . h($it['url']) . '"'; ?> title="<?php echo $it['title']; ?>">
           <div class="bm-cover">
             <img src="<?php echo h($it['thumb']); ?>" alt="" loading="lazy" decoding="async" onerror="this.onerror=null;this.style.visibility='hidden';">
@@ -344,7 +344,7 @@ if ($_mc_thumb_css !== ''): ?>
     <div class="bm-sec-empty"<?php echo $ebook_items ? ' style="display:none;"' : ''; ?>><?php echo __h('bm_sec_empty'); ?></div>
     <div class="bm-items bm-grid">
 <?php foreach ($ebook_items as $it): ?>
-      <div class="bm-item<?php echo $it['missing'] ? ' is-missing' : ''; ?>" data-name="<?php echo $it['title']; ?>">
+      <div class="bm-item<?php echo $it['missing'] ? ' is-missing' : ''; ?>" data-name="<?php echo $it['title']; ?>"<?php if (!$it['missing']) echo ' data-mcli="' . (int)$it['bidx'] . '|' . h($it['path']) . '"'; /* ★ (2026-11-12 21:20 fix131) 목록 보기 정보 줄(js/mc-list-info.js) */ ?>>
         <a class="bm-link" <?php echo $it['missing'] ? 'href="javascript:void(0)" aria-disabled="true"' : 'href="' . h($it['url']) . '"'; ?> title="<?php echo $it['title']; ?>">
           <div class="bm-cover">
             <img src="<?php echo h($it['thumb']); ?>" alt="" loading="lazy" decoding="async" onerror="this.onerror=null;this.style.visibility='hidden';">
@@ -520,15 +520,7 @@ if ($_mc_thumb_css !== ''): ?>
   });
 
   // 돌아가기: 목록(index.php)에서 들어왔으면 뒤로가기(보던 폴더·스크롤 그대로), 아니면 목록 첫 화면으로
-  var back = document.getElementById('bmBack');
-  if (back) {
-    back.addEventListener('click', function (ev) {
-      try {
-        var ref = document.referrer ? new URL(document.referrer) : null;
-        if (ref && ref.origin === location.origin && /\/index\.php$/.test(ref.pathname) && history.length > 1) { ev.preventDefault(); history.back(); }
-      } catch (e) {}
-    });
-  }
+  // ★ (2026-11-12 23:11 fix132) 누를 때 처리는 mc_up_back_js(아래) — 들어오기 전 폴더로(서재·즐겨찾기 탭·뷰어를 오간 뒤에도)
   // 뷰어에서 읽다가 뒤로 돌아왔을 때(브라우저가 보관한 화면): 이어 읽기 위치가 바뀌었을 수 있으니 새로 읽음
   //  (표시는 지우지 않음 — 목록 화면도 같은 표시로 다시 읽어야 함)
   window.addEventListener('pageshow', function (e) {
@@ -541,6 +533,11 @@ if ($_mc_thumb_css !== ''): ?>
 <?php require_once __DIR__ . '/privacy_shield.php'; // 관리자 설정 '모바일 화면 가림 대상'에 체크한 경우에만 동작 ?>
 <?php if (function_exists('mc_icons_script')) echo mc_icons_script(); ?>
 <?php if (function_exists('mc_perf_script')) echo mc_perf_script('bookmarks'); // ★ (2026-11-03 14:10) 속도 기록(src/perf) ?>
+<?php if (function_exists('mc_up_back_js')) echo mc_up_back_js('bmBack', 'I'); /* ★ (2026-11-12 23:11 fix132) ← = 들어오기 전 폴더(서재·즐겨찾기 탭을 오가도·뷰어에서 돌아와도) */ ?>
 <?php if (function_exists('mc_back_origin_list_js')) echo mc_back_origin_list_js(); /* ★ (2026-11-05) 뷰어 뒤로가기가 이 화면(주소·스크롤 위치)으로 돌아오게 — function.php */ ?>
+<?php /* ★ (2026-11-12 11:16, 펜닐 요청) 표지를 목록 화면과 같게 — 잘리지 않게 + 흐린 배경(js/mc-thumb-fit.js) */ ?>
+<script src="js/mc-thumb-fit.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-thumb-fit.js'); ?>"></script>
+<script src="js/mc-seen.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-seen.js'); /* ★ (2026-11-14 16:45 fix158) 폴더 목록처럼 hover 청록·본 항목 회색 */ ?>" data-hold="<?php echo function_exists('get_app_settings') ? (float)max(0, (float)get_app_settings('viewed_mark_seconds', 2)) : 2; /* ★ (2026-11-14 17:32 fix159) 돌아온 항목 주황 테두리 유지 시간(관리자 '복귀 표시 유지 시간') */ ?>"></script>
+<?php if (function_exists('mc_list_info_script')) echo mc_list_info_script(); /* ★ (2026-11-12 21:20 fix131) 목록 보기에서 제목 아래 작가·태그·쪽수(js/mc-list-info.js) */ ?>
 </body>
 </html>

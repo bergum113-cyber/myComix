@@ -1695,9 +1695,127 @@ if (!function_exists('mc_mv_autosave_entry')) {
  *     주소를 직접 열었거나 새 탭에서 처음 연 경우 등 기억이 없으면 예전 그대로 / 정해진 목록 화면(같은 사이트 안 상대 주소)만 받음
  *   · 뷰어 안에서 이전·다음 권으로 옮겨도 그대로(뷰어는 기억을 바꾸지 않음)
  */
+/**
+ * ★ (2026-11-12 20:01, 펜닐 제보·속도 기록 — fix130) 뷰어 ← '찾아가기' + ← 기록(src/perf/back_날짜.log)
+ *   [문제] 아이폰 크롬(WebKit)에서 탭을 나갔다 가림막(blank.php)을 거쳐 돌아오면 가끔 방문 기록 개수가 늘어(속도 기록: 18:56 복귀 → 18:57:07 작품 '새로 열기'
+ *          → 18:57:08 같은 작품 '뒤로'), ← 가 '주소로 이동'을 써 같은 작품 화면이 기록에 두 번 쌓임 → 그 뒤 뒤로를 두 번 눌러야 했음. 크롬(PC 엔진)은 재현 안 됨
+ *   [처리] 가림막에서 돌아온 뷰어는 들어온 곳 표시를 남겨 두고(아래 mc_back_origin_viewer_js), ← 때 기록 개수가 늘었으면 브라우저 뒤로를 이어서
+ *          들어온 화면을 찾아감(mc_back_seek — 중간의 뷰어·가림막 화면만 지나감, 최대 4번·8초). 못 찾으면 그 주소로 이동(기록을 지우지 않게 '열기')
+ *   [기록] 속도 기록이 켜져 있으면(src/perf 폴더) 뷰어 열림·← 누름·찾아가기·가림막 오감을 perf_log.php 로 보냄(로그인한 사람만, 정해진 값만)
+ */
+/** ★ (2026-11-12 21:19, 펜닐 요청 — fix131) 목록 보기 정보 줄 스크립트(js/mc-list-info.js) — 서재 DB 가 있을 때만(없으면 빈 문자열) */
+if (!function_exists('mc_list_info_script')) {
+    function mc_list_info_script() {
+        if (!is_file(__DIR__ . '/src/library.db') || empty($_SESSION['user_id'])) return '';
+        $t = json_encode(['pages' => function_exists('__') ? __('lib_pages') : '%d', // ★ (2026-11-13 00:14 fix133) 종류 이름(작가·그룹·장르·태그) — 작품 상세 정보 표와 같은 말
+            'a' => __('lib_author'), 'g' => __('lib_group'), 'n' => __('lib_genre'), 't' => __('lib_tag')], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        return '<script>window.mcLiT=' . $t . ';</script><script src="js/mc-list-info.js?v=' . (int)@filemtime(__DIR__ . '/js/mc-list-info.js') . '"></script>';
+    }
+}
+/**
+ * ★ (2026-11-12 23:11, 펜닐 제보 — fix132) '← 돌아가기' = 지금 화면의 상위로(브라우저 뒤로처럼 지나온 순서대로가 아니라)
+ *   [문제] 서재 → 작품 → '같은 작가의 다른 작품' → ← 가 앞 작품으로(브라우저 뒤로), 폴더 → 즐겨찾기 → 북마크 탭 → ← 가 폴더가 아닌 목록 첫 화면(index.php?bidx=N)으로 갔음
+ *   [처리] 화면마다 '상위 화면까지 몇 칸 뒤인지'(방문 기록 칸마다 history.state.mcUp)를 적어 두고 ← 는 그만큼 뒤로(그 화면 그대로·스크롤 위치·기록 안 쌓임)
+ *     · 서재·즐겨찾기·북마크(kind 'I')의 상위 = 들어오기 전 파일 목록(폴더) — 서로 탭으로 옮겨 다녀도·작품 화면을 거쳐도 그 폴더
+ *     · 작품 화면(kind 'L')의 상위 = 처음 들어온 목록(서재·즐겨찾기·북마크·폴더) — 같은 작가 작품으로 옮겨 다녀도 그 목록
+ *     · 칸 수를 모르는 경우(뷰어에서 주소로 돌아옴·가림막을 거쳐 옴·새 탭 등)는 그 상위 화면 주소로 이동(종전처럼 링크)
+ *   파일 목록(kind '')은 적기만 함 — 바로 앞 화면이 무엇이었는지 알 수 있게(mc_up_last)
+ */
+if (!function_exists('mc_up_back_js')) {
+    function mc_up_back_js($btn_id = '', $kind = '') {
+        $cfg = json_encode(['b' => (string)$btn_id, 'k' => (string)$kind], JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT);
+        return '<script>window.mcUpCfg=' . $cfg . ';</script>' . <<<'JS'
+<script>
+(function () {
+  var C = window.mcUpCfg || {}; window.mcUpCfg = null;
+  var PG = /^(index|browse|favorites|bookmarks|series)\.php$/, LU = /^(index|browse|favorites|bookmarks)\.php(\?[^#\s]*)?$/;
+  function pg(p) { return String(p || '').split('/').pop() || 'index.php'; }
+  function g(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+  function s(k, v) { try { sessionStorage.setItem(k, v); } catch (e) {} }
+  var me = pg(location.pathname);
+  function cur() { return me + location.search; }
+  var hs = history.state, st = (hs && typeof hs === 'object') ? hs : {}, up = st.mcUp;
+  if (!up || typeof up !== 'object') {
+    up = { i: 0, l: 0, ui: '', ul: '' };
+    var nt = ''; try { var en = performance.getEntriesByType('navigation'); nt = (en && en[0] && en[0].type) || ''; } catch (x) {}
+    var last = null; try { last = JSON.parse(g('mc_up_last') || 'null'); } catch (e) {}
+    var ref = null; try { ref = document.referrer ? new URL(document.referrer) : null; } catch (e) {}
+    // 바로 앞 화면이 링크로 열어 준 경우만 믿음(앞 화면이 남긴 주소 = 이 화면의 referrer)
+    if (nt === 'navigate' && last && ref && ref.origin === location.origin && PG.test(String(last.p)) && pg(ref.pathname) + ref.search === last.u) {
+      if (last.p === me && last.u === cur()) { up = { i: +last.i || 0, l: +last.l || 0, ui: String(last.ui || ''), ul: String(last.ul || '') }; } // 같은 주소로 다시 열림(브라우저가 기록을 바꿔치기) = 칸 수 그대로
+      else if (last.p === 'index.php') { up = { i: 1, l: 1, ui: last.u, ul: last.u }; }
+      else if (last.p === 'series.php') { up = { i: last.i > 0 ? last.i + 1 : 0, l: last.l > 0 ? last.l + 1 : 0, ui: String(last.ui || ''), ul: String(last.ul || '') }; }
+      else { up = { i: last.i > 0 ? last.i + 1 : 0, l: 1, ui: String(last.ui || ''), ul: last.u }; }
+    }
+    if (me !== 'index.php') { try { history.replaceState(Object.assign({}, st, { mcUp: up }), ''); } catch (e) {} }
+  }
+  if (LU.test(up.ui || '')) s('mc_up_ui', up.ui);
+  if (LU.test(up.ul || '')) s('mc_up_ul', up.ul);
+  function save() { s('mc_up_last', JSON.stringify({ p: me, u: cur(), i: +up.i || 0, l: +up.l || 0, ui: up.ui || '', ul: up.ul || '' })); }
+  document.addEventListener('click', save, true);
+  window.addEventListener('pagehide', save);
+  window.addEventListener('pageshow', function (e) { if (e.persisted) save(); });
+  var btn = C.b ? document.getElementById(C.b) : null;
+  if (!btn || (C.k !== 'I' && C.k !== 'L')) return;
+  var d = C.k === 'L' ? (+up.l || 0) : (+up.i || 0);
+  var u = C.k === 'L' ? (up.ul || g('mc_up_ul')) : (up.ui || g('mc_up_ui'));
+  if (C.k === 'I' && !/^index\.php/.test(u || '')) u = '';
+  if (u && LU.test(u)) btn.setAttribute('href', u);
+  btn.addEventListener('click', function (ev) {
+    if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return; // 새 탭은 링크 그대로
+    if (d > 0 && history.length > d) { ev.preventDefault(); history.go(-d); }
+  });
+})();
+</script>
+JS;
+    }
+}
+if (!function_exists('mc_back_seek_js')) {
+    function mc_back_seek_js() {
+        $on = (function_exists('mc_perf_enabled') && mc_perf_enabled() && !empty($_SESSION['user_id'])) ? 1 : 0;
+        return '<script>window.mcBackLogOn=' . $on . ';</script>' . <<<'JS'
+<script>
+(function () {
+  if (window.mcBackSeekReady) return; window.mcBackSeekReady = 1;
+  function g(k) { try { return sessionStorage.getItem(k); } catch (e) { return null; } }
+  function d(k) { try { sessionStorage.removeItem(k); } catch (e) {} }
+  function pg() { return location.pathname.split('/').pop() || 'index.php'; }
+  window.mcBackLog = function (ev, o) {
+    if (!window.mcBackLogOn) return;
+    try {
+      var r = { k: 'b', ev: String(ev), page: pg(), len: history.length };
+      for (var x in (o || {})) r[x] = o[x];
+      var b = JSON.stringify(r);
+      if (navigator.sendBeacon) navigator.sendBeacon('perf_log.php', b);
+      else { var q = new XMLHttpRequest(); q.open('POST', 'perf_log.php', true); q.send(b); }
+    } catch (e) {}
+  };
+  // 찾아가기: ← 가 남긴 mc_back_seek = {u: 찾는 화면(주소), t: 시각, n: 지나간 수, fb: 못 찾으면 열 주소}
+  function chk() {
+    var sk = null; try { sk = JSON.parse(g('mc_back_seek') || 'null'); } catch (e) {}
+    if (!sk || !sk.u) return;
+    if (!(Date.now() - (+sk.t || 0) < 8000)) { d('mc_back_seek'); return; }
+    var here = pg() + location.search;
+    if (here === sk.u) { d('mc_back_seek'); window.mcBackLog('seek_arrive', { n: sk.n }); return; }
+    if (/^(viewer|epub_viewer|txt_viewer|office_viewer|hwp_viewer|rhwp_viewer|blank)\.php$/.test(pg()) && (+sk.n || 0) < 4) {
+      sk.n = (+sk.n || 0) + 1; sk.t = Date.now();
+      try { sessionStorage.setItem('mc_back_seek', JSON.stringify(sk)); } catch (e) {}
+      window.mcBackLog('seek_step', { n: sk.n });
+      history.back();
+      return;
+    }
+    d('mc_back_seek'); window.mcBackLog('seek_fallback', { n: sk.n });
+    location.href = sk.fb;
+  }
+  window.addEventListener('pageshow', chk);
+})();
+</script>
+JS;
+    }
+}
 if (!function_exists('mc_back_origin_list_js')) {
     function mc_back_origin_list_js() {
-        return <<<'JS'
+        return (function_exists('mc_back_seek_js') ? mc_back_seek_js() : '') . <<<'JS'
 <script>
 (function () {
   function save() {
@@ -1718,7 +1836,7 @@ JS;
 }
 if (!function_exists('mc_back_origin_viewer_js')) {
     function mc_back_origin_viewer_js() {
-        return <<<'JS'
+        return (function_exists('mc_back_seek_js') ? mc_back_seek_js() : '') . <<<'JS'
 <script>
 (function () {
   var RE = /^(?:index|browse|series|favorites|bookmarks)\.php(?:\?[^#\s]*)?(?:#ly\d{1,7})?$/;
@@ -1733,18 +1851,61 @@ if (!function_exists('mc_back_origin_viewer_js')) {
   var nt = ''; try { var en = performance.getEntriesByType('navigation'); nt = (en && en[0] && en[0].type) || ''; } catch (x) {}
   if (nt !== 'back_forward' && nt !== 'reload') {
     var o = g('mc_back_origin'), c = parseInt(g('mc_back_click') || '0', 10) || 0;
-    if (c && Date.now() - c >= 0 && Date.now() - c < 20000 && RE.test(o || '')) s('mc_back_hist', bare(o) + '|' + history.length);
-    else { var h = g('mc_back_hist'); if (h && h.split('|').pop() !== String(history.length)) d('mc_back_hist'); }
+    // ★ (2026-11-12 20:01 fix130) 가림막(blank.php)에서 방금 돌아온 경우(20초 안 — blank.php 가 'mycomix_curtain_return' 을 남김)는 기록 개수가 달라도 표시를 남기고
+    //   '가림막을 거쳐 옴'(mc_back_curtain = 들어온 곳)을 적음 → ← 가 주소로 새로 열지 않고 뒤로를 이어 찾아감(mc_back_seek_js). 그 밖은 종전 그대로
+    var cr = parseInt(g('mycomix_curtain_return') || '0', 10) || 0, fromCurtain = cr && Date.now() - cr >= 0 && Date.now() - cr < 20000;
+    if (c && Date.now() - c >= 0 && Date.now() - c < 20000 && RE.test(o || '')) { s('mc_back_hist', bare(o) + '|' + history.length); d('mc_back_curtain'); }
+    else { var h = g('mc_back_hist'); if (h && h.split('|').pop() !== String(history.length)) { if (fromCurtain) s('mc_back_curtain', h.slice(0, h.lastIndexOf('|'))); else d('mc_back_hist'); } }
   }
   d('mc_back_click');
+  try { if (window.mcBackLog) window.mcBackLog('open', { nt: nt, hist: g('mc_back_hist') || '', cur: g('mc_back_curtain') ? 1 : 0 }); } catch (x) {}
   window.mcBackUrl = function (def) {
     var u = g('mc_back_origin');
     return (typeof u === 'string' && RE.test(u)) ? u : def;
   };
+  // ★ (2026-11-12 13:49, 펜닐 제보 — fix125) 표지 저장(파일 표지·폴더 표지·자동)이 끝나기 전에 돌아가면 저장이 끊기거나, 저장은 됐어도 목록에 알림(mc_cover_bump)이
+  //   안 남아 새로고침 전까지 예전 표지가 보였음(느린 회선에서 '설정중...' 뒤 바로 ← 로 재현). 저장 중이면 ← 는 끝날 때까지(최대 30초) 기다렸다가 가고,
+  //   브라우저 뒤로·창 닫기는 떠나기 확인을 띄움(저장 중일 때만)
+  var cvBusy = 0, cvWait = false;
+  function cvLeave(e) { if (cvBusy > 0) { e.preventDefault(); e.returnValue = ''; return ''; } }
+  function cvClear() { cvBusy = 0; window.removeEventListener('beforeunload', cvLeave); }
+  window.mcCoverTrack = function (p) {
+    if (!p || typeof p.then !== 'function') return p;
+    if (cvBusy++ === 0) window.addEventListener('beforeunload', cvLeave);
+    var f = function () { if (--cvBusy <= 0) cvClear(); };
+    p.then(f, f);
+    return p;
+  };
+  // 표지 알림 남기기 — 앞 알림을 지우지 않고 함께 둠(l: 1시간 안의 앞 알림 최대 20개). 종전엔 마지막 하나만 남아
+  //   '파일 표지' 뒤 '폴더 표지'를 하고 돌아가면(뒤로 가기로 보관된 목록 화면) 파일 카드가 안 바뀌었음
+  window.mcCoverBumpPut = function (n) {
+    try {
+      var o = null; try { o = JSON.parse(localStorage.getItem('mc_cover_bump') || 'null'); } catch (x) {}
+      var l = [];
+      if (o && o.t) l = (Array.isArray(o.l) ? o.l : []).concat([{ t: o.t, f: o.f, d: o.d, k: o.k }]).filter(function (x) { return x && x.t > n.t - 3600000; }).slice(-20);
+      n.l = l;
+      localStorage.setItem('mc_cover_bump', JSON.stringify(n));
+    } catch (e) {}
+  };
   // 들어온 곳으로 가기 — 바로 앞 기록이면 브라우저 뒤로(그 화면 그대로·기록 안 쌓임), 아니면 주소로(mode: 'replace' 기본 / 'push')
   window.mcBackGo = function (url, mode) {
+    if (cvBusy > 0) {
+      if (cvWait) return; cvWait = true;
+      var n = 0, iv = setInterval(function () { if (cvBusy <= 0 || ++n > 300) { clearInterval(iv); cvClear(); cvWait = false; window.mcBackGo(url, mode); } }, 100);
+      return;
+    }
     var h = g('mc_back_hist');
-    if (history.length > 1 && h && h === bare(url) + '|' + history.length && RE.test(String(url || ''))) { d('mc_back_hist'); history.back(); return; }
+    if (history.length > 1 && h && h === bare(url) + '|' + history.length && RE.test(String(url || ''))) { if (window.mcBackLog) window.mcBackLog('press', { how: 'back', hist: h }); d('mc_back_hist'); history.back(); return; }
+    // ★ (2026-11-12 20:01 fix130) 가림막을 거쳐 와 기록 개수만 늘었으면(1~6) 뒤로를 이어 들어온 화면을 찾아감 — 주소로 새로 열면 같은 화면이 기록에 두 번 남았음
+    if (history.length > 1 && h && RE.test(String(url || ''))) {
+      var hk = h.lastIndexOf('|'), hu = h.slice(0, hk), gap = history.length - (parseInt(h.slice(hk + 1), 10) || 0);
+      if (hu === bare(url) && gap > 0 && gap <= 6 && g('mc_back_curtain') === hu) {
+        try { sessionStorage.setItem('mc_back_seek', JSON.stringify({ u: hu, t: Date.now(), n: 0, fb: url })); } catch (e) {}
+        if (window.mcBackLog) window.mcBackLog('press', { how: 'seek', hist: h, gap: gap });
+        d('mc_back_hist'); d('mc_back_curtain'); history.back(); return;
+      }
+    }
+    if (window.mcBackLog) window.mcBackLog('press', { how: mode === 'push' ? 'push' : 'replace', hist: h || '', url: String(url || '').slice(0, 200) });
     if (mode === 'push') location.href = url; else location.replace(url);
   };
   document.addEventListener('DOMContentLoaded', function () {
@@ -2020,9 +2181,10 @@ function mc_file_cover_v($abs) {
     // ★ (2026-11-10 16:08 fix101) 직접 고른 표지가 하나도 없으면(대부분) 경로 확인 없이 바로 '' — 목록·서재 카드마다 디스크를 보지 않게
     static $any = null;
     if ($any === null) { $any = false; $dh = is_dir(__DIR__ . '/src/covers') ? @opendir(__DIR__ . '/src/covers') : false; if ($dh) { while (($n = readdir($dh)) !== false) { if (substr($n, -4) === '.jpg') { $any = true; break; } } closedir($dh); } } // 하나만 찾으면 멈춤
-    if (!$any) return '';
+    // ★ (2026-11-12 10:11) '&tf=1' — 썸네일을 원본 비율로 바꾸며 주소를 한 번 바꿈(브라우저가 하루 동안 저장해 둔 옛 정사각형 썸네일 대신 새로 받게). thumb.php 는 이 값을 읽지 않음
+    if (!$any) return '&tf=1';
     $p = mc_file_cover_path($abs);
-    return is_file($p) ? '&cv=' . (int)@filemtime($p) : '';
+    return '&tf=1' . (is_file($p) ? '&cv=' . (int)@filemtime($p) : '');
 }
 /** ★ (2026-11-10 16:08, fix101) 콘텐츠 폴더 번호·상대 경로로 — 즐겨찾기·북마크·서재 화면의 표지 주소에 붙임(thumb.php 와 같게 없는 번호는 0번) */
 function mc_file_cover_v_rel($bidx, $rel) {
@@ -2061,12 +2223,206 @@ function mc_write_file_cover($abs, $data) {
     @chmod($dest, 0644);
     return true;
 }
+// ============================================================
+// ★ (2026-11-12 10:09, 펜닐 요청 — 시안 C 확인 후) 표지 썸네일을 정사각형으로 자르지 않고 원본 비율 그대로(긴 변 400px)
+//   [종전] 압축·이미지 폴더 책의 자동 표지를 400×400 으로 잘랐음(세로는 위 정사각형, 가로는 가운데~오른쪽 정사각형) →
+//   목록 칸(3:4)에서 한 번 더 잘려 일부만 보였고, 이 썸네일을 복사한 폴더 자동 표지([cover].jpg)도 잘렸음(수동 표지는 원본이라 멀쩡)
+//   [지금] 원본 비율로 만들고 'thumb_fit' => 1 을 함께 적음. 표시가 없는 옛 썸네일은 thumb.php 가 그림을 보낼 때 한 번만 다시 만듦
+// ============================================================
+if (!function_exists('mc_thumb_fit_from_gd')) {
+/** GD 그림 → 원본 비율 JPEG(긴 변 $max px, 작으면 그대로) 바이트. 실패 false */
+function mc_thumb_fit_from_gd($gd, $max = 400) {
+    if (!$gd) return false;
+    $w = imagesx($gd); $h = imagesy($gd);
+    if ($w < 1 || $h < 1) return false;
+    $sc = min(1, $max / max($w, $h));
+    $nw = max(1, (int)round($w * $sc)); $nh = max(1, (int)round($h * $sc));
+    $out = imagecreatetruecolor($nw, $nh);
+    if (!$out) return false;
+    imagecopyresampled($out, $gd, 0, 0, 0, 0, $nw, $nh, $w, $h);
+    ob_start();
+    imagejpeg($out, null, 75);
+    $d = ob_get_clean();
+    imagedestroy($out);
+    return (is_string($d) && $d !== '') ? $d : false;
+}
+}
+if (!function_exists('mc_thumb_fit_from_bytes')) {
+/** 그림 바이트 → 원본 비율 JPEG 바이트(너무 큰 그림·손상 그림은 false — mc_gd_from_string 과 같은 기준) */
+function mc_thumb_fit_from_bytes($data, $max = 400) {
+    $gd = mc_gd_from_string($data);
+    if (!$gd) return false;
+    $r = mc_thumb_fit_from_gd($gd, $max);
+    imagedestroy($gd);
+    return $r;
+}
+}
+if (!function_exists('mc_imgbook_first_page')) {
+/**
+ * ★ (2026-11-12 17:25, 펜닐 로그 — fix128) 이미지 폴더 책의 첫 쪽 그림 경로('' = 없음) — 목록이 썸네일을 처음 만들 때와 같이 표지([cover].jpg)·영상 썸네일은 뺌(mc_folder_nonpage)
+ *   종전 mc_thumb_fit_source 는 폴더 안 [cover].jpg 도 쪽으로 쳐서, 쪽 이름이 글자로 시작하면(rurouni_001.jpg·한글 이름 — 이름 순에서 '[' 뒤)
+ *   잘린 옛 정사각형 표지를 첫 쪽으로 골라 다시 400×400 을 만들었음(실서버 기록: src 400x400 → new 400x400 성공)
+ */
+function mc_imgbook_first_page($src) {
+    $src = rtrim((string)$src, '/\\');
+    if ($src === '' || !is_dir($src)) return '';
+    $imgs = [];
+    foreach ((@scandir($src) ?: []) as $n) {
+        if ($n !== '' && $n[0] !== '.' && preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', $n) && !(function_exists('mc_folder_nonpage') && mc_folder_nonpage($n)) && is_file($src . '/' . $n)) $imgs[] = $n;
+    }
+    if (!$imgs) return '';
+    $imgs = array_values(n_sort($imgs));
+    return $src . '/' . $imgs[0];
+}
+}
+if (!function_exists('mc_thumb_fit_needs')) {
+/**
+ * ★ (2026-11-12 17:25 fix128) 썸네일을 원본 비율로 다시 만들어야 하는지 — 0: 그대로 · 1: 옛 방식(표시 없음) · 2: 잘못 만든 정사각형
+ *   2 = 이미지 폴더 책인데 thumb_fit=1 이면서 썸네일이 400×400 이고 첫 쪽은 정사각형이 아님(위 mc_imgbook_first_page 설명의 fix128 전 잘못 — 표지를 첫 쪽으로 씀)
+ *   첫 쪽이 정말 정사각형이면 0(그대로). thumb_fit=-1(전에 실패)은 0
+ */
+function mc_thumb_fit_needs($data, $src, $kind) {
+    if (!is_array($data) || empty($data['thumbnail']) || !is_string($data['thumbnail'])) return 0;
+    if (empty($data['thumb_fit'])) return 1;
+    if ($kind !== 'imgfolder' || (int)$data['thumb_fit'] !== 1) return 0;
+    if (mc_thumb_wh(base64_decode($data['thumbnail'], true)) !== '400x400') return 0;
+    $p = mc_imgbook_first_page($src);
+    $s = ($p !== '') ? @getimagesize($p) : false;
+    if (!$s || empty($s[0]) || empty($s[1])) return 0;
+    return (abs($s[0] / $s[1] - 1) > 0.03) ? 2 : 0;
+}
+}
+if (!function_exists('mc_thumb_fit_source')) {
+/** 표지로 쓸 첫 그림 바이트 — 목록이 처음 썸네일을 만들 때와 같은 그림(이름 자연 정렬 첫 그림). $kind: 'zip'(압축 파일) | 'imgfolder'(이미지 폴더 책) */
+function mc_thumb_fit_source($src, $kind) {
+    if ($kind === 'imgfolder') {
+        $p = mc_imgbook_first_page($src);
+        return ($p === '') ? false : @file_get_contents($p);
+    }
+    if (!is_file($src)) return false;
+    $ext = strtolower(pathinfo($src, PATHINFO_EXTENSION));
+    if ($ext === 'zip' || $ext === 'cbz') {
+        if (!class_exists('ZipArchive') || !function_exists('mc_zip_names')) return false;
+        $zip = new ZipArchive;
+        if ($zip->open($src) !== TRUE) return false;
+        $names = array_values(n_sort(mc_zip_names($zip)));
+        $first = null;
+        foreach ($names as $n) { if (preg_match('/\.(jpg|jpeg|png|gif|webp)$/i', (string)$n)) { $first = $n; break; } }
+        $d = ($first !== null) ? mc_zip_from_name($zip, $first) : false;
+        $zip->close();
+        return $d;
+    }
+    if (in_array($ext, ['rar', 'cbr', '7z', 'cb7'], true) && class_exists('ArchiveHandler')) {
+        try { $h = new ArchiveHandler($src); $d = $h->extractFirstImage(); return ($d === null) ? false : $d; } catch (\Throwable $e) { return false; }
+    }
+    return false;
+}
+}
+// ★ (2026-11-12 16:35, 펜닐 요청 — fix127) 썸네일·표지 기록 — src/perf/thumb_날짜.log 에 한 줄씩(JSON). 속도 기록(mc_perf_enabled)과 같은 조건:
+//   src/perf 폴더가 있고 관리자 설정 '속도 기록 남기기'가 켜져 있을 때만. 하루 20MB·14일 지나면 지움. src/.htaccess 로 웹에서 막힘(.log)
+//   남기는 것: 옛 썸네일 다시 만들기(upgrade) · 목록·관리자가 새로 만든 썸네일(make·regen) · 폴더 자동 표지(folder_auto) ·
+//   뷰어 표지 단추 요청(cover_req) · 옛 표지·실패 썸네일을 그대로 보낸 경우(serve_old). 동작은 바꾸지 않고 기록만
+if (!function_exists('mc_thumb_log')) {
+function mc_thumb_log($ev, array $rec) {
+    try {
+        if (!function_exists('mc_perf_enabled') || !mc_perf_enabled()) return;
+        $dir = __DIR__ . '/src/perf';
+        if (!is_dir($dir)) return;
+        $f = $dir . '/thumb_' . date('Y-m-d') . '.log';
+        if (!is_file($f)) {
+            foreach ((@scandir($dir) ?: []) as $n) {
+                if (preg_match('/^thumb_(\d{4}-\d{2}-\d{2})\.log$/', $n, $m) && strtotime($m[1]) < time() - 14 * 86400) @unlink($dir . '/' . $n);
+            }
+        } elseif ((int)@filesize($f) > 20 * 1024 * 1024) return;
+        $u = preg_replace('/[^a-zA-Z0-9_]/', '', (string)($_SESSION['user_id'] ?? ''));
+        $rec = ['t' => date('Y-m-d H:i:s'), 'ev' => (string)$ev, 'by' => basename((string)($_SERVER['SCRIPT_NAME'] ?? '')), 'user' => $u] + $rec;
+        @file_put_contents($f, json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n", FILE_APPEND | LOCK_EX);
+    } catch (\Throwable $e) {}
+}
+/** 그림 바이트 → '가로x세로'(못 읽으면 '') */
+function mc_thumb_wh($bytes) {
+    if (!is_string($bytes) || $bytes === '') return '';
+    $s = @getimagesizefromstring($bytes);
+    return $s ? ((int)$s[0] . 'x' . (int)$s[1]) : '';
+}
+}
+if (!function_exists('mc_thumb_fit_upgrade')) {
+/**
+ * 옛 정사각형 썸네일을 원본 비율로 한 번만 다시 만듦 — thumb.php 가 그림을 보낼 때 부름
+ *   $json_file: 썸네일이 든 json(압축 '이름.json' / 이미지 폴더 '폴더.image_files.json'), $data: 그 내용, $src: 압축 파일·폴더 경로
+ *   돌려줌: 새 썸네일 바이트(성공) / false(못 만듦 — 'thumb_fit' => -1 을 적어 다시 시도하지 않음, 옛 썸네일 그대로)
+ *   - ★ (2026-11-12 13:00 fix124) json·표지는 임시 파일에 쓴 뒤 이름 바꾸기(safe_json_write 와 같음) — 종전(그 자리 덮어쓰기)은 쓰는 동안 잠금 없이 읽는
+ *     목록이 반쯤 쓰인 내용을 읽을 수 있었고(동시 실행으로 재현), 그러면 목록이 그 json 을 viewer 값만 남겨 다시 써 썸네일·쪽수가 사라질 수 있었음.
+ *     폴더 수정 시각은 바뀌어 폴더 정보 캐시를 한 번 다시 읽음(썸네일마다 한 번뿐). 'N' 표시는 콘텐츠 파일 생성 시각 기준이라 생기지 않음
+ *   - 같은 폴더의 [cover].jpg 가 옛 썸네일과 바이트까지 같으면(= 목록·'자동'이 이 썸네일을 복사해 만든 자동 표지) 새 썸네일로 바꿈. 수동 표지는 그대로
+ */
+function mc_thumb_fit_upgrade($json_file, $data, $src, $kind, $force = false) { // ★ (2026-11-12 17:25 fix128) $force: 잘못 만든 정사각형(mc_thumb_fit_needs 2)도 다시
+    if (!is_array($data) || !is_file($json_file)) return false;
+    $__t0 = microtime(true); // ★ (2026-11-12 16:35 fix127) 기록용(mc_thumb_log) — 아래 동작은 그대로
+    $old = (isset($data['thumbnail']) && is_string($data['thumbnail'])) ? base64_decode($data['thumbnail'], true) : false;
+    $raw = mc_thumb_fit_source($src, $kind);
+    $__lg = ['file' => (string)$src, 'kind' => (string)$kind, 'old' => function_exists('mc_thumb_wh') ? mc_thumb_wh($old) : '', 'src' => (is_string($raw) && $raw !== '' && function_exists('mc_thumb_wh')) ? mc_thumb_wh($raw) : '', 'src_kb' => is_string($raw) ? (int)round(strlen($raw) / 1024) : 0];
+    $new = (is_string($raw) && $raw !== '') ? mc_thumb_fit_from_bytes($raw) : false;
+    if ($new === false) $__lg['why'] = (!is_string($raw) || $raw === '') ? '첫 그림 꺼내기 실패' : ($__lg['src'] === '' ? '그림 형식 못 읽음' : '그림 열기 실패(메모리 부족·손상)');
+    unset($raw);
+    $cur = @json_decode((string)@file_get_contents($json_file), true); // 그사이 다른 요청이 바꿨을 수 있어 다시 읽음
+    if (!is_array($cur)) $cur = $data;
+    if (!$force && !empty($cur['thumb_fit']) && (int)$cur['thumb_fit'] === 1 && !empty($cur['thumbnail'])) {
+        $d = base64_decode((string)$cur['thumbnail'], true);
+        if (function_exists('mc_thumb_log')) mc_thumb_log('upgrade', $__lg + ['res' => '이미 바뀜(다른 요청)', 'ms' => (int)round((microtime(true) - $__t0) * 1000)]);
+        return ($d !== false && $d !== '') ? $d : false;
+    }
+    if ($new === false) {
+        $cur['thumb_fit'] = -1;
+        safe_json_write($json_file, $cur);
+        if (function_exists('mc_thumb_log')) mc_thumb_log('upgrade', $__lg + ['res' => '실패(옛 썸네일 그대로, thumb_fit=-1)', 'mem' => (string)ini_get('memory_limit'), 'ms' => (int)round((microtime(true) - $__t0) * 1000)]);
+        return false;
+    }
+    $cur['thumbnail'] = base64_encode($new);
+    $cur['thumb_fit'] = 1;
+    $__lg['new'] = function_exists('mc_thumb_wh') ? mc_thumb_wh($new) : '';
+    if (!safe_json_write($json_file, $cur)) { if (function_exists('mc_thumb_log')) mc_thumb_log('upgrade', $__lg + ['res' => 'json 저장 실패(이번만 새 그림)', 'ms' => (int)round((microtime(true) - $__t0) * 1000)]); return $new; }
+    if ($force) $__lg['force'] = '잘못 만든 정사각형 다시';
+    // ★ (2026-11-12 17:25 fix128) 이미지 폴더 책은 책 폴더 안 [cover].jpg 가 목록 카드 그림 — 목록이 썸네일과 같은 그림으로 만든 것(옛 썸네일과 같거나, 다시 만들 때 400×400 정사각형)이면 함께 바꿈.
+    //   종전엔 바깥(부모 폴더) 표지만 바꿔서 카드는 계속 잘린 정사각형이었음(실서버 기록: 책마다 '폴더 표지 400x400 그대로 · books 0')
+    if ($kind === 'imgfolder') {
+        $ic = rtrim((string)$src, '/\\') . '/[cover].jpg';
+        $__lg['cover_in'] = '안쪽 표지 없음';
+        if (is_file($ic)) {
+            $icd = (string)@file_get_contents($ic);
+            if ((is_string($old) && $old !== '' && $icd === $old) || ($force && mc_thumb_wh($icd) === '400x400')) {
+                $tmp = $ic . '.tf' . bin2hex(random_bytes(4)) . '.tmp';
+                if (@file_put_contents($tmp, $new, LOCK_EX) === strlen($new)) {
+                    if (!@rename($tmp, $ic)) { @copy($tmp, $ic); @unlink($tmp); }
+                    $__lg['cover_in'] = '안쪽 표지도 바꿈';
+                } else { @unlink($tmp); $__lg['cover_in'] = '안쪽 표지 쓰기 실패'; }
+            } else $__lg['cover_in'] = '안쪽 표지 다른 그림이라 그대로';
+        }
+    }
+    $__lg['cover'] = '표지 없음';
+    if (is_string($old) && $old !== '') {
+        $cf = dirname(rtrim((string)$src, '/\\')) . '/[cover].jpg';
+        if (is_file($cf)) $__lg['cover'] = '다른 표지(수동 등) 그대로';
+        if (is_file($cf) && @filesize($cf) === strlen($old) && @file_get_contents($cf) === $old) {
+            $tmp = $cf . '.tf' . bin2hex(random_bytes(4)) . '.tmp';
+            if (@file_put_contents($tmp, $new, LOCK_EX) === strlen($new)) {
+                if (!@rename($tmp, $cf)) { @copy($tmp, $cf); @unlink($tmp); } // Windows: 있는 파일 위로 이름 바꾸기가 안 되면 복사(safe_json_write 와 같음)
+                $__lg['cover'] = '자동 표지도 바꿈';
+            } else { @unlink($tmp); $__lg['cover'] = '자동 표지 쓰기 실패'; }
+        }
+    }
+    if (function_exists('mc_thumb_log')) mc_thumb_log('upgrade', $__lg + ['res' => '성공', 'ms' => (int)round((microtime(true) - $__t0) * 1000)]);
+    return $new;
+}
+}
+
 /** 폴더 표지를 자동으로 — [cover].jpg 를 지우고, 목록 화면이 처음 만들 때와 같이 첫 압축 파일(이름 순)의 썸네일로 다시 만듦(썸네일이 아직 없으면 목록을 열 때 만들어짐) */
 function mc_folder_cover_auto($dir) {
     $dir = rtrim((string)$dir, '/\\');
     if ($dir === '' || !is_dir($dir)) return false;
     $cf = $dir . '/[cover].jpg';
-    if (is_file($cf) && !@unlink($cf)) return false;
+    $__t0 = microtime(true); // ★ (2026-11-12 16:35 fix127) 기록용(mc_thumb_log)
+    if (is_file($cf) && !@unlink($cf)) { if (function_exists('mc_thumb_log')) mc_thumb_log('folder_auto', ['dir' => $dir, 'res' => '옛 표지 지우기 실패']); return false; }
     $arcs = [];
     foreach ((@scandir($dir) ?: []) as $n) {
         if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $n) && is_file($dir . '/' . $n)) $arcs[] = $n;
@@ -2082,6 +2438,8 @@ function mc_folder_cover_auto($dir) {
         if ($books) {
             foreach (n_sort($books) as $n) {
                 $j = @json_decode((string)@file_get_contents($dir . '/' . $n . '.image_files.json'), true);
+                // ★ (2026-11-12 10:10) 옛 정사각형 썸네일이면 먼저 원본 비율로 다시 만들고 씀
+                if (is_array($j) && function_exists('mc_thumb_fit_needs') && ($__nd = mc_thumb_fit_needs($j, $dir . '/' . $n, 'imgfolder')) > 0) { $__n = mc_thumb_fit_upgrade($dir . '/' . $n . '.image_files.json', $j, $dir . '/' . $n, 'imgfolder', $__nd === 2); /* ★ (2026-11-12 17:25 fix128) 잘못 만든 정사각형도 */ if ($__n !== false) $j['thumbnail'] = base64_encode($__n); }
                 if (is_array($j) && !empty($j['thumbnail']) && is_string($j['thumbnail']) && strlen($j['thumbnail']) > 100) {
                     $d = base64_decode($j['thumbnail'], true);
                     if (is_string($d) && $d !== '') { @file_put_contents($cf, $d, LOCK_EX); break; }
@@ -2090,14 +2448,18 @@ function mc_folder_cover_auto($dir) {
         } elseif (function_exists('mc_media_folder_cover_make')) {
             try { mc_media_folder_cover_make($dir, false); } catch (\Throwable $e) {} // 영상 장면 뽑기(ffmpeg)는 하지 않음 — 응답이 늦어짐. 없으면 목록 배경이 나중에 만듦
         }
+        if (function_exists('mc_thumb_log')) { clearstatcache(true, $cf); mc_thumb_log('folder_auto', ['dir' => $dir, 'from' => $books ? '이미지 폴더 책' : '동영상·문서', 'cover' => is_file($cf) ? mc_thumb_wh((string)@file_get_contents($cf)) : '없음', 'ms' => (int)round((microtime(true) - $__t0) * 1000)]); }
         return true;
     }
     $arcs = n_sort($arcs);
     $j = @json_decode((string)@file_get_contents(get_cache_json_path($dir . '/' . reset($arcs))), true);
+    // ★ (2026-11-12 10:10) 옛 정사각형 썸네일이면 먼저 원본 비율로 다시 만들고 씀
+    if (is_array($j) && !empty($j['thumbnail']) && empty($j['thumb_fit']) && function_exists('mc_thumb_fit_upgrade')) { $__n = mc_thumb_fit_upgrade(get_cache_json_path($dir . '/' . reset($arcs)), $j, $dir . '/' . reset($arcs), 'zip'); if ($__n !== false) $j['thumbnail'] = base64_encode($__n); }
     if (is_array($j) && !empty($j['thumbnail']) && is_string($j['thumbnail']) && strlen($j['thumbnail']) > 100) {
         $d = base64_decode($j['thumbnail'], true);
         if (is_string($d) && $d !== '') @file_put_contents($cf, $d, LOCK_EX);
     }
+    if (function_exists('mc_thumb_log')) { clearstatcache(true, $cf); mc_thumb_log('folder_auto', ['dir' => $dir, 'from' => (string)reset($arcs), 'thumb_fit' => (is_array($__jj = @json_decode((string)@file_get_contents(get_cache_json_path($dir . '/' . reset($arcs))), true))) ? ($__jj['thumb_fit'] ?? '없음') : 'json 없음', 'cover' => is_file($cf) ? mc_thumb_wh((string)@file_get_contents($cf)) : '없음(썸네일 없음 — 목록을 열면 만들어짐)', 'ms' => (int)round((microtime(true) - $__t0) * 1000)]); }
     return true;
 }
 if (!function_exists('mc_media_cover_pick')) {
@@ -2251,11 +2613,11 @@ function mc_doc_cover_btn($getfile, $bidx, $class = '', $page = false) {
         . 'm.style.left=Math.max(8,Math.min(r.right-w,vw-w-8))+"px";m.style.top=((r.bottom+4+h>vh&&r.top-4-h>0)?(r.top-4-h):(r.bottom+4))+"px";};'
         . 'document.addEventListener("click",function(e){document.querySelectorAll(".mc-dcv-menu").forEach(function(m){if(!m.hidden&&!(e.target.closest&&e.target.closest(".mc-dcv")===m.parentNode))m.hidden=true;});});'
         . 'window.addEventListener("scroll",function(){document.querySelectorAll(".mc-dcv-menu").forEach(function(m){m.hidden=true;});},true);' // 화면 기준 메뉴라 스크롤하면 닫음
-        . 'function bump(w,k){try{localStorage.setItem("mc_cover_bump",JSON.stringify({t:Date.now(),f:w.getAttribute("data-file"),d:w.getAttribute("data-dir"),k:k}));}catch(e){}}'
+        . 'function bump(w,k){var n={t:Date.now(),f:w.getAttribute("data-file"),d:w.getAttribute("data-dir"),k:k};if(window.mcCoverBumpPut)return window.mcCoverBumpPut(n);try{localStorage.setItem("mc_cover_bump",JSON.stringify(n));}catch(e){}}' // ★ (2026-11-12 13:49 fix125) 앞 알림도 함께(mcCoverBumpPut)
         // ★ (2026-11-08 fix81) 원래 모양은 innerHTML 로 되돌림 — 아이콘 스크립트(mc-icons.js)가 🖼️ 를 SVG 로 바꿔 글자(textContent)가 비어, 누른 뒤 단추가 빈칸이 되던 것
         . 'function run(w,p,k){var b=w.querySelector("button"),h0=b.innerHTML,l0=b.title;b.disabled=true;b.textContent="…";'
-        . 'p.then(function(r){return r.text().then(function(t){if(r.ok&&k)bump(w,k);b.textContent=r.ok?"✓":"✕";b.title=String(t||"").slice(0,80);});})'
-        . '.catch(function(){b.textContent="✕";}).then(function(){setTimeout(function(){b.innerHTML=h0;b.title=l0;b.disabled=false;},2500);});}'
+        . 'var q=p.then(function(r){return r.text().then(function(t){if(r.ok&&k)bump(w,k);b.textContent=r.ok?"✓":"✕";b.title=String(t||"").slice(0,80);});})'
+        . '.catch(function(){b.textContent="✕";});if(window.mcCoverTrack)window.mcCoverTrack(q);q.then(function(){setTimeout(function(){b.innerHTML=h0;b.title=l0;b.disabled=false;},2500);});}' // ★ (2026-11-12 13:49 fix125) 저장 중엔 ← 가 기다림(mcCoverTrack)
         . 'function post(w,mode,img,tg){var f=new FormData();f.append("mode",mode);f.append("file",w.getAttribute("data-file"));f.append("csrf_token",w.getAttribute("data-csrf"));if(img)f.append("image",img);if(tg==="file")f.append("target","file");'
         . 'return fetch("bookmark.php?bidx="+(+w.getAttribute("data-bidx")||0),{method:"POST",body:f,credentials:"same-origin"});}'
         . 'function shrink(src,cb){var im=new Image();im.onload=function(){try{var w=im.naturalWidth,h=im.naturalHeight;if(!w||!h)return cb(null);var s=Math.min(1,1000/h),c=document.createElement("canvas");c.width=Math.max(1,Math.round(w*s));c.height=Math.max(1,Math.round(h*s));var x=c.getContext("2d");x.fillStyle="#fff";x.fillRect(0,0,c.width,c.height);x.drawImage(im,0,0,c.width,c.height);cb(c.toDataURL("image/jpeg",0.88));}catch(e){cb(null);}};im.onerror=function(){cb(null);};im.src=src;}'
@@ -2277,6 +2639,63 @@ function mc_media_folder_cover_make($dir, $allow_ffmpeg = true) {
     if (!is_array($pick)) return false;
     $data = isset($pick['data']) ? $pick['data'] : @file_get_contents($pick['file']);
     return is_string($data) && mc_write_folder_cover($dir, $data);
+}
+}
+if (!function_exists('mc_folder_cover_try')) {
+/**
+ * ★ (2026-11-13 11:19, 펜닐 제보 — fix142) 표지가 없는 폴더에 지금 표지를 만들어 봄 — 목록의 빈 폴더 카드가 새로고침 없이 표지를 받으려고(thumb.php type=cover&mk=1)
+ *   이미 [cover].jpg 가 있으면 그대로(지우지 않음 — 직접 넣은 표지일 수 있음). 만드는 규칙은 지금 있는 것과 같음:
+ *   압축 책 폴더 → 이름순으로 썸네일이 있는 첫 책의 썸네일(목록 화면이 폴더를 열 때 만드는 것과 같은 자료) · 이미지 폴더 책 → 첫 책 썸네일(mc_folder_cover_auto 와 같음)
+ *   동영상·문서 폴더 → mc_media_folder_cover_make(배경 갱신과 같음 — 영상 썸네일이 없으면 ffmpeg 로 한 번)
+ *   압축 책의 썸네일 자체는 여기서 만들지 않음(폴더를 열 때 목록 화면이 만듦) — 없으면 false(화면이 나중에 다시 물음)
+ */
+function mc_folder_cover_try($dir) {
+    $dir = rtrim((string)$dir, '/\\');
+    if ($dir === '' || !is_dir($dir)) return false;
+    $cf = $dir . '/[cover].jpg';
+    if (is_file($cf) && filesize($cf) > 0) return true;
+    $arcs = []; $books = [];
+    foreach ((@scandir($dir) ?: []) as $n) {
+        if ($n === '' || $n[0] === '.') continue;
+        if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $n) && is_file($dir . '/' . $n)) $arcs[] = $n;
+        elseif (is_dir($dir . '/' . $n) && is_file($dir . '/' . $n . '.image_files.json')) $books[] = $n;
+    }
+    $put = function ($b64) use ($cf) {
+        if (!is_string($b64) || strlen($b64) <= 100) return false;
+        $d = base64_decode($b64, true);
+        if (!is_string($d) || $d === '') return false;
+        clearstatcache(true, $cf);
+        if (is_file($cf) && filesize($cf) > 0) return true; // 그사이 다른 요청이 만들었으면 그대로
+        return @file_put_contents($cf, $d, LOCK_EX) !== false;
+    };
+    if ($arcs) {
+        foreach (array_slice(n_sort($arcs), 0, 30) as $n) { // 앞쪽 30권까지만(책이 아주 많은 폴더에서 매번 정보 파일을 다 읽지 않게)
+            $j = @json_decode((string)@file_get_contents(get_cache_json_path($dir . '/' . $n)), true);
+            if (is_array($j) && $put($j['thumbnail'] ?? null)) break;
+        }
+    } elseif ($books) {
+        foreach (array_slice(n_sort($books), 0, 30) as $n) { // 앞쪽 30권까지만(책이 아주 많은 폴더에서 매번 정보 파일을 다 읽지 않게)
+            $j = @json_decode((string)@file_get_contents($dir . '/' . $n . '.image_files.json'), true);
+            if (is_array($j) && $put($j['thumbnail'] ?? null)) break;
+        }
+    } elseif (function_exists('mc_media_folder_cover_make')) {
+        // 쓸 그림이 없던 폴더(깨진 영상 등)는 폴더가 바뀔 때까지 ffmpeg 를 다시 돌리지 않음 — 배경 갱신(mc_media_covers_all)과 같은 기록(src/media_cover_none.json)·같은 열쇠를 같이 씀
+        $__memo_f = __DIR__ . '/src/media_cover_none.json';
+        $__memo = is_file($__memo_f) ? json_decode((string)@file_get_contents($__memo_f), true) : [];
+        if (!is_array($__memo)) $__memo = [];
+        $__ff = (string)($GLOBALS['ffmpeg_path'] ?? '');
+        $__key = (int)@filemtime($dir) . '|' . (($__ff !== '' && is_file($__ff)) ? 'f' : 'n');
+        if (isset($__memo[$dir]) && (string)$__memo[$dir] === $__key) return false;
+        $__ok = false;
+        try { $__ok = mc_media_folder_cover_make($dir, true); } catch (\Throwable $e) {}
+        clearstatcache(true, $dir);
+        if (!$__ok && !is_file($cf) && mc_media_cover_pick($dir, false) === false) { // 동영상·문서는 있는데 쓸 그림이 없음 → 기록
+            $__memo[$dir] = (int)@filemtime($dir) . '|' . (($__ff !== '' && is_file($__ff)) ? 'f' : 'n');
+            @file_put_contents($__memo_f, json_encode($__memo, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), LOCK_EX);
+        }
+    }
+    clearstatcache(true, $cf);
+    return is_file($cf) && filesize($cf) > 0;
 }
 }
 if (!function_exists('mc_media_covers_all')) {

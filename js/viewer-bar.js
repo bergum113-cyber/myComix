@@ -65,12 +65,13 @@
 
   // ── 알림(짧게) ──
   var toastT = 0;
-  function toast(msg) {
+  function toast(msg, hold) {
     var el = $id('mcvToast'); if (!el || !msg) return;
     el.textContent = String(msg);
     el.classList.add('mcv-show');
     clearTimeout(toastT);
-    toastT = setTimeout(function () { el.classList.remove('mcv-show'); }, String(msg).length > 30 ? 4000 : 2200); // ★ (2026-11-03 01:24) 긴 안내(책갈피는 하나만 남음)는 조금 더 오래
+    // ★ (2026-11-12 15:33, 펜닐 제보 — fix126) hold: 진행 중 안내('설정중...')는 다음 안내가 올 때까지(최대 30초) 그대로 — 종전엔 2.2초 뒤 사라져, 저장이 늦으면 빈 화면 뒤에 '설정됨'이 따로 떴음
+    toastT = setTimeout(function () { el.classList.remove('mcv-show'); }, hold || (String(msg).length > 30 ? 4000 : 2200)); // ★ (2026-11-03 01:24) 긴 안내(책갈피는 하나만 남음)는 조금 더 오래
   }
   // 기존 함수들은 결과를 숨은 #info 칸에 적음 → 바뀌면 알림으로 보여 줌
   function watchInfo(run, max) { // ★ (2026-11-11 07:59 fix111) max: 기다릴 횟수(0.1초 단위, 기본 40=4초) — 표지는 서버 응답이 늦으면 4초가 지나 결과 알림이 안 떴음(펜닐: 반응이 없음)
@@ -85,7 +86,7 @@
       if (v && v !== last) {
         last = v;
         var m = /^#(\d+)-OK$/.exec(v); // 책갈피 저장 응답 '#번호-OK' → 알아보기 쉬운 문구로
-        toast(m ? String(T.saved || '').replace('%s', parseInt(m[1], 10) + 1) : v);
+        toast(m ? String(T.saved || '').replace('%s', parseInt(m[1], 10) + 1) : v, (!m && window._vi18n && v === window._vi18n.setting) ? 30000 : 0); // ★ (2026-11-12 15:33 fix126) '설정중...'은 결과가 올 때까지
         // ★ (2026-11-03 00:10) 메뉴의 책갈피 상태도 바로('책갈피 · N쪽 저장됨')
         if (m) { var bl = $id('mcvBmLbl'), bb = $id('mcvBm'); if (bl && T.bm_at) bl.textContent = String(T.bm_at).replace('%s', parseInt(m[1], 10) + 1); if (bb) bb.classList.add('mcv-on'); }
       }
@@ -132,6 +133,7 @@
     if (openBtn) openBtn.setAttribute('aria-expanded', 'false');
     openPop = null; openBtn = null;
   }
+  window.mcvClosePop = closePop; // ★ (2026-11-13 00:07 fix133) 쪽 목록(js/mcv-pages.js)을 열 때 쪽 번호 창을 닫음
   function togglePop(btn, pop) {
     if (!btn || !pop) return;
     if (openPop === pop) { closePop(); return; }
@@ -462,6 +464,8 @@
       var inst = lg(), n = slideCount(inst);
       if (typeof idx !== 'number') idx = (inst && typeof inst.index === 'number') ? inst.index : 0;
       if (pos && n) pos.textContent = (idx + 1) + ' / ' + n;
+      // ★ (2026-11-14 02:25 fix154) 북모드 진행 줄 채움(툰모드와 같은 셈 — 쪽 수 기준이 아니라 장 수 기준: 펼침 보기면 장 = 두 쪽)
+      try { var pi = document.querySelector('#mcvProg i'); if (pi && n) pi.style.width = Math.max(0, Math.min(100, Math.floor((idx + 1) / n * 100))) + '%'; } catch (e) {}
     }
     if (window.jQuery) {
       var $ = window.jQuery;

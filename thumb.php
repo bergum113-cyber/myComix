@@ -241,6 +241,11 @@ if ($type === 'auto') {
 if ($type === 'cover') {
     // [cover].jpg 직접 출력
     $cover_file = $filepath . '/[cover].jpg';
+    // ★ (2026-11-13 11:19, 펜닐 제보 — fix142) 목록의 빈 폴더 카드가 묻는 요청(mk=1)이면 표지를 지금 만들어 봄(mc_folder_cover_try — 있으면 그대로) → 새로고침 없이 표지가 보이게
+    if (!is_file($cover_file) && !empty($_GET['mk']) && is_dir($filepath) && function_exists('mc_folder_cover_try')) {
+        try { mc_folder_cover_try($filepath); } catch (\Throwable $e) {}
+        clearstatcache(true, $cover_file);
+    }
     
     if (!is_file($cover_file)) {
         output_placeholder_image();  // ✅ 404 대신 placeholder
@@ -249,6 +254,54 @@ if ($type === 'cover') {
     $thumbnail = @file_get_contents($cover_file);
     if ($thumbnail === false) {
         output_placeholder_image();  // ✅ 500 대신 placeholder
+    }
+    // ★ (2026-11-12 10:10, 펜닐 요청) 옛 자동 표지(400×400 정사각형 — 책 썸네일을 그대로 복사한 것)면 그 책 썸네일을 원본 비율로 다시 만들고
+    //   표지도 함께 바꿈(mc_thumb_fit_upgrade 가 바이트가 같은 [cover].jpg 만 바꿈 — 수동 표지는 그대로). 앞쪽 책 30권까지만 봄
+    $__cs = @getimagesizefromstring($thumbnail);
+    if ($__cs && (int)$__cs[0] === 400 && (int)$__cs[1] === 400 && function_exists('mc_thumb_fit_upgrade')) {
+        $__arcs = []; $__books = [];
+        foreach ((@scandir($filepath) ?: []) as $__n) {
+            if ($__n === '' || $__n[0] === '.') continue;
+            if (preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $__n) && is_file($filepath . '/' . $__n)) $__arcs[] = $__n;
+            elseif (is_dir($filepath . '/' . $__n) && is_file($filepath . '/' . $__n . '.image_files.json')) $__books[] = $__n;
+        }
+        $__cands = [];
+        foreach (array_slice(array_values(n_sort($__arcs)), 0, 30) as $__n) $__cands[] = [get_cache_json_path($filepath . '/' . $__n), $filepath . '/' . $__n, 'zip'];
+        foreach (array_slice(array_values(n_sort($__books)), 0, 30) as $__n) $__cands[] = [$filepath . '/' . $__n . '.image_files.json', $filepath . '/' . $__n, 'imgfolder'];
+        foreach ($__cands as $__c) {
+            $__j = is_file($__c[0]) ? @json_decode((string)@file_get_contents($__c[0]), true) : null;
+            if (!is_array($__j) || empty($__j['thumbnail']) || !is_string($__j['thumbnail'])) continue;
+            if (base64_decode($__j['thumbnail'], true) !== $thumbnail) continue;
+            $__mf = (int)($__j['thumb_fit'] ?? 0); // ★ fix127 기록용 — 이미 원본 비율(1)인 정사각 그림이면 기록하지 않음
+            // ★ (2026-11-12 17:26 fix128) 잘못 만든 정사각형(이미지 폴더 책 — function.php mc_thumb_fit_needs 2)도 다시 만듦
+            $__nd = function_exists('mc_thumb_fit_needs') ? mc_thumb_fit_needs($__j, $__c[1], $__c[2]) : (empty($__j['thumb_fit']) ? 1 : 0);
+            if ($__nd > 0) { $__nw = mc_thumb_fit_upgrade($__c[0], $__j, $__c[1], $__c[2], $__nd === 2); if ($__nw !== false) { $thumbnail = $__nw; $__mf = 1; } }
+            break;
+        }
+        // ★ (2026-11-12 17:26, 펜닐 로그 — fix128) 이 폴더가 이미지 폴더 책이면(옆에 '폴더.image_files.json') 이 [cover].jpg 는 목록이 그 책 썸네일로 만든 카드 그림 —
+        //   그 책 썸네일을 원본 비율로 다시 만들며 함께 바꾸고(mc_thumb_fit_upgrade 가 안쪽 표지도 바꿈), 썸네일은 이미 바뀌었는데 안쪽 표지만 옛 정사각형이면 썸네일로 바꿈
+        //   종전엔 책 폴더 안에서 다른 책을 찾다가(books 0) 그대로 보내 이미지 폴더 책 카드가 계속 잘렸음
+        // ★ (2026-11-12 18:53 fix129) 진짜 이미지 폴더 책일 때만 — 안에 다른 책(압축·이미지 폴더 책)이 없고 쪽 그림이 있을 때. 종전(fix128)엔 책이 든 보통 폴더라도
+        //   옆에 예전 정보 파일(그림 폴더였던 흔적)이 남아 있으면 직접 넣은 400×400 표지를 그 옛 썸네일로 덮어썼음(재현)
+        if (!isset($__mf) && !$__cands && mc_thumb_wh($thumbnail) === '400x400' && is_file($filepath . '.image_files.json') && function_exists('mc_thumb_fit_needs') && function_exists('mc_imgbook_first_page') && mc_imgbook_first_page($filepath) !== '') {
+            $__sjf = $filepath . '.image_files.json';
+            $__sj = @json_decode((string)@file_get_contents($__sjf), true);
+            $__nd = is_array($__sj) ? mc_thumb_fit_needs($__sj, $filepath, 'imgfolder') : 0;
+            if ($__nd > 0) {
+                $__nw = mc_thumb_fit_upgrade($__sjf, $__sj, $filepath, 'imgfolder', $__nd === 2);
+                if ($__nw !== false) { clearstatcache(true, $cover_file); $__cd = @file_get_contents($cover_file); $thumbnail = ($__cd !== false && $__cd !== '') ? $__cd : $__nw; $__mf = 1; }
+            } elseif (is_array($__sj) && (int)($__sj['thumb_fit'] ?? 0) === 1 && !empty($__sj['thumbnail'])) {
+                $__st = base64_decode((string)$__sj['thumbnail'], true);
+                if (is_string($__st) && mc_thumb_wh($__st) === '400x400') $__mf = 1; // 첫 쪽이 정말 정사각형(바꿀 것 없음) — 옛 그림 기록(serve_old)에서 뺌
+                if (is_string($__st) && $__st !== '' && mc_thumb_wh($__st) !== '' && mc_thumb_wh($__st) !== '400x400') {
+                    $__tmp = $cover_file . '.tf' . bin2hex(random_bytes(4)) . '.tmp';
+                    if (@file_put_contents($__tmp, $__st, LOCK_EX) === strlen($__st)) { if (!@rename($__tmp, $cover_file)) { @copy($__tmp, $cover_file); @unlink($__tmp); } $thumbnail = $__st; $__mf = 1; } else { @unlink($__tmp); }
+                    if (function_exists('mc_thumb_log')) mc_thumb_log('upgrade', ['file' => (string)$cover_file, 'kind' => 'imgfolder 안쪽 표지', 'old' => '400x400', 'new' => mc_thumb_wh($__st), 'res' => isset($__mf) ? '성공(바뀐 썸네일로)' : '쓰기 실패']);
+                }
+            }
+        }
+        // ★ (2026-11-12 16:36, 펜닐 요청 — fix127) 그래도 400×400 그대로 보내면 기록(src/perf/thumb_날짜.log) — 어느 책 썸네일과도 같지 않은 옛 표지 등. 동작은 그대로
+        if (function_exists('mc_thumb_log') && (int)($__mf ?? 0) !== 1 && mc_thumb_wh($thumbnail) === '400x400') mc_thumb_log('serve_old', ['file' => (string)$cover_file, 'what' => isset($__mf) ? '폴더 표지 400x400 그대로(같은 책 썸네일 다시 만들기 실패)' : '폴더 표지 400x400 그대로(같은 썸네일인 책을 앞 30권에서 못 찾음)', 'books' => count($__cands)]);
     }
     
 } elseif ($type === 'book') {
@@ -303,6 +356,14 @@ if ($type === 'cover') {
     if ($thumbnail === false) {
         output_placeholder_image();  // ✅ 디코딩 실패 시 placeholder
     }
+    // ★ (2026-11-12 10:10, 펜닐 요청) 옛 정사각형 썸네일이면 한 번만 원본 비율로 다시 만듦
+    $__nd = function_exists('mc_thumb_fit_needs') ? mc_thumb_fit_needs($data, $filepath, 'imgfolder') : (empty($data['thumb_fit']) ? 1 : 0); // ★ (2026-11-12 17:26 fix128) 잘못 만든 정사각형도
+    if ($__nd > 0 && function_exists('mc_thumb_fit_upgrade') && is_dir($filepath)) {
+        $__nw = mc_thumb_fit_upgrade($json_file, $data, $filepath, 'imgfolder', $__nd === 2);
+        if ($__nw !== false) $thumbnail = $__nw;
+    } elseif (isset($data['thumb_fit']) && (int)$data['thumb_fit'] === -1 && function_exists('mc_thumb_log')) {
+        mc_thumb_log('serve_old', ['file' => (string)$filepath, 'what' => '전에 다시 만들기 실패(thumb_fit=-1) — 옛 썸네일 ' . mc_thumb_wh($thumbnail)]); // ★ (2026-11-12 16:36 fix127)
+    }
     
 } else {
     // ZIP/RAR/7Z 파일: 파일명.json (확장자 제거)
@@ -353,6 +414,13 @@ if ($type === 'cover') {
     $thumbnail = base64_decode($data['thumbnail']);
     if ($thumbnail === false) {
         output_placeholder_image();  // ✅ 디코딩 실패 시 placeholder
+    }
+    // ★ (2026-11-12 10:10, 펜닐 요청) 옛 정사각형 썸네일이면 한 번만 원본 비율로 다시 만듦(압축 파일만 — 다른 형식의 json 은 건드리지 않음)
+    if (empty($data['thumb_fit']) && function_exists('mc_thumb_fit_upgrade') && preg_match('/\.(zip|cbz|rar|cbr|7z|cb7)$/i', $filepath)) {
+        $__nw = mc_thumb_fit_upgrade($json_file, $data, $filepath, 'zip');
+        if ($__nw !== false) $thumbnail = $__nw;
+    } elseif (isset($data['thumb_fit']) && (int)$data['thumb_fit'] === -1 && function_exists('mc_thumb_log')) {
+        mc_thumb_log('serve_old', ['file' => (string)$filepath, 'what' => '전에 다시 만들기 실패(thumb_fit=-1) — 옛 썸네일 ' . mc_thumb_wh($thumbnail)]); // ★ (2026-11-12 16:36 fix127)
     }
 }
 

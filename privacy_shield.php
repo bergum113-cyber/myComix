@@ -259,6 +259,7 @@ $_debug = $_privacy_settings['debug'] ?? false;
           if (_h) rurl = location.pathname + location.search + _h;
         }
       } catch(e2) {}
+      try { if (window.mcBackLog) window.mcBackLog('blank_go', { forced: forced ? 1 : 0 }); } catch(e3) {} // ★ (2026-11-12 20:02 fix130) 기록만(src/perf/back_날짜.log)
       location.replace(BLANK_URL + '?return=' + encodeURIComponent(rurl));
     } catch(e) {
       debugLog('error: ' + e.message);

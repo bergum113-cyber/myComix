@@ -251,7 +251,7 @@ if ($_mc_thumb_css !== ''): ?>
 <?php else: ?>
   <div id="favShelf" class="fav-grid">
 <?php foreach ($items as $it): ?>
-    <div class="fav-item<?php echo $it['missing'] ? ' is-missing' : ''; ?>"
+    <div class="fav-item<?php echo $it['missing'] ? ' is-missing' : ''; ?>"<?php if (!$it['missing']) echo ' data-mcli="' . (int)$it['bidx'] . '|' . h($it['path']) . '"'; /* ★ (2026-11-12 21:19 fix131) 목록 보기 정보 줄(js/mc-list-info.js) */ ?>
          data-no="<?php echo (int)$it['no']; ?>"
          data-added="<?php echo (int)$it['added']; ?>"
          data-name="<?php echo $it['title']; ?>">
@@ -550,18 +550,7 @@ if ($_mc_thumb_css !== ''): ?>
   }
   // 돌아가기: 목록(index.php)에서 들어왔으면 뒤로가기(브라우저가 보관한 페이지를 바로 복원 → 다시 불러오지 않아 빠르고 보던 폴더·스크롤 그대로).
   // 직접 열었거나 다른 곳에서 왔으면 기존처럼 목록 첫 화면으로 이동.
-  var back = document.getElementById('favBack');
-  if (back) {
-    back.addEventListener('click', function (ev) {
-      try {
-        var ref = document.referrer ? new URL(document.referrer) : null;
-        if (ref && ref.origin === location.origin && /\/index\.php$/.test(ref.pathname) && history.length > 1) {
-          ev.preventDefault();
-          history.back();
-        }
-      } catch (e) { /* 실패 시 링크 그대로 이동 */ }
-    });
-  }
+  // ★ (2026-11-12 23:11 fix132) 누를 때 처리는 mc_up_back_js(아래) — 들어오기 전 폴더로(서재·북마크 탭·뷰어를 오간 뒤에도. 예전엔 바로 앞이 목록일 때만 그 폴더, 아니면 목록 첫 화면)
 })();
 </script>
 <?php if (function_exists('mc_lib_scroll_script')) echo mc_lib_scroll_script(); /* ★ (2026-11-02 17:17) 뒤로가기·새로고침·다른 탭/앱 갔다 와서도 보던 위치(쪽 번호는 원래 주소에) */ ?>
@@ -570,6 +559,11 @@ if ($_mc_thumb_css !== ''): ?>
 <?php require_once __DIR__ . '/privacy_shield.php'; // 관리자 설정 '모바일 화면 가림 대상'에 체크한 경우에만 동작 ?>
 <?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
 <?php if (function_exists('mc_perf_script')) echo mc_perf_script('favorites'); // ★ (2026-11-03 14:10) 속도 기록(src/perf) ?>
+<?php if (function_exists('mc_up_back_js')) echo mc_up_back_js('favBack', 'I'); /* ★ (2026-11-12 23:11 fix132) ← = 들어오기 전 폴더(서재·북마크 탭을 오가도·뷰어에서 돌아와도) */ ?>
 <?php if (function_exists('mc_back_origin_list_js')) echo mc_back_origin_list_js(); /* ★ (2026-11-05) 뷰어 뒤로가기가 이 화면(주소·스크롤 위치)으로 돌아오게 — function.php */ ?>
+<?php /* ★ (2026-11-12 11:16, 펜닐 요청) 표지를 목록 화면과 같게 — 잘리지 않게 + 흐린 배경(js/mc-thumb-fit.js) */ ?>
+<script src="js/mc-thumb-fit.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-thumb-fit.js'); ?>"></script>
+<script src="js/mc-seen.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-seen.js'); /* ★ (2026-11-14 16:45 fix158) 폴더 목록처럼 hover 청록·본 항목 회색 */ ?>" data-hold="<?php echo function_exists('get_app_settings') ? (float)max(0, (float)get_app_settings('viewed_mark_seconds', 2)) : 2; /* ★ (2026-11-14 17:32 fix159) 돌아온 항목 주황 테두리 유지 시간(관리자 '복귀 표시 유지 시간') */ ?>"></script>
+<?php if (function_exists('mc_list_info_script')) echo mc_list_info_script(); /* ★ (2026-11-12 21:20 fix131) 목록 보기에서 제목 아래 작가·태그·쪽수(js/mc-list-info.js) */ ?>
 </body>
 </html>

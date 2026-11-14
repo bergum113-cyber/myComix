@@ -1698,6 +1698,12 @@ if (get_param('mc_bg', 'string') === '1' && isset($_SESSION['user_id'])) {
 		.card-img.loaded, .card-img[src^="data:"] {
 			opacity: 1;
 		}
+		/* ★ (2026-11-12 10:12, 펜닐 요청 — 시안 C) 파일 썸네일: 그림 전체가 보이게(contain) + 남는 칸은 같은 그림을 흐리게 깔아 채움(맨 위 배너와 같은 방식)
+		   스크립트(아래 mcThumbFit)가 그림이 다 받아진 카드에만 .mc-thfit·.mc-thbg 를 붙임 — 스크립트가 없으면 예전 모양 그대로 */
+		html body .grid .card img.card-img-top.mc-thfit { object-fit: contain !important; object-position: center !important; background: transparent !important; }
+		.grid .card.mc-thhost { isolation: isolate; } /* 흐린 배경(z-index:-1)이 카드 바탕 위·그림 아래에 오게 */
+		.grid .card > .mc-thbg { position: absolute; z-index: -1; overflow: hidden; pointer-events: none; }
+		.grid .card > .mc-thbg > img { position: absolute; left: -15%; top: -15%; width: 130%; height: 130%; max-width: none; object-fit: cover; filter: blur(14px) brightness(.85); }
 		/* ★ (2026-10-29) 동영상 썸네일이 없을 때의 아이콘 칸(div.card-img)은 이미지가 아니라 load 이벤트가 없어
 		   opacity:0 으로 계속 숨겨져 있던 문제 → div 는 처음부터 표시(이미지 썸네일의 페이드인은 그대로) */
 		div.card-img {
@@ -2298,6 +2304,15 @@ if (get_param('mc_bg', 'string') === '1' && isset($_SESSION['user_id'])) {
 			display: inline-flex; align-items: center; justify-content: center; min-width: 0;
 			font-size: calc(var(--mc-lbfs) * .88); line-height: 1; height: calc(var(--mc-lbfs) * 1.72); padding: 0 calc(var(--mc-lbfs) * .78);
 		}
+		/* ★ (2026-11-13 01:04, 펜닐 요청 — fix136) 목록 보기 배지(쪽수·[ - ]·toon 등)를 제목 글자 크기에 맞춰 작게 — 펜닐이 시안 C(지금 글꼴 그대로, 작게) 고름.
+		   종전엔 목록 썸네일 폭 비례(10.5~12.5px)라 제목(기본 Dongle)보다 크고 굵어 보였음. 이제 제목 크기 × 0.455(기본 22px → 10px), 10~14px 사이,
+		   알약 위아래 여백도 줄임(높이 = 글자 × 1.6). 휴대폰은 제목처럼 17px 상한 기준. 폴더 칩·N 도 '파일 줄 배지와 같은 크기' 규칙 그대로 같이 따라감 */
+		html.mc-list-view .grid { --mc-ltfs: <?php echo (int)$list_font_size; ?>px; }
+		@media (max-width: 576px) { html.mc-list-view .grid { --mc-ltfs: min(<?php echo (int)$list_font_size; ?>px, 17px); } }
+		html.mc-list-view .grid .card:has(> .card-img-overlay) > .card-img-overlay { --mc-lbfs: clamp(10px, calc(var(--mc-ltfs) * .455), 14px); }
+		html.mc-list-view .grid .card:has(> .card-img-overlay) > .card-img-overlay .badge:not(.badge-danger) { font-size: var(--mc-lbfs); line-height: 1.2; padding: .2em .5em; }
+		html.mc-list-view .grid .card:has(> .card-img-overlay) > .card-img-overlay .badge.badge-danger { height: calc(var(--mc-lbfs) * 1.6); }
+		html.mc-list-view .grid .card.mc-folder-card .mc-fchips.mc-fchips { --mc-fc: clamp(10px, calc(var(--mc-ltfs) * .455), 14px); --mc-fch: calc(var(--mc-fc) * 1.6); }
 		/* 목록 보기: 동영상 재생 아이콘은 원래대로 제목 글자 크기(1em) — 아이콘 칸을 그 크기로(줄이지 않음) */
 		html.mc-list-view .grid .card:has(> .card-body > .mc-ci:first-child > svg.bi-play-circle) { --mc-ci-box: <?php echo (int)$list_font_size; ?>px; }
 		@media (max-width: 576px) { html.mc-list-view .grid .card:has(> .card-body > .mc-ci:first-child > svg.bi-play-circle) { --mc-ci-box: min(<?php echo (int)$list_font_size; ?>px, 17px); } } /* 휴대폰 목록 제목 글자 상한(17px)과 같게 */
@@ -3591,9 +3606,11 @@ function generate_thumbnail_cache_streaming($base_dir, $force = false, $recursiv
                             'totalpage' => count($image_files),
                             'page_order' => '0',
                             'viewer' => 'toon',
-                            'thumbnail' => base64_encode($thumbnail_data)
+                            'thumbnail' => base64_encode($thumbnail_data),
+                            'thumb_fit' => 1 // ★ 관리자 재생성은 전부터 원본 비율 — 표시만(thumb.php 가 다시 만들지 않게)
                         ];
                         @file_put_contents($json_file, json_encode($cache_data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+                        if (function_exists('mc_thumb_log')) mc_thumb_log('regen', ['file' => (string)$json_file, 'new' => mc_thumb_wh($thumbnail_data)]); // ★ (2026-11-12 16:36 fix127) 관리자 재생성 기록
                         $created++;
                     }
                 }
@@ -5078,9 +5095,11 @@ function generate_all_zip_metadata($base_dir, $force = false) {
                                 'totalpage' => count($image_files),
                                 'page_order' => '0',
                                 'viewer' => 'toon',
-                                'thumbnail' => base64_encode($thumbnail_data)
+                                'thumbnail' => base64_encode($thumbnail_data),
+                                'thumb_fit' => 1 // ★ 관리자 재생성은 전부터 원본 비율 — 표시만(thumb.php 가 다시 만들지 않게)
                             ];
                             @file_put_contents($json_file, json_encode($cache_data, JSON_UNESCAPED_UNICODE), LOCK_EX);
+                            if (function_exists('mc_thumb_log')) mc_thumb_log('regen', ['file' => (string)$json_file, 'new' => mc_thumb_wh($thumbnail_data)]); // ★ (2026-11-12 16:36 fix127) 관리자 재생성 기록
                             
                             // [cover].jpg 생성 - 폴더 내 첫 번째 유효한 ZIP에서만 생성
                             if (!$cover_created && !file_exists($cover_file)) {
@@ -7067,11 +7086,11 @@ mcSyncViewToggle();
 <?php if ($is_admin): ?>
 <?php // ★ (2026-10-30) 관리자 도구 묶음 — 휴대폰 세로(576px 이하)에서는 ⋯ 메뉴 안(🏷️ 버튼도 library_index_inject 가 🗑️ 바로 뒤, 같은 묶음에 넣음) ?>
 <span class="mc-tools" id="mcTools">
-<!-- 관리자 전용 버튼 (모바일/태블릿 숨김) -->
-<button type="button" class="btn btn-sm btn-outline-success ml-2 p-1 d-none d-lg-inline-block" onclick="openCreateFolderModal()" title="<?php echo __h('ui_new_folder'); ?>" aria-label="<?php echo __h('ui_new_folder'); ?>"><?php echo mc_ui_icon('folder-plus', 18); ?></button>
+<!-- 관리자 전용 버튼 — ★ (2026-11-13 08:15, 펜닐 요청 — fix139) 휴대폰·태블릿에도 보임(종전 d-none d-lg-inline-block 로 992px 미만 숨김 → 삭제만 보였음). 세로(576px 이하)는 ⋯ 메뉴 안 -->
+<button type="button" class="btn btn-sm btn-outline-success ml-2 p-1" onclick="openCreateFolderModal()" title="<?php echo __h('ui_new_folder'); ?>" aria-label="<?php echo __h('ui_new_folder'); ?>"><?php echo mc_ui_icon('folder-plus', 18); ?></button>
 <?php if (!(isset($is_root) && $is_root == true)): ?>
 <!-- 파일 업로드는 하위 폴더에서만 -->
-<button type="button" class="btn btn-sm btn-outline-primary ml-1 p-1 d-none d-lg-inline-block" onclick="openUploadModal()" title="<?php echo __h('ui_upload_file'); ?>" aria-label="<?php echo __h('ui_upload_file'); ?>"><?php echo mc_ui_icon('upload', 18); ?></button>
+<button type="button" class="btn btn-sm btn-outline-primary ml-1 p-1" onclick="openUploadModal()" title="<?php echo __h('ui_upload_file'); ?>" aria-label="<?php echo __h('ui_upload_file'); ?>"><?php echo mc_ui_icon('upload', 18); ?></button>
 <?php endif; ?>
 <!-- 삭제 모드 토글 -->
 <button type="button" id="deleteModeBtn" class="btn btn-sm btn-outline-danger ml-1 p-1" onclick="toggleDeleteMode()" title="<?php echo __h('ui_delete_mode'); ?>" aria-label="<?php echo __h('ui_delete_mode'); ?>"><?php echo mc_ui_icon('trash', 18); ?></button>
@@ -7359,7 +7378,8 @@ if($use_listcover == "y"){
 	if(is_file($dir."/".$fileinfo."/[cover].jpg")){
 		echo "<img class=\"rounded-lg mb-2\" src=\"thumb.php?file=".encode_url($getdir."/".$fileinfo)."&type=cover&v=".(int)@filemtime($dir."/".$fileinfo."/[cover].jpg").$bidx_param."\" style=\"height:120px;max-width:100%;min-width:100%;object-fit:contain;\" loading=\"lazy\"><br>";
 	} else {
-		echo "<img class=\"rounded-lg mb-2\" src=\"data:".mime_type("jpg").";base64,".$null_image."\" style=\"height:120px;max-width:100%;min-width:100%;object-fit:fill;\"><br>";
+		// ★ (2026-11-13 11:19, 펜닐 제보 — fix142) 표지가 아직 없는 폴더 — 화면이 이 주소(data-mc-cw)로 '지금 만들기'(mk=1)를 물어 새로고침 없이 표지를 넣음(아래 스크립트)
+		echo "<img class=\"rounded-lg mb-2\" src=\"data:".mime_type("jpg").";base64,".$null_image."\" data-mc-cw=\"".h("thumb.php?file=".encode_url($getdir."/".$fileinfo)."&type=cover".$bidx_param)."\" style=\"height:120px;max-width:100%;min-width:100%;object-fit:fill;\"><br>";
 	}
 }
 
@@ -7538,7 +7558,8 @@ if($use_listcover == "y"){
 	if(is_file($dir."/".$fileinfo."/[cover].jpg")){
 		echo "<img class=\"rounded-lg mb-2\" src=\"thumb.php?file=".encode_url($getdir."/".$fileinfo)."&type=cover&v=".(int)@filemtime($dir."/".$fileinfo."/[cover].jpg").$bidx_param."\" style=\"height:120px;max-width:100%;min-width:100%;object-fit:contain;\" loading=\"lazy\"><br>";
 	} else {
-		echo "<img class=\"rounded-lg mb-2\" src=\"data:".mime_type("jpg").";base64,".$null_image."\" style=\"height:120px;max-width:100%;min-width:100%;object-fit:fill;\"><br>";
+		// ★ (2026-11-13 11:19, 펜닐 제보 — fix142) 표지가 아직 없는 폴더 — 화면이 이 주소(data-mc-cw)로 '지금 만들기'(mk=1)를 물어 새로고침 없이 표지를 넣음(아래 스크립트)
+		echo "<img class=\"rounded-lg mb-2\" src=\"data:".mime_type("jpg").";base64,".$null_image."\" data-mc-cw=\"".h("thumb.php?file=".encode_url($getdir."/".$fileinfo)."&type=cover".$bidx_param)."\" style=\"height:120px;max-width:100%;min-width:100%;object-fit:fill;\"><br>";
 	}
 }
 
@@ -7843,36 +7864,11 @@ if(strpos($zip_file, "_imgfolder") == true){
                 // ★ (2026-10-30) 손상된 이미지면 imagecreatefromstring 이 false → imagecrop(false) 치명 오류로 목록이 중간에 잘림 — 한 번만 만들고 실패하면 썸네일 없이 진행
                 $__gd = $size ? mc_gd_from_string($jpg_cover) : false; // ★ (2026-11-02 09:56) 너무 큰 그림은 건너뜀
                 if ($__gd === false) $size = false;
-                if($size && $size[0] > $size[1]) {
-                    $x_point = ($size[0]/2) - $size[1];
-                    $originimage = $__gd;
-                    if($x_point > 0){
-                        $cropimage = imagecrop($originimage, ['x' => $x_point, 'y' => 0, 'width' => $size[1], 'height' => $size[1]]);
-                    } else {
-                        $cropimage = imagecrop($originimage, ['x' => 0, 'y' => 0, 'width' => $size[1], 'height' => $size[1]]);
-                    }
-                    $originimage = $cropimage;
-                    $cropimage = imagecreatetruecolor(400, 400);
-                    imagecopyresampled($cropimage, $originimage, 0, 0, 0, 0, 400, 400, $size[1], $size[1]);
-                    imagedestroy($originimage);
-                    ob_start();
-                    imagejpeg($cropimage, null, 75 );
-                    imagedestroy($cropimage);
-                    $cropimage = ob_get_contents();
-                    ob_end_clean();
-                } else if ($size) {
-                    $originimage = $__gd;
-                    $y_point = ($size[1] - $size[0])/2;
-                    $cropimage = imagecrop($originimage, ['x' => 0, 'y' => 0, 'width' => $size[0], 'height' => $size[0]]);
-                    $originimage = $cropimage;
-                    $cropimage = imagecreatetruecolor(400, 400);
-                    imagecopyresampled($cropimage, $originimage, 0, 0, 0, 0, 400, 400, $size[0], $size[0]);
-                    imagedestroy($originimage);
-                    ob_start();
-                    imagejpeg($cropimage, null, 75 );
-                    imagedestroy($cropimage);
-                    $cropimage = ob_get_contents();
-                    ob_end_clean();
+                // ★ (2026-11-12 10:11, 펜닐 요청) 정사각형(400×400)으로 자르지 않고 원본 비율 그대로(긴 변 400px) — mc_thumb_fit_from_gd(function.php)
+                if ($size) {
+                	$cropimage = mc_thumb_fit_from_gd($__gd);
+                	imagedestroy($__gd);
+                	if ($cropimage === false) $cropimage = null;
                 }
                 
                 $cache_data = array();
@@ -7880,6 +7876,8 @@ if(strpos($zip_file, "_imgfolder") == true){
                 $cache_data['page_order'] = "0";
                 $cache_data['viewer'] = "toon";
                 $cache_data['thumbnail'] = ($cropimage) ? base64_encode($cropimage) : "";
+                $cache_data['thumb_fit'] = 1; // ★ 원본 비율 썸네일 표시(옛 정사각형은 thumb.php 가 다시 만듦)
+                if (function_exists('mc_thumb_log')) mc_thumb_log('make', ['file' => (string)$configfile, 'new' => (isset($cropimage) && is_string($cropimage) && $cropimage !== '') ? mc_thumb_wh($cropimage) : '없음(그림 못 만듦)']); // ★ (2026-11-12 16:36 fix127) 목록이 새로 만든 썸네일 기록
                 safe_json_write($configfile, $cache_data);
                 
                 // [cover].jpg 생성 - 이미지 폴더 안에
@@ -8119,7 +8117,7 @@ $_is_favorite = mc_rec_find($favorites_arr, $current_bidx, $_fav_file_path) !== 
         title="<?php echo $_is_favorite ? __h('ui_unfavorite') : __h('ui_add_favorite'); ?>">
     <?php echo $_is_favorite ? '⭐' : '⭐'; ?>
 </button>
-<?php $__mc_fcv = mc_file_cover_v($zip_file); /* ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 직접 고른 파일 표지 */ if (($video_thumb && file_exists($video_thumb)) || $__mc_fcv !== ''): ?>
+<?php $__mc_fcv = mc_file_cover_v($zip_file); /* ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 직접 고른 파일 표지 */ /* ★ (2026-11-12 13:00 fix124) fix122 부터 이 값에 항상 '&tf=1' 이 붙어 '직접 고른 표지 있음'으로 잘못 판정 → 썸네일 없는 영상이 아이콘 대신 깨진 그림(404) — 'cv=' 가 있을 때만 */ if (($video_thumb && file_exists($video_thumb)) || strpos($__mc_fcv, 'cv=') !== false): ?>
 <!-- 동영상 썸네일 이미지 - 이미지 ZIP과 동일한 크기 -->
 <img src="index.php?thumb=video&file=<?php echo encode_url($getdir."/".$fileinfo) . $bidx_param . $__mc_fcv; ?>" class="rounded card-img-top card-img" width="300" height="400" alt="video thumbnail">
 <?php else: ?>
@@ -8615,37 +8613,11 @@ if ($__doc_nb > 0 && $__doc_ct && (time() - $__doc_ct) < ($__doc_nb * 3600)) ech
 						// ★ (2026-10-30) 손상된 이미지면 imagecreatefromstring 이 false → imagecrop(false) 치명 오류로 목록이 중간에 잘림 — 한 번만 만들고 실패하면 썸네일 없이 진행
 						$__gd = $size ? mc_gd_from_string($img_data) : false; // ★ (2026-11-02 09:56) 너무 큰 그림은 건너뜀
 						if ($__gd === false) $size = false;
-						if($size && $size[0] > $size[1]) {
-							$x_point = ($size[0]/2) - $size[1];
-							$originimage = $__gd;
-								if($x_point > 0){
-									$cropimage = imagecrop($originimage, ['x' => $x_point, 'y' => 0, 'width' => $size[1], 'height' => $size[1]]);
-								} else {
-									$cropimage = imagecrop($originimage, ['x' => 0, 'y' => 0, 'width' => $size[1], 'height' => $size[1]]);
-								}
-							$originimage = $cropimage;
-							$cropimage = imagecreatetruecolor(400, 400);
-							imagecopyresampled($cropimage, $originimage, 0, 0, 0, 0, 400, 400, $size[1], $size[1]);
-							imagedestroy($originimage);
-							ob_start();
-							imagejpeg($cropimage, null, 75 );
-							imagedestroy($cropimage);
-							$cropimage = ob_get_contents();
-							ob_end_clean();
-
-						} else if ($size) {
-							$originimage = $__gd;
-							$y_point = ($size[1] - $size[0])/2;
-							$cropimage = imagecrop($originimage, ['x' => 0, 'y' => 0, 'width' => $size[0], 'height' => $size[0]]);
-							$originimage = $cropimage;
-							$cropimage = imagecreatetruecolor(400, 400);
-							imagecopyresampled($cropimage, $originimage, 0, 0, 0, 0, 400, 400, $size[0], $size[0]);
-							imagedestroy($originimage);
-							ob_start();
-							imagejpeg($cropimage, null, 75 );
-							imagedestroy($cropimage);
-							$cropimage = ob_get_contents();
-							ob_end_clean();
+						// ★ (2026-11-12 10:11, 펜닐 요청) 정사각형(400×400)으로 자르지 않고 원본 비율 그대로(긴 변 400px) — mc_thumb_fit_from_gd(function.php)
+						if ($size) {
+							$cropimage = mc_thumb_fit_from_gd($__gd);
+							imagedestroy($__gd);
+							if ($cropimage === false) $cropimage = null;
 						}
 					}
 					$cache_data = array();
@@ -8653,6 +8625,8 @@ if ($__doc_nb > 0 && $__doc_ct && (time() - $__doc_ct) < ($__doc_nb * 3600)) ech
 					$cache_data['page_order'] = "0";
 					$cache_data['viewer'] = "toon";
 					$cache_data['thumbnail'] = isset($cropimage) && $cropimage ? base64_encode($cropimage) : "";
+					$cache_data['thumb_fit'] = 1; // ★ 원본 비율 썸네일 표시(옛 정사각형은 thumb.php 가 다시 만듦)
+					if (function_exists('mc_thumb_log')) mc_thumb_log('make', ['file' => (string)$configfile, 'new' => (isset($cropimage) && is_string($cropimage) && $cropimage !== '') ? mc_thumb_wh($cropimage) : '없음(그림 못 만듦)']); // ★ (2026-11-12 16:36 fix127) 목록이 새로 만든 썸네일 기록
 //$cache_data['mtime'] = filemtime($zip_file);
 //$cache_data['size'] = filesize($zip_file);
 					// ★ (2026-10-31) 표지 이미지를 못 꺼낸 경우(암호 걸린 ZIP 등)엔 위에서 이미 닫고 지워서 여기서 null->close() 치명 오류로 폴더 목록이 잘렸음
@@ -8916,42 +8890,19 @@ if (empty($q) && count($jpg_list) > 0 && (count($dir_list) + count($title_list) 
 						// ★ (2026-10-30) 손상된 이미지면 imagecreatefromstring 이 false → imagecrop(false) 치명 오류로 목록이 중간에 잘림 — 한 번만 만들고 실패하면 썸네일 없이 진행
 						$__gd = $size ? mc_gd_from_string($jpg_cover) : false; // ★ (2026-11-02 09:56) 너무 큰 그림은 건너뜀
 						if ($__gd === false) $size = false;
-						if($size && $size[0] > $size[1]) {
-							$x_point = ($size[0]/2) - $size[1];
-							$originimage = $__gd;
-								if($x_point > 0){
-									$cropimage = imagecrop($originimage, ['x' => $x_point, 'y' => 0, 'width' => $size[1], 'height' => $size[1]]);
-								} else {
-									$cropimage = imagecrop($originimage, ['x' => 0, 'y' => 0, 'width' => $size[1], 'height' => $size[1]]);
-								}
-							$originimage = $cropimage;
-							$cropimage = imagecreatetruecolor(400, 400);
-							imagecopyresampled($cropimage, $originimage, 0, 0, 0, 0, 400, 400, $size[1], $size[1]);
-							imagedestroy($originimage);
-							ob_start();
-							imagejpeg($cropimage, null, 75 );
-							imagedestroy($cropimage);
-							$cropimage = ob_get_contents();
-							ob_end_clean();
-						} else if ($size) {
-							$originimage = $__gd;
-							$y_point = ($size[1] - $size[0])/2;
-							$cropimage = imagecrop($originimage, ['x' => 0, 'y' => 0, 'width' => $size[0], 'height' => $size[0]]);
-							$originimage = $cropimage;
-							$cropimage = imagecreatetruecolor(400, 400);
-							imagecopyresampled($cropimage, $originimage, 0, 0, 0, 0, 400, 400, $size[0], $size[0]);
-							imagedestroy($originimage);
-							ob_start();
-							imagejpeg($cropimage, null, 75 );
-							imagedestroy($cropimage);
-							$cropimage = ob_get_contents();
-							ob_end_clean();
+						// ★ (2026-11-12 10:11, 펜닐 요청) 정사각형(400×400)으로 자르지 않고 원본 비율 그대로(긴 변 400px) — mc_thumb_fit_from_gd(function.php)
+						if ($size) {
+							$cropimage = mc_thumb_fit_from_gd($__gd);
+							imagedestroy($__gd);
+							if ($cropimage === false) $cropimage = null;
 						}
 						$cache_data = array();
 						$cache_data['totalpage'] = count($jpg_list);
 						$cache_data['page_order'] = "0";
 						$cache_data['viewer'] = "toon";
 						$cache_data['thumbnail'] = ($cropimage) ? base64_encode($cropimage) : "";
+						$cache_data['thumb_fit'] = 1; // ★ 원본 비율 썸네일 표시(옛 정사각형은 thumb.php 가 다시 만듦)
+						if (function_exists('mc_thumb_log')) mc_thumb_log('make', ['file' => (string)$configfile, 'new' => (isset($cropimage) && is_string($cropimage) && $cropimage !== '') ? mc_thumb_wh($cropimage) : '없음(그림 못 만듦)']); // ★ (2026-11-12 16:36 fix127) 목록이 새로 만든 썸네일 기록
 						safe_json_write($configfile, $cache_data);
 
 						$_SESSION['index_refreshed'] = true;
@@ -9721,6 +9672,39 @@ document.addEventListener('DOMContentLoaded', function() {
 })();
 </script>
 <script>
+// ★ (2026-11-12 10:13, 펜닐 요청 — 시안 C) mcThumbFit: 파일 카드 썸네일을 잘리지 않게(contain) 보이고, 남는 칸에 같은 그림을 흐리게 깖
+//   - 그림이 다 받아진 뒤에만 붙임(load 를 문서 단계에서 잡음 — 늦게 받아지는 그림·나중에 생긴 카드·표지를 바꿔 주소가 바뀐 그림도 같이)
+//   - 아주 작은 그림(아이콘·1×1 빈 그림)은 건드리지 않음. 흐린 배경 칸은 그림 칸 크기·위치를 따라감(ResizeObserver — 목록/그리드 전환·창 크기)
+(function () {
+    var ro = ('ResizeObserver' in window) ? new ResizeObserver(function (es) { es.forEach(function (e) { place(e.target); }); }) : null;
+    function place(im) {
+        var bg = im.__mcThBg; if (!bg) return;
+        bg.style.left = im.offsetLeft + 'px'; bg.style.top = im.offsetTop + 'px';
+        bg.style.width = im.offsetWidth + 'px'; bg.style.height = im.offsetHeight + 'px';
+        try { bg.style.borderRadius = getComputedStyle(im).borderRadius; } catch (e) {}
+    }
+    function fit(im) {
+        if (!im || im.tagName !== 'IMG' || !im.classList.contains('card-img-top') || !im.closest('.grid')) return;
+        var card = im.parentElement; if (!card || !card.classList.contains('card')) return;
+        var src = im.currentSrc || im.src || '';
+        if (!src || !(im.naturalWidth >= 64 && im.naturalHeight >= 64)) return;
+        var bg = im.__mcThBg;
+        if (!bg) {
+            bg = document.createElement('div'); bg.className = 'mc-thbg'; bg.setAttribute('aria-hidden', 'true');
+            var b = document.createElement('img'); b.alt = ''; b.decoding = 'async'; bg.appendChild(b);
+            card.insertBefore(bg, card.firstChild); card.classList.add('mc-thhost'); im.classList.add('mc-thfit');
+            im.__mcThBg = bg; if (ro) ro.observe(im);
+        }
+        var bi = bg.firstChild; if (bi.getAttribute('src') !== src) bi.setAttribute('src', src);
+        place(im);
+    }
+    document.addEventListener('load', function (e) { fit(e.target); }, true);
+    function scan() { document.querySelectorAll('.grid .card > img.card-img-top').forEach(function (im) { if (im.complete) fit(im); }); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
+    window.addEventListener('load', scan);
+})();
+</script>
+<script>
 // ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 뷰어에서 표지를 바꾸면 목록으로 돌아왔을 때 새로고침 없이 바로 바뀜(즐겨찾기 표시처럼)
 //   뷰어가 localStorage 'mc_cover_bump' = {t: 시각, f: 파일 경로, d: 폴더 경로, k: file|folder|auto} 를 남김 → 이 화면이 그 뒤에 바뀐 것만 그림 주소에 cv=시각을 붙여 다시 받음
 //   새로 연 화면은 서버가 이미 새 주소(v=·cv=)를 주므로 건드리지 않음(이 화면을 그린 뒤에 바뀐 것만)
@@ -9728,11 +9712,16 @@ document.addEventListener('DOMContentLoaded', function() {
     var seen = Date.now();
     function np(s) { s = String(s || '').replace(/\{pl\}/g, '+').replace(/\{dt\}/g, '.').replace(/\{pc\}/g, '%').replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, ''); return s.charAt(0) === '/' ? s : '/' + s; }
     function bust(u, t) { try { var x = new URL(u, location.href); x.searchParams.set('cv', String(t)); return x.pathname.replace(/^.*\//, '') + x.search; } catch (e) { return u; } }
+    // ★ (2026-11-12 13:49, 펜닐 제보 — fix125) 알림에 함께 남은 앞 알림(l)도 차례로 — 종전엔 마지막 하나만 봐서 '파일 표지' 뒤 '폴더 표지'를 하고 돌아오면 파일 카드가 그대로였음
     function apply() {
         var b = null;
         try { b = JSON.parse(localStorage.getItem('mc_cover_bump') || 'null'); } catch (e) {}
         if (!b || !b.t || b.t <= seen) return;
+        var all = (Array.isArray(b.l) ? b.l : []).concat([b]).filter(function (x) { return x && x.t > seen; });
         seen = b.t;
+        all.forEach(function (x) { try { one(x); } catch (e) {} });
+    }
+    function one(b) {
         var f = np(b.f), d = np(b.d), file = (b.k === 'file' || b.k === 'auto'), folder = (b.k === 'folder' || b.k === 'auto');
         document.querySelectorAll('img').forEach(function (im) {
             var s = im.getAttribute('src') || '';
@@ -9782,9 +9771,59 @@ document.addEventListener('DOMContentLoaded', function() {
             });
         }
     }
+    window.mcCoverApply = function (b) { try { one(b); } catch (e) {} };   // ★ (2026-11-13 11:19 fix142) 아래 '표지 지금 채우기'가 이 폴더 표지 칸을 같은 방식으로 바꾸려고(동작은 그대로)
     window.addEventListener('pageshow', apply);
     window.addEventListener('storage', function (e) { if (e.key === 'mc_cover_bump') apply(); });
     document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') apply(); });
+})();
+</script>
+<script>
+// ★ (2026-11-13 11:19, 펜닐 제보 — fix142) 표지가 아직 없는 폴더 카드(빈 그림 — data-mc-cw)를 새로고침 없이 채움
+//   [재현] 새 동영상 폴더를 처음 보면 카드가 빈 칸 → 폴더 안을 열거나 배경 갱신이 표지를 만든 뒤에도, 돌아온 목록(아이폰은 저장된 화면을 그대로 보여줌)은
+//   새로고침 전까지 빈 칸이었음. 이 화면이 그 폴더의 표지를 '지금 만들기'(thumb.php type=cover&mk=1 — 있으면 그대로, 없으면 지금 규칙대로 만들어 봄)로 물어 생기면 바꿔 넣음
+//   한 번에 하나씩(동영상 폴더는 ffmpeg 를 쓸 수 있어 서버가 몰리지 않게) · 못 받으면 8초·16초 뒤 다시(모두 세 번) · 돌아오거나(pageshow) 다시 보면(visible) 처음부터 다시 물음
+(function () {
+    var q = [], busy = false, tries = {};
+    function collect() { document.querySelectorAll('img[data-mc-cw]').forEach(function (im) { if (q.indexOf(im) < 0) q.push(im); }); next(); }
+    function later(im) {
+        var k = im.getAttribute('data-mc-cw');
+        if (!k || (tries[k] || 0) >= 3) return;
+        setTimeout(function () { if (q.indexOf(im) < 0) q.push(im); next(); }, (tries[k] || 1) * 8000);
+    }
+    function next() {
+        if (busy) return;
+        var im = q.shift();
+        if (!im) return;
+        var k = im.getAttribute('data-mc-cw');
+        if (!k || !im.isConnected || (tries[k] || 0) >= 3) { next(); return; }
+        tries[k] = (tries[k] || 0) + 1;
+        busy = true;
+        var t = new Image(), fin = false;
+        var done = function (ok) {
+            if (fin) return; fin = true; busy = false;
+            if (ok && t.naturalWidth > 1) { im.style.objectFit = 'contain'; im.setAttribute('src', t.src); im.removeAttribute('data-mc-cw'); }
+            else later(im);
+            next();
+        };
+        t.onload = function () { done(true); };
+        t.onerror = function () { done(false); };
+        t.src = k + '&mk=1&cv=' + Date.now();
+    }
+    // 이 폴더 위 표지 칸 — 화면을 그릴 때 표지가 없어 제목줄만 나왔으면(압축 책 폴더는 이 화면이 그리는 동안 표지를 만들고, 동영상 폴더는 배경 갱신이 만듦) 한 번 물어 생겼으면 표지 칸으로
+    //   (바꾸는 일은 뷰어에서 표지를 지정했을 때와 같은 코드 — mcCoverApply). 저장된 화면으로 돌아왔을 때도
+    var here = <?php echo ($use_cover == "y" && !empty($getdir) && trim((string)$getdir, '/') !== '') ? json_encode(['u' => 'thumb.php?file=' . encode_url($getdir) . '&type=cover' . $bidx_param, 'd' => (string)$getdir], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) : 'null'; ?>;
+    var hereBusy = false;
+    function selfCover() {
+        if (!here || hereBusy || !document.querySelector('.mc-titlebar') || document.querySelector('.mc-banner') || typeof window.mcCoverApply !== 'function') return;
+        hereBusy = true;
+        var t = new Image();
+        t.onload = function () { hereBusy = false; if (t.naturalWidth > 1) window.mcCoverApply({ t: Date.now(), d: here.d, k: 'folder' }); };
+        t.onerror = function () { hereBusy = false; };
+        t.src = here.u + '&mk=1&cv=' + Date.now();
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', function () { collect(); selfCover(); }); else { collect(); selfCover(); }
+    window.addEventListener('pageshow', function (e) { if (e.persisted) { tries = {}; collect(); selfCover(); } });
+    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { tries = {}; collect(); selfCover(); } });
 })();
 </script>
 
@@ -12190,6 +12229,7 @@ tr.mc-missing td:last-child::after{content:" (파일 없음)";font-size:11px;col
   };
 })();
 </script>
+<?php if (function_exists('mc_up_back_js')) echo mc_up_back_js(); /* ★ (2026-11-12 23:11 fix132) 이 폴더에서 연 서재·즐겨찾기·북마크·작품 화면의 ← 가 이 폴더로 오게(적기만) */ ?>
 <?php if (function_exists('mc_back_origin_list_js')) echo mc_back_origin_list_js(); /* ★ (2026-11-05) 뷰어 뒤로가기가 이 화면(주소·스크롤 위치)으로 돌아오게 — function.php */ ?>
 <script>/* ★ fix48·fix49 검색창으로 검색을 보낼 때 — 비우고 보내면 검색 끝(mcSfEnd: ✓ 지움) · 아래 막대가 없는 화면에서 보내면 새 검색(✓ 새로, mc_sf_js) · 막대가 떠 있는 화면에서 같은 말이면 ✓ 유지 */document.addEventListener('submit',function(e){var f=e.target,i=f&&f.querySelector&&f.querySelector('input[name="q"]');if(!i)return;if(String(i.value||'').trim()===''){if(window.mcSfEnd)try{mcSfEnd();}catch(x){}return;}var bar=document.getElementById('mcSfBar');if(!bar||document.body.classList.contains('mc-sf-ended'))try{sessionStorage.setItem('mc_sf_new','1');}catch(x){}},true);</script>
 <?php if (function_exists('mc_search_footer_html')) echo mc_search_footer_html(); /* ★ (2026-11-07 fix41) 찾은 폴더 목록 창 + 아래 이동 막대(검색어가 있고 다른 폴더가 있을 때만) */ ?>

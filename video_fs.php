@@ -7,6 +7,7 @@
  *   바꾼 곳(myComix 에 맞춤 — 동작은 같음): ffmpeg 위치 = 관리자 설정(mcv_ffmpeg) · 장면 캐시 = cache/_vframes · 작업 파일(조각 임시·자동 선택 기록) = cache/_vds
  *   ★ (2026-11-13 18:08, 펜닐 요청 — fix147) 장면 캐시는 FileStation 원본(data/thumbcache/seek)과 같은 방식 그대로 — 자리만 cache/_vframes(지워져도 다시 만듦)
  *     · 변환 세션 폴더(cache/_hls)는 원본 그대로 남김(fix148 — fix146 의 빈 _hls 지우기 되돌림) · 끝내기 때 윈도우에서 로그가 안 지워지던 것 재시도(fix148)
+ *   ★ (2026-11-15 00:38, 보안 점검 — fix166) 원본과 다른 곳 1개: 변환 세션은 계정당 4개까지(hlsShareStream 새 세션 만들기 바로 앞 — '★ myComix' 표시)
  *   경로 검증은 이 클래스가 하지 않음 — viewer.php 가 로그인·경로·폴더 권한을 확인한 실제 파일만 넘김(FileStation 의 '검증된 경로만' 규칙과 같음)
  *   진단 기록(dsDiag*)은 FileStation 탐색기 전용이라 꺼 둠(dsDiagAllowed = false — 코드는 그대로 둠)
  */
@@ -1456,10 +1457,34 @@ class MCVfs {
             }
         }
         
+        // ★ myComix (2026-11-15 00:35, 보안 점검 — fix166) 한 계정의 변환 세션은 4개까지 — 새로 열 때 이미 4개 이상이면 가장 오래 안 쓴 것부터 정리(FileStation 원본에는 없는 부분)
+        //   재현: 한 계정이 탐색 위치(seek)만 바꿔 start 를 8번 → 세션 8개·ffmpeg 8개 동시 실행(끝내기 없이는 10분 뒤 고아 정리 때까지). 화면은 새로 열기 전에 앞 세션을 끝내므로
+        //   보통은 탭·기기마다 1개. '안 쓴 시각' = 재생 목록·조각 요청 때 쓰는 last_access.txt(없으면 만든 시각) — 재생 중인 세션은 계속 새로 찍혀 남고, 버려진 것부터 정리됨
+        //   계정이 비어 있으면(있을 수 없는 경우) 건드리지 않음. 실패해도 새 세션 시작은 그대로
+        if ($this->mcUser !== '' && is_dir($hlsDir)) {
+            try {
+                $_mcMine = [];
+                foreach (new \DirectoryIterator($hlsDir) as $_mcD) {
+                    if ($_mcD->isDot() || !$_mcD->isDir()) continue;
+                    $_mcMeta = @json_decode((string)@file_get_contents($_mcD->getPathname() . '/meta.json'), true);
+                    if (!is_array($_mcMeta) || (string)($_mcMeta['mc_user'] ?? '') !== $this->mcUser) continue;
+                    $_mcLast = (int)@file_get_contents($_mcD->getPathname() . '/last_access.txt');
+                    if ($_mcLast <= 0) $_mcLast = (int)@filemtime($_mcD->getPathname() . '/last_access.txt');   // ★ (2026-11-15 01:00, fix167 재검토) 빈 값이면 파일 시각 — 재생 목록·조각 요청이 이 파일을 '비우고 쓰는' 순간에 읽으면 0 이라, 오래전에 시작해 지금 재생 중인 세션이 가장 오래된 것으로 잡혀 정리됐음(재현). 고아 정리(hlsCleanupStale)와 같은 처리
+                    $_mcMine[$_mcD->getFilename()] = max($_mcLast, (int)(is_numeric($_mcMeta['created'] ?? null) ? $_mcMeta['created'] : 0));
+                }
+                if (count($_mcMine) >= 4) {
+                    asort($_mcMine);
+                    foreach (array_slice(array_keys($_mcMine), 0, count($_mcMine) - 3) as $_mcOld) {
+                        $this->hlsCleanup((string)$_mcOld, $hlsDir);
+                    }
+                }
+            } catch (\Throwable $_mcE) { /* 정리 실패는 무시 */ }
+        }
+
         $sessionId = bin2hex(random_bytes(8));
         $sessionDir = $hlsDir . '/' . $sessionId;
         @mkdir($sessionDir, 0755, true);
-        
+
         // Windows 한글 경로 → 8.3 짧은 경로
         $ffmpegInput = $fullPath;
         if (PHP_OS_FAMILY === 'Windows') {

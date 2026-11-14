@@ -1021,7 +1021,12 @@ if (isset($_GET['img'])) {
             if (!($phase & PHP_OUTPUT_HANDLER_FINAL)) return '';
             $all = $acc; $acc = '';
             if (http_response_code() !== 200 || strlen($all) < 100 || !function_exists('imagecreatefromstring')) return $all;
-            $im = @imagecreatefromstring($all);
+            // ★ (2026-11-14 23:33, 보안 점검 — fix165) 아주 큰 그림은 줄이지 않고 원래 내용 그대로 — 압축 속 76KB PNG(20000×20000) 한 장의 작은 그림 요청이
+            //   약 810MB·5초를 썼음(재현 — 리눅스 시스템 GD 는 PHP 메모리 한도(init.php 512M)에 안 잡힘. 윈도우는 여기서 확인 못 함 — 01:01 재검토로 문구 바로잡음). 6천4백만 화소(8000×8000)를 넘으면 열지 않고,
+            //   그 아래도 남은 메모리로 못 풀 크기면 열지 않음(mc_gd_from_string — 다른 썸네일 경로와 같은 확인)
+            $inf = @getimagesizefromstring($all);
+            if ($inf && !empty($inf[0]) && !empty($inf[1]) && (float)$inf[0] * (float)$inf[1] > 64000000) return $all;
+            $im = function_exists('mc_gd_from_string') ? mc_gd_from_string($all) : @imagecreatefromstring($all);
             if (!$im) return $all;
             $w = imagesx($im); $h = imagesy($im);
             if ($w < 1 || $h < 1) { imagedestroy($im); return $all; }

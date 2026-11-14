@@ -1,1 +1,8 @@
+# ★ (2026-11-15 00:37, 보안 점검 — fix166) Apache 2.4 문법을 같이 적음 — 종전 "Deny from all" 한 줄은 호환 모듈(mod_access_compat)이 없는 2.4 에서 403 대신 500 이었음(열리지는 않음). src/video 와 같은 모양
+<IfModule mod_authz_core.c>
+Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+Order deny,allow
 Deny from all
+</IfModule>

@@ -387,6 +387,7 @@ render_viewer_i18n([
     <script src="https://cdn.jsdelivr.net/npm/epubjs@0.3.93/dist/epub.min.js"></script>
     <script src="js/book-notes.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/book-notes.js'); ?>"></script><?php // ★ (2026-10-31) 책 노트 화면 ?>
     <script src="js/book-tools.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/book-tools.js'); ?>"></script><?php // ★ (2026-11-01) 검색·듣기·화면 꺼짐 방지·각주 창 ?>
+    <script src="js/mc-resume-ask.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-resume-ask.js'); ?>"></script><?php // ★ (2026-11-15 16:15 fix169) 열 때 '이어서 볼까요?' 묻는 창(만화 뷰어와 같은 창) ?>
     
     <style>
         <?php if (!empty($epub_font_local) && empty($epub_font_url)): ?>
@@ -862,6 +863,8 @@ render_viewer_i18n([
         <label class="mc-ck"><input type="checkbox" id="chkReverseNav" <?php echo ($_COOKIE['epub_reverse_nav'] ?? '') === '1' ? 'checked' : ''; ?>> <?php echo __h("txt_reverse_nav"); ?></label>
         <label class="mc-ck"><input type="checkbox" id="chkJustify"> <?php echo __h("bt_justify"); ?></label>
         <label class="mc-ck"><input type="checkbox" id="chkWake"> <?php echo __h("bt_wake"); ?></label>
+        <?php // ★ (2026-11-15 16:15, 펜닐 요청 — fix169) 이어 보기 켬/끔(이 기기 쿠키 epub_resume, 기본 켬) — 켬: 열 때 지난번 본 곳부터 볼지 물음 · 끔: 늘 처음부터 ?>
+        <label class="mc-ck" title="<?php echo __h("bt_resume_tip"); ?>"><input type="checkbox" id="chkResume" <?php echo (is_string($_COOKIE['epub_resume'] ?? null) ? $_COOKIE['epub_resume'] : '1') === '0' ? '' : 'checked'; ?>> <?php echo __h("bt_resume"); ?></label>
     </div>
     <small id="wakeNote" style="display:none;color:#888;"></small>
     <div class="mc-sr mc-sr-foot"><small><?php echo __h("bt_readtime"); ?></small><div id="readTime"></div></div>
@@ -902,6 +905,11 @@ render_viewer_i18n([
     let currentTheme = '<?php echo $theme; ?>';
     let currentFontSize = <?php echo (int)$fontSize; ?>;
     let savedProgressData = null;  // ✅ 서버에서 로드한 진행률 저장
+    // ★ (2026-11-15 16:15 fix169) 이어 보기 설정·묻는 창 글자
+    let RESUME_ON = <?php echo (is_string($_COOKIE['epub_resume'] ?? null) ? $_COOKIE['epub_resume'] : '1') === '0' ? 'false' : 'true'; ?>;
+    const _rsT = <?php echo json_encode(['title' => __('mcrs_title'), 'last' => __('mcrs_last'), 'start' => __('mcrs_start'), 'go' => __('mcrs_go'), 'hint' => __('mcrs_hint'), 'name' => basename(str_replace('\\', '/', (string)$getfile))], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+    // 가림막(privacy_shield)이 돌아올 주소에 #mcrs 를 붙임 → 돌아와 다시 열릴 때 묻지 않고 이어 봄(만화 뷰어가 #imageN 을 싣는 것과 같은 자리)
+    window.myComixCurrentHash = function () { return '#mcrs'; };
     let isReversed = <?php echo ($_COOKIE['epub_reverse_nav'] ?? '') === '1' ? 'true' : 'false'; ?>;
     
     const loadingEl = document.getElementById('loadingOverlay');
@@ -1233,12 +1241,34 @@ async function initBook() {
             // 저장된 위치 불러오기
             const savedProgress = await loadProgress();
             savedProgressData = savedProgress;
+            // ★ (2026-11-15 16:15, 펜닐 요청 — fix169) 이어 보기 설정(기본 켬) — 끔: 늘 처음부터 · 켬: 저장 위치가 처음(0%)이 아니면 '이어서 볼까요?' 먼저 물음
+            //   가림막에서 돌아온 경우(#mcrs — 아래 myComixCurrentHash)는 묻지 않고 그대로 이어 봄 · 처음부터를 고르면 예전 진행률(%)도 보이지 않게 비움
+            let _rsUse = !!(savedProgress && savedProgress.cfi), _rsAsked = false;
+            if (_rsUse && !RESUME_ON && location.hash !== '#mcrs') _rsUse = false; // ★ (2026-11-15 17:53 fix171) 가림막에서 돌아온 건 끔이어도 보던 곳으로(fix168 처럼) — 끔이면 처음으로 돌아가 읽던 곳을 잃었음(시험으로 확인)
+            else if (_rsUse && location.hash !== '#mcrs' && Number(savedProgress.percent) > 0 && typeof window.mcResumeAsk === 'function') {
+                const _rsPct = Number(savedProgress.percent);
+                _rsAsked = true;
+                _rsUse = await new Promise((resolve) => {
+                    try { // ★ (2026-11-15 18:07 fix172) 창을 못 만들면(예외) 묻지 않고 예전처럼 이어 봄 — 안 그러면 책이 아예 안 열렸음(일부러 실패시킨 시험으로 확인)
+                    window.mcResumeAsk({
+                        title: _rsT.title, name: _rsT.name, label: _rsT.last, page: '', tail: '', pct: _rsPct, // 전자책은 쪽 대신 % (오른쪽 숫자·막대)
+                        startLbl: _rsT.start, goLbl: _rsT.go, hint: _rsT.hint, dark: document.body.classList.contains('theme-dark'),
+                        onGo: () => resolve(true), onStart: () => resolve(false)
+                    });
+                    } catch (eAsk) { resolve(true); }
+                });
+            }
+            if (location.hash === '#mcrs') { try { history.replaceState(history.state, '', location.pathname + location.search); } catch (e) {} }
+            if (!_rsUse) savedProgressData = null;
             
-            if (savedProgress && savedProgress.cfi) {
+            if (_rsUse) {
                 // ★ (2026-11-02 10:01) 저장 위치가 이 책에 없는 장을 가리키면(다른 판으로 바뀜 등) 처음부터 — 전에는 책이 아예 안 열렸음
                 try { await rendition.display(savedProgress.cfi); } catch (eCfi) { await rendition.display(); }
             } else {
                 await rendition.display();
+                // ★ (2026-11-15 fix169) 묻는 창에서 '처음부터 읽기'를 골랐으면 처음 위치·0% 로 저장 — 첫 위치는 저장하지 않고(아래 skipFirstRelocated) 진행률도
+                //   위치 계산 전엔 -1(예전 값 유지)이라, 그대로 두면 기록이 '처음 위치 + 예전 %'로 남았음(시험으로 확인) — 다시 열면 예전 % 로 묻게 됨
+                if (_rsAsked) { try { const _l0 = rendition.currentLocation(); if (_l0 && _l0.start && _l0.start.cfi) saveProgress(_l0.start.cfi, 0); } catch (e) {} }
             }
             
             // 목차 로드
@@ -2217,6 +2247,12 @@ async function initBook() {
     
     // 초기 반전 상태 적용
     updateNavButtons();
+    
+    // ★ (2026-11-15 16:15 fix169) 이어 보기 켬/끔 — 다음에 열 때부터 적용(지금 보는 위치는 그대로)
+    document.getElementById('chkResume').addEventListener('change', (e) => {
+        RESUME_ON = !!e.target.checked;
+        document.cookie = `epub_resume=${RESUME_ON ? '1' : '0'}; path=/; max-age=31536000; SameSite=Lax`;
+    });
     
     document.getElementById('chkReverseNav').addEventListener('change', (e) => {
         isReversed = e.target.checked;

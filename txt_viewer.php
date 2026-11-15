@@ -1062,6 +1062,7 @@ render_viewer_i18n([
 ?>
 <script src="js/book-notes.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/book-notes.js'); ?>"></script><?php // ★ (2026-10-31) 책 노트 화면 ?>
 <script src="js/book-tools.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/book-tools.js'); ?>"></script><?php // ★ (2026-11-01) 목차·검색·듣기·화면 꺼짐 방지 ?>
+<script src="js/mc-resume-ask.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-resume-ask.js'); ?>"></script><?php // ★ (2026-11-15 17:10 fix170) 열 때 '이어서 볼까요?'(만화·전자책과 같은 창) ?>
 </head>
 <body class="<?php echo h($darkClass); ?>">
 
@@ -1142,6 +1143,8 @@ render_viewer_i18n([
         <label class="mc-ck"><input type="checkbox" id="chkJustify"> <?php echo __h("bt_justify"); ?></label>
         <label class="mc-ck"><input type="checkbox" id="autoscrollCheck"> <?php echo __h("txt_autoscroll_enable"); ?></label>
         <label class="mc-ck"><input type="checkbox" id="chkWake"> <?php echo __h("bt_wake"); ?></label>
+        <?php // ★ (2026-11-15 17:10, 펜닐 요청 — fix170) 이어 보기 켬/끔(이 기기 쿠키 txt_resume, 기본 켬 — 전자책과 같게) — 켬: 열 때 지난번 본 곳부터 볼지 물음 · 끔: 늘 처음부터 ?>
+        <label class="mc-ck" title="<?php echo __h("bt_resume_tip"); ?>"><input type="checkbox" id="chkResume" <?php echo (is_string($_COOKIE['txt_resume'] ?? null) ? $_COOKIE['txt_resume'] : '1') === '0' ? '' : 'checked'; ?>> <?php echo __h("bt_resume"); ?></label>
     </div>
     <small id="wakeNote" style="display:none;color:#888;"></small>
     <div class="mc-sr" id="autoscrollSpeedRow" style="display:none;"><label class="mc-sl" for="scrollSpeedSlider" title="<?php echo __h("txt_speed_range"); ?>"><?php echo __h("txt_scroll_speed"); ?> <span id="scrollSpeedValue">3</span></label>
@@ -1197,9 +1200,14 @@ render_viewer_i18n([
 (function() {
     const FILE = <?php echo js($getfile); ?>;
     const CHUNK_SIZE = <?php echo $txt_settings['chunk_size']; ?>;
-    const SAVED_POSITION = <?php echo (int)$saved_position; ?>;
-    const SAVED_PERCENT = <?php echo (float)$saved_percent; ?>;
-    const SAVED_YOFF = <?php echo (int)$saved_yoff; ?>; // ★ (2026-11-02 01:40) 저장 글자 줄의 머리줄 기준 위치(px, 1단)
+    let SAVED_POSITION = <?php echo (int)$saved_position; ?>; // ★ (2026-11-15 fix170) const → let — 이어 보기 끔·'처음부터 읽기'면 0 으로
+    let SAVED_PERCENT = <?php echo (float)$saved_percent; ?>;
+    let SAVED_YOFF = <?php echo (int)$saved_yoff; ?>; // ★ (2026-11-02 01:40) 저장 글자 줄의 머리줄 기준 위치(px, 1단)
+    // ★ (2026-11-15 17:10, 펜닐 요청 — fix170) 이어 보기 설정·묻는 창(전자책과 같게)
+    let RESUME_ON = <?php echo (is_string($_COOKIE['txt_resume'] ?? null) ? $_COOKIE['txt_resume'] : '1') === '0' ? 'false' : 'true'; ?>;
+    const _rsT = <?php echo json_encode(['title' => __('mcrs_title'), 'last' => __('mcrs_last'), 'start' => __('mcrs_start'), 'go' => __('mcrs_go'), 'hint' => __('mcrs_hint'), 'name' => basename(str_replace('\\', '/', (string)$getfile))], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+    // 가림막(privacy_shield)이 돌아올 주소에 #mcrs 를 붙임 → 돌아와 다시 열릴 때 묻지 않고 이어 봄
+    window.myComixCurrentHash = function () { return '#mcrs'; };
     const BIDX = <?php echo (int)$current_bidx; ?>;
     
     let isRestoring = true;  // 복원 중 저장 방지 플래그
@@ -1651,6 +1659,11 @@ render_viewer_i18n([
     chkReverseNav.addEventListener('change', (e) => {
         isReversed = e.target.checked;
         document.cookie = `txt_reverse_nav=${isReversed ? '1' : '0'}; path=/; max-age=31536000`;
+    });
+    // ★ (2026-11-15 17:10 fix170) 이어 보기 켬/끔 — 다음에 열 때부터 적용(지금 보는 위치는 그대로)
+    document.getElementById('chkResume').addEventListener('change', (e) => {
+        RESUME_ON = !!e.target.checked;
+        document.cookie = `txt_resume=${RESUME_ON ? '1' : '0'}; path=/; max-age=31536000; SameSite=Lax`;
     });
     
     // 레이아웃 변경
@@ -2298,12 +2311,29 @@ render_viewer_i18n([
     // 초기화
     async function init() {
         try { fitPageBox(); } catch (e) {} // ★ (2026-11-01) 첫 줄이 머리줄에 가리지 않게(복원 스크롤 전에)
+        // ★ (2026-11-15 17:10, 펜닐 요청 — fix170) 이어 보기 — 끔: 처음부터 · 켬: 저장 위치가 있으면(0% 초과) '이어서 볼까요?' 먼저(글은 그동안 계속 불러옴)
+        //   가림막에서 돌아온 경우(#mcrs)는 묻지 않고 이어 봄 · '처음부터 읽기'면 처음 위치·0% 로 저장(전자책과 같게 — 안 하면 다음에 예전 % 로 또 물음)
+        let _rsAsk = null, _rsStart = false;
+        if (SAVED_POSITION > 0 && !RESUME_ON && location.hash !== '#mcrs') { SAVED_POSITION = 0; SAVED_PERCENT = 0; SAVED_YOFF = 0; } // ★ (2026-11-15 17:53 fix171) 가림막에서 돌아온 건 끔이어도 보던 곳으로(fix168 처럼) — 끔이면 처음으로 돌아가 읽던 곳을 잃었음(시험으로 확인)
+        else if (SAVED_POSITION > 0 && location.hash !== '#mcrs' && Number(SAVED_PERCENT) > 0 && typeof window.mcResumeAsk === 'function') {
+            _rsAsk = new Promise((resolve) => {
+                try { // ★ (2026-11-15 18:07 fix172) 창을 못 만들면(예외) 묻지 않고 예전처럼 이어 봄 — 안 그러면 보던 곳이 아니라 처음에서 열렸음(일부러 실패시킨 시험으로 확인)
+                window.mcResumeAsk({
+                    title: _rsT.title, name: _rsT.name, label: _rsT.last, page: '', tail: '', pct: Number(SAVED_PERCENT),
+                    startLbl: _rsT.start, goLbl: _rsT.go, hint: _rsT.hint, dark: document.body.classList.contains('dark-mode'),
+                    onGo: () => resolve(true), onStart: () => resolve(false)
+                });
+                } catch (eAsk) { resolve(true); }
+            });
+        }
+        if (location.hash === '#mcrs') { try { history.replaceState(history.state, '', location.pathname + location.search); } catch (e) {} }
         const ok = await loadMeta();
         if (!ok) return;
         
         // 첫 청크 로드
         await loadChunk();
         await loadChunk();
+        if (_rsAsk && !(await _rsAsk)) { SAVED_POSITION = 0; SAVED_PERCENT = 0; SAVED_YOFF = 0; _rsStart = true; }
         
         // 저장된 위치로 복원 (position 기반)
         // ★ (2026-11-03 08:30) 저장 위치가 아주 멀면(화면에 그린 곳보다 100만 자 넘게 뒤) 목차로 먼 곳에 갈 때와 같게 — 본문에 그리지 않고 다 읽은 뒤 쪽 모드로 그 자리
@@ -2352,6 +2382,7 @@ render_viewer_i18n([
         } else {
             progressFill.style.width = '0%';
             readProgress.textContent = '0%';
+            if (_rsStart) { try { saveProgress(0, 0); } catch (e) {} } // ★ fix170 '처음부터 읽기' — 처음 위치·0% 로
         }
         
         // 복원 완료 후 저장 허용

@@ -18,9 +18,33 @@
     'use strict';
     if (window.MCVideo) return;
 
-    function lsGet(k, d) { try { var v = localStorage.getItem(k); return v === null ? d : v; } catch (e) { return d; } }
-    function lsSet(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
-    function lsDel(k) { try { localStorage.removeItem(k); } catch (e) {} }
+    // ★ (2026-11-15 18:30, 펜닐 요청 — fix173) [FileStation 원본과 다름] 이어보기 위치('mc_vres:키')는 서버(계정별, vres.php)에도 저장·읽기
+    //   브라우저 저장소만 쓰면 브라우저 데이터를 지우거나 다른 기기·브라우저에서 열면 없어졌음 → 아래 세 함수에서 그 키만 서버와 함께(다른 저장 값은 원본 그대로)
+    //   · 읽기: 페이지에 실린 서버 값(window.MC_VRES — viewer.php)과 브라우저 값 중 더 나중에 저장된 것(at)
+    //   · 쓰기: 브라우저 저장은 그대로, 서버는 15초에 한 번 + 페이지를 떠나거나 숨길 때 마지막 값 / 지우기(다 봄·처음부터)는 바로
+    var VR = (window.MC_VRES && typeof window.MC_VRES === 'object') ? window.MC_VRES : {}, vrPend = {}, vrLast = {};
+    function vrSend(op, k, r) {
+        try {
+            var f = new URLSearchParams(); f.append('op', op); f.append('k', k);
+            if (r) { f.append('t', String(Math.max(0, Math.floor(r.t || 0)))); f.append('d', String(Math.max(0, Math.floor(r.d || 0)))); f.append('at', String(Math.max(0, Math.floor(r.at || 0)))); }
+            if (!(navigator.sendBeacon && navigator.sendBeacon('vres.php', f))) { var x = new XMLHttpRequest(); x.open('POST', 'vres.php', true); x.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded'); x.send(f.toString()); }
+        } catch (e) {}
+    }
+    function vrFlush() { for (var k in vrPend) { if (Object.prototype.hasOwnProperty.call(vrPend, k)) { vrSend('put', k, vrPend[k]); vrLast[k] = Date.now(); } } vrPend = {}; }
+    try { window.addEventListener('pagehide', vrFlush); document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') vrFlush(); }); } catch (e) {}
+    function lsGet(k, d) {
+        var v = null; try { v = localStorage.getItem(k); } catch (e) { v = null; }
+        if (/^mc_vres:/.test(k)) { var s = VR[k.slice(8)]; if (s && s.t > 0) { var l = null; try { l = v === null ? null : JSON.parse(v); } catch (e) { l = null; } if (!l || !((l.at || 0) >= (s.at || 0))) return JSON.stringify(s); } }
+        return v === null ? d : v;
+    }
+    function lsSet(k, v) {
+        try { localStorage.setItem(k, v); } catch (e) {}
+        if (/^mc_vres:/.test(k)) { var kk = k.slice(8), r = null; try { r = JSON.parse(v); } catch (e) { r = null; } if (r && r.d > 0) { VR[kk] = r; vrPend[kk] = r; if (Date.now() - (vrLast[kk] || 0) >= 15000) vrFlush(); } }
+    }
+    function lsDel(k) {
+        var had = false; try { had = localStorage.getItem(k) !== null; localStorage.removeItem(k); } catch (e) {}
+        if (/^mc_vres:/.test(k)) { var kk = k.slice(8); if (had || VR[kk] || vrPend[kk]) { delete VR[kk]; delete vrPend[kk]; vrSend('del', kk, { t: 0, d: 0, at: Date.now() / 1000 }); } } // 지운 시각도 보냄(늦게 온 예전 저장이 되살리지 않게)
+    }
     function fmtT(s) {
         s = Math.max(0, Math.floor(s || 0));
         var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60;

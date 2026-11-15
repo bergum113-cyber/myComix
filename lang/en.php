@@ -1298,6 +1298,9 @@ Save now?',
     'adm_cfg_viewed_mark' => 'Recently viewed highlight (sec)', // ★ (2026-11-02 09:11)
     'adm_cfg_viewed_mark_help' => 'When you open a comic or folder and come back to the list with Back, the item you just viewed is outlined (also in favorites, bookmarks and autosave lists). Sets how many seconds the outline stays. 0 = keep it (default: 2 sec)',
     'adm_cfg_max_autosave' => 'Max Continue Reading (autosave)',
+    'adm_cfg_max_autosave_help' => 'Per account · how many recently read books to show in Bookmarks > Continue Reading — beyond this, the oldest drop off. Separate from the per-book reading positions below (default 10)', // ★ (2026-11-15 19:47 fix179)
+    'adm_cfg_max_vpos' => 'Max per-book resume positions (viewer)', // ★ (2026-11-15 19:25 fix176)
+    'adm_cfg_max_vpos_help' => 'Per account · how many per-book reading positions (used by the viewer\'s Continue reading) to keep — beyond this, the least recently read are removed. Separate from the Continue Reading list above (default 20000)', // ★ (2026-11-15 19:30 fix177)
     'adm_cfg_max_bookmark' => 'Max Bookmarks',
     'adm_cfg_max_ebook_bookmark' => 'E-book bookmarks on Bookmarks page',
     'adm_cfg_max_ebook_bookmark_help' => 'How many EPUB/TXT viewer bookmarks to show on the Bookmarks page, newest first (0 = hide)',
@@ -2828,7 +2831,7 @@ Cache tab → Regen stats / Delete folder cache
     'adm_cfg_folder_list_mobile_help' => 'Folders per page on mobile (folder-only)',
     'adm_cfg_file_list_mobile_help' => 'Items per page on mobile (with files) (smaller value recommended)',
     // ★ (2026-11-03 21:13) settings/security/SMTP help text
-    'adm_cfg_max_favorites_help' => 'Max favorites for folders/files',
+    'adm_cfg_max_favorites_help' => 'Per account · max favorites for folders/files', // ★ (2026-11-15 19:30 fix177)
     'adm_cfg_new_badge_help' => 'Files added within N hours get %s badge (0 = disabled, default: 24h)',
     'adm_sec_proxy_on' => 'On (recommended):',
     'adm_sec_proxy_on_desc' => 'When using Cloudflare, Nginx reverse proxy, load balancer',
@@ -3336,8 +3339,8 @@ Cache tab → Regen stats / Delete folder cache
     'mcv2_settings' => 'Settings',
     'mcv2_reopen' => 'When reopening',
     'mcv2_resume' => 'Continue reading',
-    'mcv2_resume_tip' => 'Open from where you were reading (list, favorites, library; scroll mode and PDF keep the spot within the page)',
-    'mcv2_resume_on' => 'Continue reading on — next time opens where you left off',
+    'mcv2_resume_tip' => 'Asks whether to continue from where you were reading (list, favorites, library; PDF continues without asking)', // ★ (2026-11-15 fix169)
+    'mcv2_resume_on' => 'Continue reading on — next time asks whether to continue where you left off', // ★ (2026-11-15 fix169)
     'mcv2_resume_off' => 'Continue reading off — next time opens from the start',
     'mcv2_port1' => 'One page when upright',
     'mcv2_port1_tip' => 'With a spread (1|2·2|1), show one page when the phone or tablet is upright and the spread when it is sideways',
@@ -3385,4 +3388,15 @@ Cache tab → Regen stats / Delete folder cache
     'dir_err_sub_title' => 'Folder not found',
     'dir_err_sub_body' => 'It may have been deleted, renamed, or moved.',
     'dir_err_to_top' => 'Go to the top of this content folder',
+    // ★ (2026-11-15 16:15 — fix169) 'Continue?' dialog when opening a book (comic toon/book mode, e-book) — js/mc-resume-ask.js
+    'mcrs_title' => 'Continue where you left off?',
+    'mcrs_last' => 'Last read',
+    'mcrs_page' => 'p. %s',
+    'mcrs_of' => '/ %s',
+    'mcrs_start' => 'Start over',
+    'mcrs_go_page' => 'Resume at p. %s',
+    'mcrs_go' => 'Resume',
+    'mcrs_hint' => 'You can turn this off in ⚙ Settings',
+    'bt_resume' => 'Continue reading',
+    'bt_resume_tip' => 'On: asks whether to continue from where you left off. Off: always opens from the start',
 ];

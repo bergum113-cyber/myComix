@@ -75,6 +75,9 @@ require_once __DIR__ . '/cache_util.php';
 // 6. 언어 초기화 (세션 시작 후 실행)
 init_language();
 
+// ★ (2026-11-15 18:28, 펜닐 요청 — fix173) 뷰어 설정(이어 보기·모드 기억·보기 방식)을 서버(계정별)와 맞춤 — function.php mc_prefs_sync() 설명
+if (function_exists('mc_prefs_sync')) mc_prefs_sync();
+
 // ============================================================
 // 전역 $base_path 설정 (URL 기본 경로)
 // ============================================================
@@ -223,6 +226,19 @@ if (!function_exists('get_autosave_file')) {
 function get_autosave_file() {
     $user_id = $_SESSION['user_id'] ?? 'guest';
     return __DIR__ . '/src/' . preg_replace('/[^a-zA-Z0-9_]/', '', $user_id) . '_autosave.json';
+}
+}
+
+if (!function_exists('get_vpos_file')) {
+/**
+ * ★ (2026-11-15 19:01, 펜닐 제보 — fix175) 책마다 읽던 위치(뷰어 '이어 보기'용) — src/<아이디>_vpos.json
+ *   '이어 읽기'(자동 저장, get_autosave_file)는 마지막에 본 책들의 목록이라 관리자 '최대 이어 읽기' 개수를 넘으면 밀려남.
+ *   뷰어 이어 보기는 그 목록과 다른 것(책마다 어디까지 읽었는지)이라 따로 둠 — 목록에서 밀려나도 위치는 남게
+ *   키 "bidx|/경로"(mc_rec_find 의 새 키 모양과 같음) · 값은 자동 저장과 같은 칸(bookmark·viewer·page_order·f·vp·t)
+ */
+function get_vpos_file() {
+    $user_id = $_SESSION['user_id'] ?? 'guest';
+    return __DIR__ . '/src/' . preg_replace('/[^a-zA-Z0-9_]/', '', $user_id) . '_vpos.json';
 }
 }
 

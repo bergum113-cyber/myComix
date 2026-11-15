@@ -557,6 +557,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                     $_clean_targets = [];
                     if (function_exists('get_bookmark_file'))  $_clean_targets[] = get_bookmark_file();
                     if (function_exists('get_autosave_file'))  $_clean_targets[] = get_autosave_file();
+                    if (function_exists('get_vpos_file'))      $_clean_targets[] = get_vpos_file(); // ★ (2026-11-15 19:01 fix175) 책마다 위치 기록도(지운 파일 것)
                     if (function_exists('get_favorites_file')) $_clean_targets[] = get_favorites_file();
                     $_clean_lk = function_exists('mc_rec_lock') && mc_rec_lock(); // ★ (2026-11-09 11:43) 기록 고치기 차례 잠금(bookmark.php 와 같이)
                     foreach ($_clean_targets as $_cf) {
@@ -1229,6 +1230,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['profile_action']) && 
                 __DIR__ . '/src/' . $safe_id . '_txt_progress.json',
                 __DIR__ . '/src/' . $safe_id . '_notes.json', // ★ (2026-10-31) 책 노트
                 __DIR__ . '/src/' . $safe_id . '_dims.json', // ★ (2026-10-30) 뷰어 이미지 크기 캐시도 함께
+                __DIR__ . '/src/' . $safe_id . '_vpos.json',   // ★ (2026-11-15 19:01 fix175) 책마다 읽던 위치
+                __DIR__ . '/src/' . $safe_id . '_vprefs.json', // ★ (2026-11-15 19:01 fix175) 뷰어 설정(fix173 에서 만들고 여기 넣는 걸 빠뜨렸음)
+                __DIR__ . '/src/' . $safe_id . '_vres.json',   // ★ (2026-11-15 19:01 fix175) 동영상 위치(fix173 에서 만들고 여기 넣는 걸 빠뜨렸음)
             ];
             foreach ($user_files as $file) {
                 if (file_exists($file)) {

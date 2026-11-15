@@ -1615,10 +1615,21 @@ if (!function_exists('mc_card_icon')) {
 //   · 설정은 쿠키라 브라우저(기기)마다 따로
 //   · 이어 보기(mcv_resume, 기본 켬): 주소에 위치(#imageN)가 없으면 내 기록(계정별 자동 저장)의 보던 쪽에서
 //   · 내 기록 = src/<아이디>_autosave.json (툰·북모드가 나갈 때 저장하는 그 기록, 책마다·계정마다) — 다른 사용자·책 정보 파일에는 안 씀
+//     ★ (2026-11-15 19:06 fix175) 지금은 책마다 위치 기록 src/<아이디>_vpos.json 이 먼저('이어 읽기' 목록은 개수 제한으로 밀려나 뷰어 이어 보기와 섞으면 안 됨 — 펜닐 제보), 없을 때만 위 기록
 //   viewer.php(열 때)·index.php(카드 배지) 공용
 // ============================================================
 if (!function_exists('mc_mv_autosave_entry')) {
     function mc_mv_autosave_entry($getfile, $bidx) {
+        // ★ (2026-11-15 19:01, 펜닐 제보 — fix175) 먼저 책마다 위치 기록(get_vpos_file — '이어 읽기' 목록과 따로, 개수 제한으로 밀려나지 않음)
+        //   거기 없으면(나누기 전에 읽은 책) 예전처럼 '이어 읽기' 기록에서 — 전에는 이 기록만 봐서, 목록 최대 개수를 넘겨 밀려난 책은 1쪽부터 열렸음
+        static $vpos = null;
+        if ($vpos === null) {
+            $vpos = [];
+            $vf = function_exists('get_vpos_file') ? get_vpos_file() : '';
+            if ($vf !== '' && is_file($vf)) { $vd = function_exists('load_json_with_lock') ? load_json_with_lock($vf) : json_decode((string)@file_get_contents($vf), true); if (is_array($vd)) $vpos = $vd; }
+        }
+        $__vk = (int)$bidx . '|/' . ltrim((string)$getfile, '/');
+        if (isset($vpos[$__vk]) && is_array($vpos[$__vk])) { $ve = $vpos[$__vk]; $ve['bidx'] = (int)$bidx; return $ve; }
         static $arr = null;
         if ($arr === null) {
             $arr = [];
@@ -2733,6 +2744,111 @@ function mc_media_covers_all($base, $limit = 20, $allow_ffmpeg = true) {
     if ($memo !== $memo0) @file_put_contents($memo_f, json_encode($memo, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE), LOCK_EX);
     return $made;
 }
+}
+
+// ============================================================
+// ★ (2026-11-15 18:28, 펜닐 요청 — fix173) 뷰어 설정·동영상 이어보기 위치를 서버(계정별)에도 저장
+//   [왜] 이어 보기 켬/끔·모드 기억·보기 방식(쿠키)과 동영상 위치(브라우저 저장소)는 브라우저에만 있어, 브라우저 데이터를 지우거나 앱을 다시 깔거나
+//        다른 브라우저·기기에서 열면 없어졌음 → 계정 하나에 하나(폰·PC 같은 설정, 동영상은 보던 곳부터)
+//   [설정] mc_prefs_sync(): 요청 맨 처음(bootstrap)에 브라우저 쿠키와 src/<아이디>_vprefs.json 을 맞춤 — 설정을 읽는 기존 코드($_COOKIE)는 그대로
+//     · 이 브라우저에서 바꿨으면(쿠키 값이 지난번 맞춘 값과 다름) → 서버에 올림(판 번호 v + 1)
+//     · 서버가 더 새 판이거나(다른 기기에서 바꿈) 이 브라우저에 값이 없으면(지움·새 브라우저) → 서버 값을 쿠키로 내려줌
+//     · 맞춘 표시: 쿠키 mc_psync = '계정 지문.판 번호.값 지문'(값 자체는 안 담음, 스크립트가 못 읽게 HttpOnly) — 계정 지문은 fix174
+//     · 처음 한 번: 서버에 아직 없으면 이 브라우저 값을 올림 / 이미 다른 기기가 올렸으면 그 값을 받음(계정 하나에 하나)
+//     · 그림·동영상 조각·API 요청(img·vapi·action)과 GET 아닌 요청은 건너뜀(많고 설정과 상관없음)
+//   [동영상] mc_vres_get(): 이 영상(압축 속 영상이면 그 압축의 영상들) 위치를 뷰어에 내줌 — 저장은 vres.php(js/mc-video.js 가 보냄)
+// ============================================================
+if (!function_exists('mc_prefs_keys')) {
+    function mc_prefs_keys() {
+        return [
+            'mcv_resume'  => '/^[01]$/',          // 만화 이어 보기 켬/끔
+            'mcv_modemem' => '/^(off|all|book)$/', // 모드 기억
+            'mcv_mode'    => '/^(toon|book)$/',    // 마지막에 쓴 모드(모드 기억 '전체')
+            'mcv_order'   => '/^[0-4]$/',          // 보기 방식
+            'epub_resume' => '/^[01]$/',           // 전자책 이어 보기
+            'txt_resume'  => '/^[01]$/',           // 텍스트 이어 보기
+        ];
+    }
+    function mc_prefs_uid() {
+        $u = (string)($_SESSION['user_id'] ?? '');
+        $u = preg_replace('/[^a-zA-Z0-9_]/', '', $u); // get_autosave_file() 과 같은 규칙
+        return $u;
+    }
+    function mc_prefs_sync() {
+        static $done = false;
+        if ($done) return; $done = true;
+        if (PHP_SAPI === 'cli' || headers_sent()) return;
+        if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'GET') return;
+        if (isset($_GET['img']) || isset($_GET['vapi']) || isset($_GET['action'])) return;
+        // (18:32) 설정을 읽는 화면·주로 오가는 화면만 — 썸네일·저장 같은 많은 요청마다 파일을 열지 않게
+        if (!in_array(basename((string)($_SERVER['SCRIPT_FILENAME'] ?? '')), ['index.php', 'viewer.php', 'epub_viewer.php', 'txt_viewer.php', 'series.php', 'library.php', 'browse.php', 'favorites.php', 'bookmarks.php'], true)) return;
+        $uid = mc_prefs_uid();
+        if ($uid === '') return;
+        $keys = mc_prefs_keys();
+        $C = [];
+        foreach ($keys as $k => $re) { $v = $_COOKIE[$k] ?? null; if (is_string($v) && preg_match($re, $v)) $C[$k] = $v; }
+        $fp_hash = function (array $a) { ksort($a); return substr(md5(json_encode($a)), 0, 10); };
+        $sync = null;
+        // ★ (2026-11-15 18:47 fix174) 맞춘 표시에 계정 표시(아이디 지문 6자)를 붙임 — 같은 브라우저에서 다른 계정으로 바꾸면 그 계정 값을 받게
+        //   (전엔 표시가 계정과 상관없어 tuser 로 돌아와도 admin 이 마지막에 고른 값이 그대로였음 — 시험으로 확인). 다른 계정 표시·예전 모양은 '아직 안 맞춤'으로 봄
+        $uh = substr(md5($uid), 0, 6);
+        if (is_string($_COOKIE['mc_psync'] ?? null) && preg_match('/^([0-9a-f]{6})\.(\d{1,9})\.([0-9a-f]{10})$/', $_COOKIE['mc_psync'], $m) && $m[1] === $uh) $sync = [(int)$m[2], $m[3]];
+        $file = __DIR__ . '/src/' . $uid . '_vprefs.json';
+        if (!is_file($file) && empty($C)) return; // 서버에도 브라우저에도 없음 — 기본값 그대로(파일을 만들지 않음)
+        $fp = @fopen($file, 'c+');
+        if (!$fp) return;
+        $out = null;
+        try {
+            $rd = function () use ($fp, $keys) { // 서버 값 읽기(거른 값만)
+                rewind($fp);
+                $S = json_decode((string)stream_get_contents($fp), true);
+                if (!is_array($S)) $S = [];
+                $sp = is_array($S['p'] ?? null) ? $S['p'] : [];
+                foreach ($sp as $k => $v) { if (!isset($keys[$k]) || !is_string($v) || !preg_match($keys[$k], $v)) unset($sp[$k]); }
+                return [max(0, (int)($S['v'] ?? 0)), $sp];
+            };
+            if (!flock($fp, LOCK_SH)) return; // 읽기는 같이 — 올릴 때만 혼자 잠금(아래)
+            list($sv, $sp) = $rd();
+            $hc = $fp_hash($C);
+            $push = !empty($C) && ($sync === null ? $sv === 0 : $sync[1] !== $hc);
+            if ($push) { flock($fp, LOCK_UN); if (!flock($fp, LOCK_EX)) return; list($sv, $sp) = $rd(); } // 혼자 잠근 뒤 다시 읽음(그 사이 다른 요청이 올렸을 수 있음)
+            // ★ (2026-11-15 18:47 fix174) 공유 잠금을 먼저 풀고 혼자 잠금 — Windows(LockFileEx)는 내가 쥔 공유 잠금과 겹치는 혼자 잠금을 기다려 멈출 수 있음(Linux 는 바꿔 줌). 다시 읽으니 그 사이 바뀐 것도 반영
+            $pull = !$push && $sv > 0 && ($sync === null || $sync[0] < $sv || empty($C));
+            if ($push) {
+                foreach ($C as $k => $v) $sp[$k] = $v;
+                $sv++;
+                $json = json_encode(['v' => $sv, 'p' => $sp, 't' => time()]);
+                if (is_string($json)) { ftruncate($fp, 0); rewind($fp); fwrite($fp, $json); fflush($fp); }
+            } elseif ($pull) {
+                foreach ($sp as $k => $v) {
+                    $_COOKIE[$k] = $v; $C[$k] = $v; // 이 요청에서 읽는 기존 코드도 서버 값을 씀
+                    @setcookie($k, $v, ['expires' => time() + 31536000, 'path' => '/', 'samesite' => 'Lax']); // 스크립트(위 막대 설정)도 읽는 쿠키 — js/viewer-bar.js setPref 와 같은 모양
+                }
+            }
+            if ($sv > 0) $out = $uh . '.' . $sv . '.' . $fp_hash($C);
+        } finally {
+            @flock($fp, LOCK_UN); @fclose($fp);
+        }
+        if ($out !== null && (string)($_COOKIE['mc_psync'] ?? '') !== $out) {
+            @setcookie('mc_psync', $out, ['expires' => time() + 31536000, 'path' => '/', 'samesite' => 'Lax', 'httponly' => true]);
+            $_COOKIE['mc_psync'] = $out;
+        }
+    }
+    // 동영상 위치 — 키는 js/mc-video.js 의 'mc_vres:' 뒤 부분(bidx|경로 또는 bidx|압축 경로|속 영상 이름)
+    function mc_vres_file() { $u = mc_prefs_uid(); return $u === '' ? '' : __DIR__ . '/src/' . $u . '_vres.json'; }
+    function mc_vres_get($base) {
+        $f = mc_vres_file(); $base = (string)$base;
+        if ($f === '' || $base === '' || !is_file($f)) return [];
+        $all = function_exists('load_json_with_lock') ? load_json_with_lock($f) : json_decode((string)@file_get_contents($f), true);
+        if (!is_array($all)) return [];
+        $out = [];
+        foreach ($all as $k => $r) {
+            if (!is_string($k) || !is_array($r) || !empty($r['x'])) continue; // x = 지운 표시(vres.php)
+            if ($k !== $base && strpos($k, $base . '|') !== 0) continue;
+            $out[$k] = ['t' => (int)($r['t'] ?? 0), 'd' => (int)($r['d'] ?? 0), 'at' => (int)($r['at'] ?? 0)];
+        }
+        return $out;
+    }
 }
 
 ?>

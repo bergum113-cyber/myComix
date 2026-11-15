@@ -1954,6 +1954,19 @@ if ($type === 'zip' || $type === 'images') {
 if ($type === 'pdf') {
     $_mcv_resume = function_exists('mc_mv_resume_mark') ? mc_mv_resume_mark($getfile, $current_bidx, 'pdf') : '';
 }
+// ★ (2026-11-15 16:15, 펜닐 요청 — fix169) 툰·북모드는 이어 보기가 켜져 있으면 바로 보던 쪽으로 가지 않고 '이어서 볼까요?' 먼저 물음(js/mc-resume-ask.js)
+// ★ (2026-11-15 17:10, 펜닐 요청 — fix170) '어디서 열든 늘 묻기' — 목록 '이어 읽기' 단추·이어 읽기/북마크 목록·서재처럼 위치(#imageN)를 붙여 들어와도 물음(그 위치로)
+//   · 묻는 경우: 이어 보기 켬 + 갈 곳(주소의 위치, 없으면 내 기록)이 2쪽 이상 · 툰모드는 1쪽이라도 그 쪽 안에서 내려가 있으면(f 10 이상 = 1% 넘게)
+//   · 묻지 않는 경우(예전 그대로 바로 감): 이어 보기 끔 · 기록 없음 · 1쪽 맨 위 · PDF · 뷰어 안에서 옮김(모드·보기 방식 바꾸기 ms=1, 북모드 닫기 등 —
+//     앞 화면이 뷰어(같은 책)·가림막) · 가림막에서 돌아옴(20초 안) · 새로고침 · 브라우저 앞/뒤 이동 — 판단은 아래 <head> 스크립트(주소의 위치는 브라우저만 앎)
+//   보던 쪽 위치는 예전과 같은 방법(주소에 #imageN)으로 뒤에서 먼저 열어 두고, '처음부터 읽기'를 고르면 1쪽으로 옮김(이어보기는 그대로 닫기만)
+$_mcv_rs_on = (($type === 'zip' || $type === 'images') && ($mode === 'toon' || $mode === 'book') && is_file(__DIR__ . '/js/mc-resume-ask.js') // ★ (2026-11-15 17:56 fix171) 만화(압축·그림 폴더)만 — 동영상 화면에도 붙어 쓸데없이 받았음(동작 영향은 없었음)
+    && ((is_string($_COOKIE['mcv_resume'] ?? null) ? $_COOKIE['mcv_resume'] : '1') !== '0'));
+$_mcv_rs_rec = -1; $_mcv_rs_recf = -1;
+if ($_mcv_rs_on && !empty($_mcv_resume) && preg_match('/^image(\d{1,6})(?:f(\d{1,3}))?$/', $_mcv_resume, $_mcv_rs_m)) {
+    $_mcv_rs_rec = (int)$_mcv_rs_m[1];
+    $_mcv_rs_recf = isset($_mcv_rs_m[2]) && $_mcv_rs_m[2] !== '' ? (int)$_mcv_rs_m[2] : -1;
+}
 // ★ (2026-11-08 전체 점검 7차 fix79) 보기 방식(page_order)은 0~4 만 — 주소의 pageorder 가 0~4 가 아니면(예: 9) 책 옆 정보 파일(.json)의 값을 거르지 않고 그대로 써서,
 //   손으로 만든 .json(받은 만화 묶음에 같이 든 파일 등)의 값이 아래 JS 글자(pageOrder)로 그대로 들어가 스크립트가 실행됐음
 if (!is_array($pageorder)) $pageorder = ['page_order' => '0', 'viewer' => 'toon'];
@@ -2041,6 +2054,70 @@ flush(); ob_flush();
 <?php if ($type != "pdf" && $mode == "book"): /* ★ (2026-11-08 fix80, 펜닐 제보) 북모드는 늘 검은 바탕(lightGallery) — 그 창이 뜨기 전 흰 바탕이 잠깐 보이던 것(테마와 상관없이 처음부터 검게) */ ?><style>html, html body { background-color: #000; }</style>
 <?php endif; ?>
 <?php if (function_exists('mc_back_origin_viewer_js')) echo mc_back_origin_viewer_js(); /* ★ (2026-11-05) 뒤로가기 = 들어온 곳(서재·즐겨찾기·북마크 등) — function.php */ ?>
+<?php if ($_mcv_rs_on): // ★ (2026-11-15 16:15 fix169 · 17:10 fix170) 물을지 판단 — 바로 아래 줄이 기록 위치(#imageN)를 붙이기 전에(붙은 뒤엔 주소에 원래 위치가 있었는지 구분 안 됨) ?>
+	<script>
+	(function(){ try {
+	  var BOOK = <?php echo $mode === 'book' ? 'true' : 'false'; ?>, REC = <?php echo (int)$_mcv_rs_rec; ?>, RECF = <?php echo (int)$_mcv_rs_recf; ?>, MS = <?php echo isset($_GET['ms']) ? 'true' : 'false'; ?>;
+	  if (MS) return; // 위 막대에서 모드·보기 방식을 바꿔 다시 엶
+	  var nt = ''; try { var ne = performance.getEntriesByType && performance.getEntriesByType('navigation')[0]; nt = ne ? String(ne.type || '') : ''; } catch (e) {}
+	  if (nt === 'reload' || nt === 'back_forward') return; // 새로고침·브라우저 앞/뒤 — 예전처럼 바로
+	  var ref = null; try { if (document.referrer) { ref = new URL(document.referrer); if (ref.origin !== location.origin) ref = null; } } catch (e) { ref = null; }
+	  // 가림막에서 방금 돌아옴(blank.php 가 남기는 표시 — function.php 찾아가기와 같은 20초)
+	  // ★ (2026-11-15 20:02, 펜닐 제보 — fix180) 가림막에서 이 뷰어로 '바로' 돌아온 때만(앞 화면이 blank.php, 앞 화면을 모르면 예전처럼) — 표시는 첫 화면(index)만 지워서
+	  //   가림막 → 북마크 '이어 읽기' 목록 등으로 돌아온 뒤 20초 안에 책을 누르면 묻지 않았음(PC·모바일 오가면 '떴다 안 떴다' — 시험으로 확인)
+	  try { var cr = parseInt(sessionStorage.getItem('mycomix_curtain_return') || '0', 10) || 0, dt = Date.now() - cr; if (cr && dt >= 0 && dt < 20000 && (!document.referrer || (ref && /\/blank\.php$/.test(ref.pathname)))) return; } catch (e) {}
+	  var fromViewer = !!(ref && /\/(viewer|blank)\.php$/.test(ref.pathname));
+	  var h = location.hash || '', n = -1, f = -1;
+	  if (h) {
+	    if (fromViewer) return; // 뷰어 안에서 위치를 정해 옮김(북모드 닫기·예전 단추 등)
+	    var m = h.match(/^#image(\d{1,6})(?:f(\d{1,3}))?$/); // 목록이 붙이는 모양만(가림막 복귀의 o·e 붙은 모양은 묻지 않음)
+	    if (!m) return;
+	    n = parseInt(m[1], 10); f = m[2] ? parseInt(m[2], 10) : -1;
+	  } else {
+	    if (REC < 0) return;
+	    if (fromViewer) { // 같은 책 안에서 옮김(북모드 닫고 툰모드 등)이면 묻지 않음 — 이전·다음 권(다른 책)은 물음
+	      try { var cq = new URLSearchParams(location.search), rq = new URLSearchParams(ref.search); if (rq.get('file') === cq.get('file') && (rq.get('bidx') || '0') === (cq.get('bidx') || '0')) return; } catch (e) { return; }
+	    }
+	    n = REC; f = RECF;
+	  }
+	  if (n >= 1 || (!BOOK && n === 0 && f >= 10)) { window.mcRsPending = 1; window.mcRsN = n; }
+	} catch (e) {} })();
+	</script>
+	<script src="js/mc-resume-ask.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-resume-ask.js'); ?>"></script>
+	<script>
+	(function(){
+	  if (!window.mcRsPending) return;
+	  var PG = window.mcRsN || 0, BOOK = <?php echo $mode === 'book' ? 'true' : 'false'; ?>;
+	  var T = <?php echo json_encode(['title' => __('mcrs_title'), 'last' => __('mcrs_last'), 'page' => __('mcrs_page'), 'of' => __('mcrs_of'), 'start' => __('mcrs_start'), 'go' => __('mcrs_go_page'), 'hint' => __('mcrs_hint'), 'name' => (string)$title], JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+	  function f(s, v) { return String(s).replace('%s', String(v)); }
+	  function isDark() { try { var h = document.documentElement, b = document.body; return BOOK || h.classList.contains('dark-mode') || (b && b.classList.contains('dark-mode')) || h.getAttribute('data-theme') === 'dark'; } catch (e) { return BOOK; } }
+	  function run() {
+	    var lb = document.getElementById('lightgallery'), tot = lb ? (parseInt(lb.getAttribute('data-total'), 10) || 0) : 0;
+	    if (!tot || typeof window.mcResumeAsk !== 'function') { window.mcRsPending = 0; return; } // 그림이 없거나(암호 압축 등) 창을 못 만들면 예전처럼(보던 쪽)
+	    var n = Math.min(PG, tot - 1) + 1; // 사람이 보는 쪽 번호(1부터) — 기록이 쪽 수보다 크면(책이 바뀜) 마지막 쪽(뷰어 복원과 같게)
+	    // (fix170) 1쪽이어도 툰모드에서 그 쪽 안에 내려가 있으면 물음(위에서 판단) — 여기서 다시 거르지 않음
+	    // ★ (2026-11-15 18:07 fix172) 창을 못 만들면(예외) '답 대기'를 풀어 예전처럼(보던 쪽·자동 저장) — 안 풀면 그 화면에선 자동 저장이 계속 꺼져 읽은 곳이 저장 안 됐음(일부러 실패시킨 시험으로 확인)
+	    try { window.mcResumeAsk({
+	      title: T.title, name: T.name, label: T.last, page: f(T.page, n), tail: f(T.of, tot), pct: n / tot * 100,
+	      startLbl: T.start, goLbl: f(T.go, n), hint: T.hint, dark: isDark(),
+	      onGo: function () { window.mcRsPending = 0; }, // 이미 보던 쪽으로 열려 있음(툰모드는 위치 맞추기가 계속됨)
+	      onStart: function () {
+	        window.mcRsPending = 0;
+	        if (BOOK) {
+	          try { history.replaceState(history.state, '', location.pathname + location.search + '#image0'); } catch (e) {}
+	          try { var inst = window.jQuery && window.jQuery('#lightgallery').data('lightGallery'); if (inst && typeof inst.slide === 'function') inst.slide(0); } catch (e) {}
+	        } else {
+	          window.mcRsStop = 1; // 툰모드 위치 맞추기(restoreToonPosition) 멈춤
+	          try { history.replaceState(history.state, '', location.pathname + location.search); } catch (e) {}
+	          try { window.scrollTo(0, 0); } catch (e) {}
+	        }
+	      }
+	    }); } catch (eAsk) { window.mcRsPending = 0; try { var _ov = document.querySelector('.mcrs-ov'); if (_ov && _ov.parentNode) _ov.parentNode.removeChild(_ov); } catch (e2) {} }
+	  }
+	  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', run); else run();
+	})();
+	</script>
+<?php endif; ?>
 <?php if (!empty($_mcv_resume) && preg_match('/^(image\d+|pdf_\d{1,6})(f\d{1,3})?$/', $_mcv_resume)): // ★ (2026-11-02 01:01) PDF·쪽 안 위치(f)도 / ★ (2026-11-01 23:37) 이어 보기: 위치(#…) 없이 열면 보던 쪽을 붙임 — 툰모드 복원·북모드 시작 쪽이 이 값을 씀(다른 스크립트보다 먼저) ?>
 	<script>(function(){try{if(!location.hash)history.replaceState(history.state,'',location.pathname+location.search+'#<?php echo $_mcv_resume; ?>');}catch(e){}})();</script>
 <?php endif; ?>
@@ -4045,6 +4122,8 @@ if($mode == "toon"){
 </div>
 <?php
 if($type == "video"){
+    // ★ (2026-11-15 18:30, 펜닐 요청 — fix173) 서버(계정별)에 저장된 이 영상(압축 속 영상이면 그 압축의 영상들) 이어보기 위치 — js/mc-video.js 가 브라우저 저장소 값과 견줘 더 나중 것을 씀
+    echo '<script>window.MC_VRES = ' . (json_encode((object)(function_exists('mc_vres_get') ? mc_vres_get($current_bidx . '|' . $getfile) : []), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT | JSON_INVALID_UTF8_SUBSTITUTE) ?: '{}') . ';</script>' . "\n";
     // ★ (2026-10-31) 동영상 플레이어 보강(js/mc-video.js) 번역
     echo '<script>window.MC_VIDEO_T = ' . json_encode([
         'back5' => __('mcv_back5'), 'fwd5' => __('mcv_fwd5'), 'back5_help' => __('mcv_back5_help'), 'fwd5_help' => __('mcv_fwd5_help'),
@@ -6183,7 +6262,35 @@ function mcAsUrl(u){
 	}catch(e){}
 	return u;
 }
+// ★ (2026-11-15 20:05, 펜닐 제보 — fix180) 이 화면에서 보던 쪽을 마지막으로 바꾼 뒤 몇 초 지났는지(자동 저장에 &pa= 로 같이 보냄 — bookmark.php)
+//   PC·모바일에 같은 책을 같이 열어 두면, 나중에 닫은 쪽이 예전에 보던 쪽으로 기록을 덮어써 다른 기기에서 읽은 쪽이 사라졌음(시험으로 확인)
+//   → 서버가 '쪽을 바꾼 시각'(서버 시계 - 지난 초 — 기기 시계가 달라도 됨)을 비교해, 다른 기기가 더 나중에 바꾼 기록이면 이 저장은 버림
+//   · 쪽(툰모드는 화면 한 장 높이 단위로 쪽 안 위치까지·PDF 는 쪽 안 1/4 단위)이 바뀔 때만 시각을 새로 — 가만히 열어 둔 화면은 연 때 시각 그대로
+//   · '이어서 볼까요?'에 답하면 그때를 바꾼 시각으로(처음부터·이어보기 모두 이 기기에서 지금 고른 것)
+(function(){
+	var at = Date.now(), last = null, wasPend = false, tm = 0;
+	function key(){
+		var h = ''; try { h = window.myComixCurrentHash ? String(window.myComixCurrentHash() || '') : ''; } catch(e){}
+		var m = h.match(/^#(image\d+|pdf_\d+)(?:o(\d+)|f(\d+))?/); if (!m) return '';
+		var b = m[2] ? Math.floor(parseInt(m[2], 10) / Math.max(200, window.innerHeight || 600)) : (m[3] ? Math.floor(parseInt(m[3], 10) / 250) : 0);
+		return m[1] + ':' + b;
+	}
+	function sample(){
+		if (window.mcRsPending) { wasPend = true; return; }
+		var k = key(); if (!k) return;
+		if (last === null) { last = k; if (wasPend) { wasPend = false; at = Date.now(); } return; }
+		if (k !== last) { last = k; at = Date.now(); }
+	}
+	function later(){ clearTimeout(tm); tm = setTimeout(sample, 400); }
+	try {
+		document.addEventListener('scroll', later, { capture: true, passive: true }); // PDF 는 칸 안 스크롤이라 잡기 단계로
+		['keyup', 'pointerup', 'touchend', 'wheel'].forEach(function(t){ window.addEventListener(t, later, { passive: true }); });
+		setTimeout(sample, 1500); setTimeout(sample, 4000);
+	} catch(e){}
+	window.mcPosAge = function(){ sample(); return Math.max(0, Math.round((Date.now() - at) / 1000)); };
+})();
 function sendAutosave(u){
+	try { if (typeof window.mcPosAge === 'function') u += '&pa=' + window.mcPosAge(); } catch(e){} // ★ fix180 위 설명
 	// ✅ 페이지 이탈/숨김 시점 호출: sendBeacon으로 확실히 전송(비동기 $.get가 이탈로 취소되는 race 방지).
 	//    sendBeacon은 같은 출처라 세션 쿠키를 함께 보내고, bookmark.php의 autosave는 토큰 없이 세션만으로 허용됨.
 	//    미지원 브라우저 또는 큐잉 실패(false) 시에만 기존 $.get로 폴백 → 무회귀(최악의 경우 현재 동작과 동일).
@@ -6193,6 +6300,7 @@ function sendAutosave(u){
 	$.get(u, function(data){ try{ document.getElementById("info").value = data; }catch(e){} });
 }
 function autosave(){	
+	if (window.mcRsPending) return; // ★ (2026-11-15 16:15 fix169) '이어서 볼까요?'에 아직 답하지 않았으면 저장 안 함 — 답하기 전에 나가면 기록(보던 쪽)이 그대로 남게
 	try{ sessionStorage.setItem('mycomix_marks_dirty','1'); }catch(e){} try{ sessionStorage.setItem('mc_lib_dirty','1'); sessionStorage.setItem('mc_lib_dirty_b','1'); }catch(e){} /* ★ (2026-11-02 01:43) 서재 화면 읽은 기록 바로 반영(series.php = mc_lib_dirty · ★ 03:04 browse.php = mc_lib_dirty_b — 따로 써서 한쪽이 먼저 지워도 다른 쪽이 갱신) */
 <?php if ($type != "pdf" && $mode == "toon"){ // ★ (2026-10-30) PDF 는 아래 PDF 분기만 — 같은 함수 안 const bookmark 때문에 ReferenceError 로 자동저장·크기 저장이 늘 실패했음 ?>
 	// ✅ 점진 로딩(지연/무한스크롤) 대응: 고정 범위 루프 대신 현재 DOM에 존재하는 이미지만
@@ -6288,6 +6396,7 @@ function autosave(){
 // ✅ 사생활 보호 복귀용: 현재 toon 스크롤 위치를 "#imageN" 형태로 반환(autosave와 동일한 상단 이미지 판별).
 //    뷰어 URL 자체는 바꾸지 않고, privacy_shield가 blank 복귀 URL에 이 위치만 실어 보내도록 제공.
 window.myComixCurrentHash = function(){
+	if (window.mcRsPending) return ""; // ★ (2026-11-15 16:15 fix169) 답하기 전이면 주소(#보던 쪽) 그대로 돌아옴 — 맞추는 중의 어중간한 위치를 싣지 않게
 	try {
 <?php if ($type != "pdf" && $mode == "toon"){ // ★ (2026-11-02 01:01) PDF 는 아래 분기(PDF 도 주소가 mode=toon 이라 예전엔 여기로 와서 늘 빈 값) ?>
 		var imgs = document.querySelectorAll("#lightgallery img[id^='image']");
@@ -6868,7 +6977,7 @@ if (file) {
       var startTime = Date.now();
       // 복귀 직후 탭 모멘텀/잔여 터치 등 의도치 않은 스크롤로 복원이 즉시 중단되는 것을 막기 위해
       // 처음 600ms 동안의 스크롤은 무시(그 후의 실제 사용자 스크롤이면 중단).
-      function onUserScroll(){ if (Date.now() - startTime > 600) aborted = true; }
+      function onUserScroll(){ if (window.mcRsPending) return; /* ★ (2026-11-15 fix169) 묻는 창을 누르거나 끄는 손놀림은 스크롤이 아님 */ if (Date.now() - startTime > 600) aborted = true; }
       window.addEventListener('wheel',     onUserScroll, { passive: true, capture: true });
       window.addEventListener('touchmove', onUserScroll, { passive: true, capture: true });
       window.addEventListener('keydown',   onUserScroll, true);
@@ -6884,7 +6993,7 @@ if (file) {
       var stableTicks = 0;                                          // 일반 복원 시 위치 안정(드리프트 종료) 판정용
       var timer = setInterval(function(){
         // 사용자가 직접 스크롤했거나 전체화면 갤러리가 열렸으면 중단(충돌 방지)
-        if (aborted || document.querySelector('.lg-outer.lg-visible')) { clearInterval(timer); cleanup(); return; }
+        if (aborted || window.mcRsStop || document.querySelector('.lg-outer.lg-visible')) { clearInterval(timer); cleanup(); return; } // ★ (2026-11-15 fix169) mcRsStop = 묻는 창에서 '처음부터 읽기'
         if (++tries > MAX_TRIES) { clearInterval(timer); cleanup(); return; }
 
         var el = findTarget();

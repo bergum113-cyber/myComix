@@ -158,7 +158,25 @@ if ($mode === "delete_bookmark") {
     }
     
     $autosave_arr = load_json_with_lock($autosave_file);
+    $__as_before = is_array($autosave_arr) ? $autosave_arr : []; // ★ fix175 밀어내기 전 목록(책마다 위치 기록을 처음 만들 때 옮겨 담음 — 아래)
     $__ak = mc_rec_key_for_write($autosave_arr, $bidx, $getfile); // ★ (2026-11-06 00:50) 이 콘텐츠 폴더의 칸(같은 경로를 다른 콘텐츠 폴더가 쓰고 있으면 따로) — 아래 $autosave_arr[$__ak] 는 예전 $autosave_arr[$getfile] 자리
+    // ★ (2026-11-15 20:06, 펜닐 제보 — fix180) 두 기기에 같은 책을 같이 열어 둘 때 — 나중에 닫은 기기가 예전에 보던 쪽으로 덮어쓰지 않게
+    //   뷰어가 '쪽을 바꾼 뒤 지난 초'(pa)를 보내면 바꾼 시각 = 지금(서버 시계) - pa. 이 책 기록(이어 읽기 목록·책마다 위치)에 더 나중에 바꾼 시각(pt)이 있으면 이번 저장은 통째로 버림
+    //   pa 가 없는 저장(모드·보기 방식 바꾸기, 북모드 닫기 등 지금 누른 것 · 예전 화면)은 지금 바꾼 것으로 — 예전과 같음. 시각 차이 2초까지는 같은 때로 봄
+    $__pa = (is_string($_GET['pa'] ?? null) && ctype_digit($_GET['pa']) && strlen($_GET['pa']) <= 8) ? (int)$_GET['pa'] : -1;
+    $__pt = time() - max(0, $__pa);
+    if ($__pa >= 0) {
+        $__old_pt = (is_array($autosave_arr[$__ak] ?? null) && isset($autosave_arr[$__ak]['pt'])) ? (int)$autosave_arr[$__ak]['pt'] : 0;
+        try {
+            if (function_exists('get_vpos_file') && is_file(get_vpos_file())) {
+                $__v0 = load_json_with_lock(get_vpos_file());
+                $__v0k = (int)$bidx . '|/' . ltrim((string)$getfile, '/');
+                if (is_array($__v0) && is_array($__v0[$__v0k] ?? null) && isset($__v0[$__v0k]['pt'])) $__old_pt = max($__old_pt, (int)$__v0[$__v0k]['pt']);
+                unset($__v0);
+            }
+        } catch (\Throwable $e) { /* 무시 — 예전처럼 저장 */ }
+        if ($__old_pt > 0 && $__pt < $__old_pt - 2) exit; // 다른 기기가 더 나중에 바꾼 기록 — 그대로 둠
+    }
     // ✅ max_autosave 개수 초과 시 가장 오래된 항목 제거 (현재 파일이 '새 항목'일 때만 — 기존 재저장 시 개수 유지)
     if (!isset($autosave_arr[$__ak]) && count($autosave_arr) >= (int)$max_autosave) {
         mc_bm_evict_oldest($autosave_arr); // ★ (2026-11-02 08:56) 가장 오래 안 본 것부터(전에는 처음 넣은 것 — 매일 보는 책이 먼저 밀려났음)
@@ -169,6 +187,7 @@ if ($mode === "delete_bookmark") {
     $autosave_arr[$__ak]['page_order'] = sanitize_page_order($_GET['page_order'] ?? '0');
     $autosave_arr[$__ak]['bidx'] = $bidx;
     $autosave_arr[$__ak]['t'] = time(); // ★ (2026-11-02 08:56) 마지막 저장 시각(밀어낼 순서용 — 표시 순서는 그대로)
+    $autosave_arr[$__ak]['pt'] = $__pt; // ★ (2026-11-15 20:06 fix180) 이 쪽으로 바꾼 시각(위 설명) — 책마다 위치 기록에도 같이 들어감
     // ★ (2026-11-02 00:59) 쪽 안 위치(천분율) — 툰모드·PDF 가 보냄(북모드는 쪽 단위라 안 보냄 → 지움)
     $_f = sanitize_frac($_GET['f'] ?? null);
     if ($_f !== null) $autosave_arr[$__ak]['f'] = $_f; else unset($autosave_arr[$__ak]['f']);
@@ -180,6 +199,31 @@ if ($mode === "delete_bookmark") {
     if ($__vp < $__mp || $__vp > $__mp + 50) $__vp = -1;
     if ($__vp >= 0) $autosave_arr[$__ak]['vp'] = $__vp; else unset($autosave_arr[$__ak]['vp']);
     save_json_with_lock($autosave_file, $autosave_arr);
+    // ★ (2026-11-15 19:01, 펜닐 제보 — fix175) 책마다 위치 기록(뷰어 '이어 보기'용, bootstrap.php get_vpos_file)에도 같은 값 — '이어 읽기' 목록(위, 최대 개수로 밀려남)과 따로
+    //   개수 제한 없이 책마다 남김(아주 많아지면 20000권 넘는 만큼만 가장 오래 안 본 것부터). 실패해도 위 저장에는 영향 없음
+    //   ★ (2026-11-15 19:25, 펜닐 요청 — fix176) 그 권 수를 관리자 설정 'max_vpos'(기본 20000)로
+    try {
+        if (function_exists('get_vpos_file')) {
+            $__vf = get_vpos_file();
+            $__new = !is_file($__vf);
+            $__va = $__new ? [] : load_json_with_lock($__vf);
+            if (!is_array($__va)) $__va = [];
+            if ($__new) { // 처음 만들 때: 지금 '이어 읽기' 목록에 있던 책들 위치를 옮겨 담음(이번 저장으로 목록에서 밀려나는 책도 — 밀어내기 전 목록)
+                foreach ($__as_before as $__ok => $__ov) {
+                    if (!is_array($__ov) || !function_exists('mc_rec_split')) continue;
+                    [$__ob, $__op] = mc_rec_split($__ok, $__ov);
+                    $__ov['bidx'] = (int)$__ob;
+                    $__va[(int)$__ob . '|/' . ltrim((string)$__op, '/')] = $__ov;
+                }
+            }
+            $__vk = (int)$bidx . '|/' . ltrim((string)$getfile, '/');
+            $__ve = $autosave_arr[$__ak]; $__ve['bidx'] = (int)$bidx;
+            unset($__va[$__vk]); $__va[$__vk] = $__ve; // 최근 것을 뒤로
+            $__vmax = max(1, (int)get_app_settings('max_vpos', 20000));
+            if (count($__va) > $__vmax) { uasort($__va, function ($a, $b) { return ((int)($b['t'] ?? 0)) <=> ((int)($a['t'] ?? 0)); }); $__va = array_slice($__va, 0, $__vmax, true); }
+            save_json_with_lock($__vf, $__va);
+        }
+    } catch (\Throwable $e) { /* 무시 */ }
 
     // ★ (2026-10-29) 라이브러리 읽기 기록(시리즈 이어보기·다 읽음 표시용). 실패해도 기존 저장에는 영향 없음
     try {

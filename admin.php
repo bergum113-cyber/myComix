@@ -1166,6 +1166,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     $settings['pages_per_group_mobile'] = (string)max(1, (int)($_POST['pages_per_group_mobile'] ?? 5));
     $settings['max_autosave'] = (string)max(1, (int)($_POST['max_autosave'] ?? 10));
     $settings['max_bookmark'] = (string)max(1, (int)($_POST['max_bookmark'] ?? 10));
+    // ★ (2026-11-15 19:25, 펜닐 요청 — fix176) 책마다 위치 기록(뷰어 이어 보기, src/<아이디>_vpos.json) 최대 권 수(1 이상, 기본 20000) — 넘으면 가장 오래 안 본 책부터. 입력칸이 없는 요청이면 기존 값 유지
+    $settings['max_vpos'] = isset($_POST['max_vpos']) ? (string)max(1, min(1000000, (int)$_POST['max_vpos'])) : (string)($settings['max_vpos'] ?? '20000');
     // ★ (2026-11-03 00:07) 북마크 화면에 보일 전자책(EPUB·TXT) 책갈피 개수(0 = 숨김, 최대 500) — 입력칸이 없는 요청이면 기존 값 유지
     $settings['max_ebook_bookmark'] = isset($_POST['max_ebook_bookmark']) ? (string)max(0, min(500, (int)$_POST['max_ebook_bookmark'])) : (string)($settings['max_ebook_bookmark'] ?? '30');
     $settings['max_favorites'] = (string)max(1, (int)($_POST['max_favorites'] ?? 50));
@@ -1734,6 +1736,9 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
                 "./src/".$sid."_txt_progress.json",
                 "./src/".$sid."_notes.json", // ★ (2026-10-31) 책 노트
                 "./src/".$sid."_dims.json", // ★ (2026-11-02 08:49) 뷰어 이미지 크기 캐시도(탈퇴와 같게)
+                "./src/".$sid."_vpos.json",   // ★ (2026-11-15 19:01 fix175) 책마다 읽던 위치
+                "./src/".$sid."_vprefs.json", // ★ (2026-11-15 19:01 fix175) 뷰어 설정(fix173 에서 만들고 여기 넣는 걸 빠뜨렸음)
+                "./src/".$sid."_vres.json",   // ★ (2026-11-15 19:01 fix175) 동영상 위치(fix173 에서 만들고 여기 넣는 걸 빠뜨렸음)
             ];
             foreach ($user_files as $file) {
                 @unlink($file);
@@ -3412,6 +3417,7 @@ if (file_exists($_settings_file)) {
     if (isset($_loaded_settings['viewed_mark_seconds'])) $viewed_mark_seconds = $_loaded_settings['viewed_mark_seconds'];
     if (isset($_loaded_settings['max_bookmark'])) $max_bookmark = $_loaded_settings['max_bookmark'];
     if (isset($_loaded_settings['max_autosave'])) $max_autosave = $_loaded_settings['max_autosave'];
+    if (isset($_loaded_settings['max_vpos'])) $max_vpos = $_loaded_settings['max_vpos']; // ★ fix176
     if (isset($_loaded_settings['max_ebook_bookmark'])) $max_ebook_bookmark = $_loaded_settings['max_ebook_bookmark'];
     if (isset($_loaded_settings['max_favorites'])) $max_favorites = $_loaded_settings['max_favorites'];
     if (isset($_loaded_settings['fav_per_page'])) $fav_per_page = $_loaded_settings['fav_per_page'];
@@ -3420,6 +3426,7 @@ if (file_exists($_settings_file)) {
     if (isset($_loaded_settings['pages_per_group_mobile'])) $pages_per_group_mobile = $_loaded_settings['pages_per_group_mobile'];
 }
 if(!isset($max_bookmark))$max_bookmark=10;if(!isset($max_autosave))$max_autosave=3;if(!isset($max_ebook_bookmark))$max_ebook_bookmark=30;
+if(!isset($max_vpos))$max_vpos=20000; // ★ fix176
 if(!isset($max_favorites))$max_favorites=50;if(!isset($fav_per_page))$fav_per_page=30;if(!isset($lib_per_page))$lib_per_page=48;if(!isset($lib_reading_count))$lib_reading_count=12;if(!isset($lib_recent_count))$lib_recent_count=12;foreach(['bm_page_autosave','bm_page_bookmark','bm_page_ebook'] as $_bk){if(!isset($$_bk))$$_bk=12;}if(!isset($bg_refresh_minutes))$bg_refresh_minutes=10;if(!isset($perf_log))$perf_log='1';if(!isset($new_badge_hours))$new_badge_hours=24;if(!isset($viewed_mark_seconds))$viewed_mark_seconds=2;
 if(!isset($maxview_folder))$maxview_folder=50;if(!isset($maxview_file))$maxview_file=100;if(!isset($maxview_folder_mobile))$maxview_folder_mobile=30;if(!isset($maxview_file_mobile))$maxview_file_mobile=30;
 if(!isset($pages_per_group))$pages_per_group=5;if(!isset($pages_per_group_mobile))$pages_per_group_mobile=3;
@@ -3497,7 +3504,8 @@ foreach ($dirs as $idx => $dir): ?>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_file_list_mobile"); ?></td><td class=""><input type="number" name="maxview_file_mobile" class="form-control" value="<?php echo h($maxview_file_mobile); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_file_list_mobile_help'); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_pc"); ?></td><td class=""><input type="number" name="pages_per_group" class="form-control" value="<?php echo h($pages_per_group); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_page_nav_pc_help'); /* ★ (2026-11-10 22:26, 펜닐 요청) 이 설정이 쓰이는 화면 */ ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_page_nav_mobile"); ?></td><td class=""><input type="number" name="pages_per_group_mobile" class="form-control" value="<?php echo h($pages_per_group_mobile); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_page_nav_mobile_help'); /* ★ (2026-11-10 22:26, 펜닐 요청) */ ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_autosave"); ?></td><td class=""><input type="number" name="max_autosave" class="form-control" value="<?php echo h($max_autosave); ?>" min="1" required></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_autosave"); ?></td><td class=""><input type="number" name="max_autosave" class="form-control" value="<?php echo h($max_autosave); ?>" min="1" required><small class="text-muted"><?php echo __h("adm_cfg_max_autosave_help"); /* ★ (2026-11-15 19:47 fix179) 펜닐 요청 — 설명 글 */ ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_vpos"); ?></td><td class=""><input type="number" name="max_vpos" class="form-control" value="<?php echo h($max_vpos); ?>" min="1" max="1000000" required><small class="text-muted"><?php echo __h("adm_cfg_max_vpos_help"); /* ★ (2026-11-15 19:30 fix177) 마우스를 올려야 보이던 설명 → 칸 아래(즐겨찾기처럼) */ ?></small></td></tr><?php // ★ (2026-11-15 19:25 fix176) 책마다 위치 기록 — '이어 읽기' 목록(위)과 다른 것 ?>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_bookmark"); ?></td><td class=""><input type="number" name="max_bookmark" class="form-control" value="<?php echo h($max_bookmark); ?>" min="1" required></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_ebook_bookmark"); ?></td><td class=""><input type="number" name="max_ebook_bookmark" class="form-control" value="<?php echo h($max_ebook_bookmark); ?>" min="0" max="500" required><small class="text-muted"><?php echo __h('adm_cfg_max_ebook_bookmark_help'); ?></small></td></tr><?php // ★ (2026-11-03 00:07) ?>
 <?php foreach (['bm_page_autosave', 'bm_page_bookmark', 'bm_page_ebook'] as $_bk): // ★ (2026-11-03 01:30) 북마크 화면 칸별 한 페이지 개수 ?>

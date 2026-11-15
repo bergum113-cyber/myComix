@@ -40,6 +40,22 @@ $_login_url = $base_path . '/login.php';
 <div id="cover" style="position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:#fff;cursor:pointer;-webkit-tap-highlight-color:transparent;user-select:none;">
   <div style="font:15px/1.5 sans-serif;color:#555;text-align:center;padding:14px 24px;border:1px solid #e2e4e8;border-radius:12px;background:#fafbfc;box-shadow:0 1px 3px rgba(0,0,0,0.06);"><?php echo __h("blank_tap_continue"); /* ★ (2026-11-02 10:01) 언어 키로 */ ?></div>
 </div>
+<script>
+// ★ (2026-11-15 03:37, 펜닐 제보 — fix168) 탭 목록 카드에서도 문구가 가운데로 — 휴대폰 브라우저의 탭 목록 카드는 이 화면을 폭에 맞춰 줄인 뒤
+//   위에서부터 약 69% 만 보여 줌(아래가 잘림 — 제보 사진으로 잼). 이 화면은 다른 탭으로 넘어갈 때(숨김 상태) 열리고 그때 카드 사진이 찍혀서
+//   정가운데 문구가 카드에선 아래(72% 지점)로 내려가 보였음 → 숨김·포커스 잃음일 때만 가림판 아래 31% 를 비워 남은 69% 의 가운데(약 35%)에 두고,
+//   다시 보이면(탭으로 돌아오면) 원래대로 정가운데(원래 inset:0 의 bottom 값 '0px' 로 — 비우면 아래 자리가 풀려 문구가 맨 위로 감, 시험으로 확인). 문구·탭 동작·세션 확인은 그대로(배경이 흰색이라 비운 곳도 흰색)
+(function(){
+  var lost = false;
+  function place(){ try { var c = document.getElementById('cover'); if (c) c.style.bottom = (lost || document.visibilityState === 'hidden') ? '31%' : '0px'; } catch(e){} }
+  place();
+  document.addEventListener('visibilitychange', function(){ if (document.visibilityState === 'visible') lost = false; place(); });
+  window.addEventListener('pageshow', function(){ lost = false; place(); });
+  window.addEventListener('pagehide', function(){ lost = true; place(); });
+  window.addEventListener('blur', function(){ lost = true; place(); });
+  window.addEventListener('focus', function(){ lost = false; place(); });
+})();
+</script>
 <div class="loading" id="loadingIndicator" style="display:none;">
   <div class="spinner"></div>
   <div><?php echo __h("loading"); ?></div>

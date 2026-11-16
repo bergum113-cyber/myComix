@@ -932,7 +932,7 @@ Save now?',
     'bt_sec' => 'every %ds',
     'bt_ch_left' => '%d pages left in chapter',
     'bt_ch_last' => 'Last page in chapter',
-    'bt_readtime' => 'Reading time (this device)',
+    'bt_readtime' => 'Reading time', // ★ (2026-11-16 fix184) account total — dropped '(this device)'
     'bt_rt_line' => 'This book %s · Today %s',
     'bt_rt_h' => '%dh %dm',
     'bt_rt_m' => '%dm',
@@ -3295,6 +3295,11 @@ Cache tab → Regen stats / Delete folder cache
     'mcv2_bright_down' => 'Darker',
     'mcv2_bright_up' => 'Brighter',
     'mcv2_bright_zero' => 'Reset brightness',
+    'mcv2_zoom' => 'Size', // ★ (2026-11-16 fix181) toon mode image size
+    'mcv2_zoom_down' => 'Smaller',
+    'mcv2_zoom_up' => 'Larger',
+    'mcv2_zoom_reset' => 'Back to 100%',
+    'mcv2_zoom_tip' => 'Toon mode image size — remembered on this device only (shrink it on a big PC screen to see a whole page at once)',
     'mcv2_cover' => 'Set as cover',
     // ★ (2026-11-10 13:56 fix98) choose covers by hand (admin) — file cover · folder cover · back to automatic
     'mcv2_cover_file' => 'Use this page as file cover',

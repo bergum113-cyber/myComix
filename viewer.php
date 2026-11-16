@@ -2934,6 +2934,10 @@ function run_gallery() {
   const splitMap = <?php echo ($mode == "book" && (in_array((string)($pageorder['page_order'] ?? '0'), ['3', '4'], true) || $_mcv_solo_on)) ? json_encode(mc_book_split_map($base_file, $type, mc_split_cache_dir($base_file, $user_id ?? ''))) : '[]'; ?>;
   const mcSolo = <?php echo $_mcv_solo_on ? 'true' : 'false'; ?>;
   // 이 책만 '짝 한 쪽 밀기'(이 기기에 책마다 기억 — localStorage 'mcv_off:' + 파일 경로)
+  // ★ (2026-11-16 10:52, 펜닐 요청 — fix183) 계정 값이 있으면 먼저 이 기기 저장소에 맞춤(폰에서 켠 책이 PC 에서도 같은 짝) — 없으면 이 기기 값 그대로(js/viewer-bar.js 가 올림)
+  <?php $_mcv_off_srv = function_exists('mc_voff_get') ? mc_voff_get($current_bidx, (string)$getfile) : null; if ($_mcv_off_srv !== null): ?>
+  try { const _ok = 'mcv_off:' + <?php echo json_encode((string)$getfile, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>; if (<?php echo $_mcv_off_srv === '1' ? 'true' : 'false'; ?>) localStorage.setItem(_ok, '1'); else localStorage.removeItem(_ok); } catch (e) {}
+  <?php endif; ?>
   const mcOff = (function () { try { return localStorage.getItem('mcv_off:' + <?php echo json_encode((string)$getfile, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>) === '1'; } catch (e) { return false; } })();
   const activeOrder = ['0', '1', '2', '3', '4'].indexOf(pageOrder) !== -1 ? pageOrder : '0';
   function orderBtns(active) {

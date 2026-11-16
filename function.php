@@ -2767,13 +2767,46 @@ if (!function_exists('mc_prefs_keys')) {
             'mcv_order'   => '/^[0-4]$/',          // 보기 방식
             'epub_resume' => '/^[01]$/',           // 전자책 이어 보기
             'txt_resume'  => '/^[01]$/',           // 텍스트 이어 보기
+            // ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 화면 크기와 상관없는 설정을 더함(계정 하나에 하나). 화면 맞춤(mcv_fit)·밝기(mcv_bright)·툰 그림 크기(mcv_tz)·전자책 글자 크기(epub_fontsize)는 기기마다 그대로
+            'viewer_reverse_nav' => '/^[01]$/',    // 만화 북모드 넘김 방향 반대
+            'mcv_port1'   => '/^[01]$/',           // 만화 북모드 세로 화면은 한 쪽
+            'mcv_solo'    => '/^[01]$/',           // 만화 북모드 표지·가로 그림은 혼자
+            'epub_theme'  => '/^(light|sepia|dark)$/', // 전자책 테마
+            'epub_reverse_nav' => '/^[01]$/',      // 전자책 넘김 방향 반대
+            'txt_reverse_nav'  => '/^[01]$/',      // 텍스트 넘김 방향 반대
         ];
     }
+    // ★ (2026-11-16 09:31 fix181) 브라우저 저장소(localStorage)에 두는 설정 중 계정에 맞출 것 — js/mc-lsync.js 가 맞추고 vprefs.php 가 받음(서버 파일은 같은 src/<아이디>_vprefs.json 의 'l')
+    //   기기마다 그대로 두는 것: 전자책 여백(epub_margin), 텍스트 글자 크기·여백(txt_font_size·txt_margin),
+    //   화면 켜 두기·화면 어둡게·읽어 주기 목소리(기기마다 깔린 음성이 다름)(mct_wake·mct_dim·mct_tts_voice)
+    //   ★ (2026-11-16 11:16, 펜닐 요청 — fix184) 'PC 와 같이 써도 문제없으면 계정' 기준으로 다시 나눔 — 전자책 2쪽 펼침(epub_spread: 끔·넓은 화면·가로 화면 — 값 자체가 화면에 맞춰 동작)·
+    //   텍스트 자동 2단(txt_layout: '자동'만 기억, 가로면 2단)을 계정으로 · 읽은 시간은 따로 계정에 합산(vprefs.php op=rt) · 북모드 '짝 한 쪽 밀기'는 fix183
+    function mc_lprefs_keys() {
+        return [
+            'epub_lh'      => '/^(|1\.[4-9]|2\.[0-4])$/',   // 전자책 줄 간격('' = 책대로)
+            'epub_font'    => '/^(|gothic|serif)$/',        // 전자책 글꼴
+            'epub_para'    => '/^(|[123])$/',               // 전자책 문단 간격
+            'epub_justify' => '/^[01]$/',                   // 전자책 양쪽 정렬
+            'txt_theme'    => '/^(light|sepia|dark)$/',     // 텍스트 테마
+            'txt_line_height' => '/^([12](\.\d)?|3(\.0)?)$/', // 텍스트 줄 간격
+            'txt_font'     => '/^(|gothic|serif)$/',        // 텍스트 글꼴
+            'txt_justify'  => '/^[01]$/',                   // 텍스트 양쪽 정렬
+            'txt_scroll_speed' => '/^([1-9]|10)$/',         // 텍스트 자동 스크롤 속도
+            'mct_tts_rate' => '/^(0\.[5-9]|1(\.\d)?|2(\.[0-5])?)$/', // 읽어 주기 빠르기
+            'mcn_color'    => '/^(yellow|orange|coral|pink|purple|blue|mint|green|gray)$/', // 형광펜 마지막 색
+            'epub_spread'  => '/^(0|1|land)$/',             // ★ fix184 전자책 2쪽 펼침(끔·넓은 화면·가로 화면)
+            'txt_layout'   => '/^(|auto)$/',                // ★ fix184 텍스트 자동 2단('' = 자동 아님 — 이 기기 저장소에선 지운 상태)
+        ];
+    }
+    // ★ (2026-11-16 fix184) 저장소에서 '지움'이 곧 값인 키 — 빈 값('')으로 맞춤(js/mc-lsync.js)
+    function mc_lprefs_empty_keys() { return ['txt_layout']; }
     function mc_prefs_uid() {
         $u = (string)($_SESSION['user_id'] ?? '');
         $u = preg_replace('/[^a-zA-Z0-9_]/', '', $u); // get_autosave_file() 과 같은 규칙
         return $u;
     }
+    // ★ (2026-11-16 fix181) 값 표시(3글자) — 맞춘 표시 쿠키에 키마다 하나씩(값 자체는 안 담음)
+    function mc_prefs_sig($v) { return $v === null ? '---' : str_pad(base_convert((string)(crc32((string)$v) % 46656), 10, 36), 3, '0', STR_PAD_LEFT); }
     function mc_prefs_sync() {
         static $done = false;
         if ($done) return; $done = true;
@@ -2787,45 +2820,68 @@ if (!function_exists('mc_prefs_keys')) {
         $keys = mc_prefs_keys();
         $C = [];
         foreach ($keys as $k => $re) { $v = $_COOKIE[$k] ?? null; if (is_string($v) && preg_match($re, $v)) $C[$k] = $v; }
-        $fp_hash = function (array $a) { ksort($a); return substr(md5(json_encode($a)), 0, 10); };
+        $sigs = function (array $a) use ($keys) { $s = ''; foreach ($keys as $k => $re) $s .= mc_prefs_sig($a[$k] ?? null); return $s; };
         $sync = null;
         // ★ (2026-11-15 18:47 fix174) 맞춘 표시에 계정 표시(아이디 지문 6자)를 붙임 — 같은 브라우저에서 다른 계정으로 바꾸면 그 계정 값을 받게
         //   (전엔 표시가 계정과 상관없어 tuser 로 돌아와도 admin 이 마지막에 고른 값이 그대로였음 — 시험으로 확인). 다른 계정 표시·예전 모양은 '아직 안 맞춤'으로 봄
+        // ★ (2026-11-16 09:31, fix181) 맞춘 표시 = '계정 지문.판 번호.키마다 값 표시(3글자씩)' — 이 브라우저에서 '바꾼 키'만 올리고 나머지는 서버 값을 받음
+        //   [왜] 전엔 값 전체의 지문 하나라, 열어 둔 기기에서 설정 하나만 바꿔도 이 브라우저의 모든 값(다른 기기가 그 사이 바꾼 것의 옛 값까지)을 올려 되돌렸음
+        //        (시험으로 확인: B 가 이어 보기 끔 → 열어 둔 A 가 보기 방식만 바꿈 → 이어 보기가 다시 켬)
+        //   예전 모양(fix173~180, 끝이 지문 10자)·키 목록이 바뀐 뒤의 표시는 키별 표시 없음으로 봄 — 그때는 서버가 지난번 맞춘 판 그대로면 다른 값은 이 브라우저가 바꾼 것, 서버가 더 새 판이면 서버 값
         $uh = substr(md5($uid), 0, 6);
-        if (is_string($_COOKIE['mc_psync'] ?? null) && preg_match('/^([0-9a-f]{6})\.(\d{1,9})\.([0-9a-f]{10})$/', $_COOKIE['mc_psync'], $m) && $m[1] === $uh) $sync = [(int)$m[2], $m[3]];
+        if (is_string($_COOKIE['mc_psync'] ?? null) && preg_match('/^([0-9a-f]{6})\.(\d{1,9})\.([0-9a-z-]{10,300})$/', $_COOKIE['mc_psync'], $m) && $m[1] === $uh) {
+            $sync = [(int)$m[2], strlen($m[3]) === 3 * count($keys) ? $m[3] : null];
+        }
         $file = __DIR__ . '/src/' . $uid . '_vprefs.json';
         if (!is_file($file) && empty($C)) return; // 서버에도 브라우저에도 없음 — 기본값 그대로(파일을 만들지 않음)
         $fp = @fopen($file, 'c+');
         if (!$fp) return;
         $out = null;
         try {
-            $rd = function () use ($fp, $keys) { // 서버 값 읽기(거른 값만)
+            $rd = function () use ($fp, $keys) { // 서버 값 읽기(거른 값만) — 파일 전체(S)도 돌려줌('l' 등 다른 칸을 지우지 않게)
                 rewind($fp);
                 $S = json_decode((string)stream_get_contents($fp), true);
                 if (!is_array($S)) $S = [];
                 $sp = is_array($S['p'] ?? null) ? $S['p'] : [];
                 foreach ($sp as $k => $v) { if (!isset($keys[$k]) || !is_string($v) || !preg_match($keys[$k], $v)) unset($sp[$k]); }
-                return [max(0, (int)($S['v'] ?? 0)), $sp];
+                return [max(0, (int)($S['v'] ?? 0)), $sp, $S];
+            };
+            // 키마다: 올릴 것(이 브라우저에서 바꿨거나 서버에 없음)·받을 것(서버가 다름)
+            $plan = function ($sv, $sp) use ($C, $keys, $sync) {
+                $up = []; $down = []; $i = -1;
+                foreach ($keys as $k => $re) {
+                    $i++;
+                    $c = $C[$k] ?? null; $s = $sp[$k] ?? null;
+                    if ($c === $s) continue;
+                    if ($s === null) { $up[$k] = $c; continue; }   // 서버에 없음 → 이 브라우저 값
+                    if ($c === null) { $down[$k] = $s; continue; } // 이 브라우저에 없음 → 서버 값
+                    if ($sync !== null && $sync[1] !== null) $mine = substr($sync[1], $i * 3, 3) !== mc_prefs_sig($c); // 지난번 맞춘 뒤 이 브라우저에서 바뀜
+                    else $mine = ($sync !== null && $sync[0] === $sv); // 키별 표시 없음: 서버가 그 뒤로 안 바뀌었으면 이 브라우저가 바꾼 것
+                    if ($mine) $up[$k] = $c; else $down[$k] = $s;
+                }
+                return [$up, $down];
             };
             if (!flock($fp, LOCK_SH)) return; // 읽기는 같이 — 올릴 때만 혼자 잠금(아래)
-            list($sv, $sp) = $rd();
-            $hc = $fp_hash($C);
-            $push = !empty($C) && ($sync === null ? $sv === 0 : $sync[1] !== $hc);
-            if ($push) { flock($fp, LOCK_UN); if (!flock($fp, LOCK_EX)) return; list($sv, $sp) = $rd(); } // 혼자 잠근 뒤 다시 읽음(그 사이 다른 요청이 올렸을 수 있음)
-            // ★ (2026-11-15 18:47 fix174) 공유 잠금을 먼저 풀고 혼자 잠금 — Windows(LockFileEx)는 내가 쥔 공유 잠금과 겹치는 혼자 잠금을 기다려 멈출 수 있음(Linux 는 바꿔 줌). 다시 읽으니 그 사이 바뀐 것도 반영
-            $pull = !$push && $sv > 0 && ($sync === null || $sync[0] < $sv || empty($C));
-            if ($push) {
-                foreach ($C as $k => $v) $sp[$k] = $v;
-                $sv++;
-                $json = json_encode(['v' => $sv, 'p' => $sp, 't' => time()]);
-                if (is_string($json)) { ftruncate($fp, 0); rewind($fp); fwrite($fp, $json); fflush($fp); }
-            } elseif ($pull) {
-                foreach ($sp as $k => $v) {
-                    $_COOKIE[$k] = $v; $C[$k] = $v; // 이 요청에서 읽는 기존 코드도 서버 값을 씀
-                    @setcookie($k, $v, ['expires' => time() + 31536000, 'path' => '/', 'samesite' => 'Lax']); // 스크립트(위 막대 설정)도 읽는 쿠키 — js/viewer-bar.js setPref 와 같은 모양
+            list($sv, $sp, $S) = $rd();
+            list($up, $down) = $plan($sv, $sp);
+            if ($up) {
+                // ★ (2026-11-15 18:47 fix174) 공유 잠금을 먼저 풀고 혼자 잠금 — Windows(LockFileEx)는 내가 쥔 공유 잠금과 겹치는 혼자 잠금을 기다려 멈출 수 있음(Linux 는 바꿔 줌). 다시 읽으니 그 사이 바뀐 것도 반영
+                flock($fp, LOCK_UN); if (!flock($fp, LOCK_EX)) return;
+                list($sv, $sp, $S) = $rd();
+                list($up, $down) = $plan($sv, $sp);
+                if ($up) {
+                    foreach ($up as $k => $v) $sp[$k] = $v;
+                    $sv++;
+                    $S['v'] = $sv; $S['p'] = $sp; $S['t'] = time();
+                    $json = json_encode($S, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+                    if (is_string($json)) { ftruncate($fp, 0); rewind($fp); fwrite($fp, $json); fflush($fp); }
                 }
             }
-            if ($sv > 0) $out = $uh . '.' . $sv . '.' . $fp_hash($C);
+            foreach ($down as $k => $v) {
+                $_COOKIE[$k] = $v; $C[$k] = $v; // 이 요청에서 읽는 기존 코드도 서버 값을 씀
+                @setcookie($k, $v, ['expires' => time() + 31536000, 'path' => '/', 'samesite' => 'Lax']); // 스크립트(위 막대 설정)도 읽는 쿠키 — js/viewer-bar.js setPref 와 같은 모양
+            }
+            if ($sv > 0) $out = $uh . '.' . $sv . '.' . $sigs($C);
         } finally {
             @flock($fp, LOCK_UN); @fclose($fp);
         }
@@ -2833,6 +2889,47 @@ if (!function_exists('mc_prefs_keys')) {
             @setcookie('mc_psync', $out, ['expires' => time() + 31536000, 'path' => '/', 'samesite' => 'Lax', 'httponly' => true]);
             $_COOKIE['mc_psync'] = $out;
         }
+    }
+    // ★ (2026-11-16 09:31 fix181) 브라우저 저장소 설정의 계정 값 — 전자책·텍스트 뷰어가 <head> 에서 js/mc-lsync.js 에 넘김. 로그인 안 했으면 null
+    function mc_lprefs_get() {
+        $uid = mc_prefs_uid();
+        if ($uid === '') return null;
+        $out = [];
+        $f = __DIR__ . '/src/' . $uid . '_vprefs.json';
+        if (is_file($f)) {
+            $S = function_exists('load_json_with_lock') ? load_json_with_lock($f) : json_decode((string)@file_get_contents($f), true);
+            $keys = mc_lprefs_keys();
+            if (is_array($S) && is_array($S['l'] ?? null)) {
+                foreach ($S['l'] as $k => $r) {
+                    $v = is_array($r) ? ($r['v'] ?? null) : null;
+                    if (isset($keys[$k]) && is_string($v) && preg_match($keys[$k], $v)) $out[$k] = $v;
+                }
+            }
+        }
+        return $out;
+    }
+    // <head> 에 넣을 것(설정을 읽는 다른 스크립트보다 먼저)
+    function mc_lprefs_head() {
+        $s = mc_lprefs_get();
+        if ($s === null) return '';
+        $cfg = ['u' => substr(md5(mc_prefs_uid()), 0, 6), 'k' => array_keys(mc_lprefs_keys()), 'z' => mc_lprefs_empty_keys(), 's' => (object)$s];
+        return '<script>window.MC_LSYNC=' . json_encode($cfg, JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT) . ';</script>'
+             . '<script src="js/mc-lsync.js?v=' . (int)@filemtime(__DIR__ . '/js/mc-lsync.js') . '"></script>';
+    }
+    // ★ (2026-11-16 10:52, 펜닐 요청 — fix183) 만화 북모드 '짝 한 쪽 밀기(이 책만)' — 계정에 책마다 저장(src/<아이디>_vprefs.json 의 'o': { "bidx|경로": {v:'1'|'0', at} })
+    //   펼침으로 볼 때 그 책의 쪽 짝만 바꾸는 값이라 화면 크기와 상관없음(함께 쓰는 '표지·가로 그림은 혼자'도 계정 값 — fix181) → 폰·PC 같게
+    //   viewer.php 가 이 값을 브라우저 저장소('mcv_off:경로', 원래 읽던 곳)에 먼저 맞춰 놓음 · 바꾸면 js/viewer-bar.js 가 vprefs.php(op=off)로 보냄
+    function mc_voff_key($bidx, $path) { return (int)$bidx . '|' . ltrim(str_replace('\\', '/', (string)$path), '/'); }
+    // 이 책의 계정 값 — '1'(켬)·'0'(끔)·null(서버에 없음 = 이 기기 값 그대로)
+    function mc_voff_get($bidx, $path) {
+        $uid = mc_prefs_uid();
+        if ($uid === '') return null;
+        $f = __DIR__ . '/src/' . $uid . '_vprefs.json';
+        if (!is_file($f)) return null;
+        $S = function_exists('load_json_with_lock') ? load_json_with_lock($f) : json_decode((string)@file_get_contents($f), true);
+        $r = (is_array($S) && is_array($S['o'] ?? null)) ? ($S['o'][mc_voff_key($bidx, $path)] ?? null) : null;
+        $v = is_array($r) ? ($r['v'] ?? null) : null;
+        return ($v === '1' || $v === '0') ? $v : null;
     }
     // 동영상 위치 — 키는 js/mc-video.js 의 'mc_vres:' 뒤 부분(bidx|경로 또는 bidx|압축 경로|속 영상 이름)
     function mc_vres_file() { $u = mc_prefs_uid(); return $u === '' ? '' : __DIR__ . '/src/' . $u . '_vres.json'; }

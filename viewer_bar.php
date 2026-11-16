@@ -36,6 +36,9 @@ $_mcv_bm = (isset($bookmark_arr) && is_array($bookmark_arr)) ? (($__mcv_bk = mc_
 $_mcv_bm_anchor = is_array($_mcv_bm) ? (string)($_mcv_bm['bookmark'] ?? '') : (is_string($_mcv_bm) ? $_mcv_bm : '');
 $_mcv_bm_page = preg_match('/^image(\d+)$/', $_mcv_bm_anchor, $_mcv_bmm) ? (int)$_mcv_bmm[1] + 1 : 0;
 $_mcv_book = ($mode === 'book');
+// ★ (2026-11-16 09:28, 펜닐 요청 — fix181) 툰모드 그림 크기(%) — PC 큰 화면에서 그림이 원래 크기로 커서 한 쪽 보려면 한참 내려야 했음. 이 기기 쿠키 mcv_tz(30~100, 기본 100 = 지금과 같음)
+//   화면 크기마다 맞는 값이 달라 계정에 맞추지 않음(폰은 100, PC 는 줄여서). 툰모드 그림(#lightgallery img.lg-item)만 — 북모드는 '화면 맞춤'이 이미 한 쪽을 한눈에 보여 줌
+$_mcv_tz = (is_string($_COOKIE['mcv_tz'] ?? null) && preg_match('/^(30|40|50|60|70|80|90|100)$/', $_COOKIE['mcv_tz'])) ? (int)$_COOKIE['mcv_tz'] : 100;
 
 $_mcv_cfg = [
     'mode'      => $_mcv_book ? 'book' : 'toon',
@@ -50,6 +53,7 @@ $_mcv_cfg = [
     'nextTitle' => $_mcv_next_title,
     'title'     => (string)$_mcv_title,       // 제목 복사용(공백 그대로)
     'isFav'     => $_mcv_is_fav,
+    'offSrv'    => function_exists('mc_voff_get') ? mc_voff_get($current_bidx, (string)$getfile) : null, // ★ (2026-11-16 10:52 fix183) '짝 한 쪽 밀기' 계정 값('1'·'0'·null)
     't' => [
         'fav_add' => __('mcv2_fav_add'), 'fav_remove' => __('mcv2_fav_remove'),
         'pages' => __('mcv2_pages'), 'pages_close' => __('mcv2_pages_close'), // ★ (2026-11-13 00:07 fix133) 쪽 목록(js/mcv-pages.js)
@@ -91,6 +95,7 @@ $_mcv_i = [
     'resume'=> '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/>',
     'mode'  => '<path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/>',
     'copy'  => '<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>', // ★ (2026-11-02 16:55) 제목 복사
+    'zoom'  => '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/><path d="M11 8v6"/>', // ★ (2026-11-16 fix181) 툰모드 그림 크기
     'gear'  => '<path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>',
 ];
 // ★ (2026-11-01 23:37) 다시 열 때: 이어 보기 · 모드 기억(이 기기 쿠키 — function.php mc_mv_*)
@@ -238,6 +243,7 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
   #mcvMorePop > .mcv-hr, #mcvViewPop > .mcv-hr { display: none; }
 }
 </style>
+<style id="mcvTzCss"><?php echo $_mcv_tz < 100 ? '#lightgallery img.lg-item{zoom:' . ($_mcv_tz / 100) . '}' : ''; /* ★ (2026-11-16 fix181) 툰모드 그림 크기 — js/viewer-bar.js 가 바꿈 */ ?></style>
 <div class="mcv-bar<?php echo $_mcv_book ? ' mcv-dark' : ''; ?>" id="mcvBar" role="toolbar" aria-label="<?php echo __h('mcv2_bar'); ?>">
   <a class="mcv-ib" id="mcvBack" data-mc-back href="<?php echo h($_mcv_list); ?>" title="<?php echo __h('mcv2_list'); ?>" aria-label="<?php echo __h('mcv2_list'); ?>"><?php echo $_mcv_ico($_mcv_i['back'], 22); ?></a>
   <div class="mcv-title">
@@ -292,6 +298,9 @@ html.mcv-popopen #darkmode-toggle, html.mcv-popopen .darkmode-toggle, html.mcv-p
   <button type="button" class="mcv-mi<?php echo $_mcv_bm_page > 0 ? ' mcv-on' : ''; ?>" role="menuitem" data-act="bookmark" id="mcvBm"><?php echo $_mcv_ico($_mcv_i['mark']); ?><span id="mcvBmLbl"><?php echo $_mcv_bm_page > 0 ? h(__('mcv2_bm_at', $_mcv_bm_page)) : __h('mcv2_bookmark'); ?></span></button>
   <button type="button" class="mcv-mi mcv-fav<?php echo $_mcv_is_fav ? ' mcv-on' : ''; ?>" role="menuitem" data-act="fav" id="mcvFav"><?php echo $_mcv_ico($_mcv_i['star']); ?><span id="mcvFavLbl"><?php echo $_mcv_is_fav ? __h('mcv2_fav_remove') : __h('mcv2_fav_add'); ?></span></button>
   <div class="mcv-mi" role="group" aria-label="<?php echo __h('mcv2_bright'); ?>" style="cursor:default"><?php echo $_mcv_ico($_mcv_i['sun']); ?><?php echo __h('mcv2_bright'); ?><span class="mcv-r"><button type="button" class="mcv-step" data-act="bright-down" aria-label="<?php echo __h('mcv2_bright_down'); ?>">−</button><button type="button" class="mcv-step mcv-zero" data-act="bright-zero" aria-label="<?php echo __h('mcv2_bright_zero'); ?>">0</button><button type="button" class="mcv-step" data-act="bright-up" aria-label="<?php echo __h('mcv2_bright_up'); ?>">+</button></span></div>
+  <?php if (!$_mcv_book): // ★ (2026-11-16 09:28 fix181) 툰모드 그림 크기(이 기기) — 가운데 단추 = 지금 % (누르면 100%) ?>
+  <div class="mcv-mi" role="group" aria-label="<?php echo __h('mcv2_zoom'); ?>" title="<?php echo __h('mcv2_zoom_tip'); ?>" style="cursor:default"><?php echo $_mcv_ico($_mcv_i['zoom']); ?><?php echo __h('mcv2_zoom'); ?><span class="mcv-r"><button type="button" class="mcv-step" data-act="zoom-down" aria-label="<?php echo __h('mcv2_zoom_down'); ?>">−</button><button type="button" class="mcv-step mcv-zero" data-act="zoom-zero" id="mcvTzLbl" aria-label="<?php echo __h('mcv2_zoom_reset'); ?>"><?php echo $_mcv_tz; ?>%</button><button type="button" class="mcv-step" data-act="zoom-up" aria-label="<?php echo __h('mcv2_zoom_up'); ?>">+</button></span></div>
+  <?php endif; ?>
   <?php if ($_mcv_book): ?>
   <button type="button" class="mcv-mi" role="menuitem" data-act="fullscreen" id="mcvFull"><?php echo $_mcv_ico($_mcv_i['full']); ?><?php echo __h('mcv2_fullscreen'); ?></button>
   <?php else: ?>

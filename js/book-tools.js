@@ -521,22 +521,71 @@
         return String((T && T.rt_m) || '%d m').replace('%d', Math.max(sec > 0 && m === 0 ? 1 : m, 0));
     }
     function dayKey() { var d = new Date(); return d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2) + '-' + ('0' + d.getDate()).slice(-2); }
-    function rtLoad() { try { var o = JSON.parse(localStorage.getItem('mct_rt') || '{}'); if (o && typeof o === 'object') return { b: o.b || {}, d: o.d || {} }; } catch (e) {} return { b: {}, d: {} }; }
+    var RTK = 'mct_rt'; // ★ (2026-11-16 fix185) 이 기기 기록 저장소 이름 — 계정을 알면 계정마다 따로(readTime 이 정함)
+    function rtLoad() { try { var o = JSON.parse(localStorage.getItem(RTK) || '{}'); if (o && typeof o === 'object') return { b: o.b || {}, d: o.d || {} }; } catch (e) {} return { b: {}, d: {} }; }
     function rtSave(o) {
         // 오래된 것 정리(책 300권·60일까지)
         var bk = Object.keys(o.b); if (bk.length > 300) { bk.sort(function (x, y) { return (o.b[x].t || 0) - (o.b[y].t || 0); }); bk.slice(0, bk.length - 300).forEach(function (k) { delete o.b[k]; }); }
         var dk = Object.keys(o.d).sort(); if (dk.length > 60) dk.slice(0, dk.length - 60).forEach(function (k) { delete o.d[k]; });
-        try { localStorage.setItem('mct_rt', JSON.stringify(o)); } catch (e) {}
+        try { localStorage.setItem(RTK, JSON.stringify(o)); } catch (e) {}
+    }
+    // ★ (2026-11-16 11:16, 펜닐 요청 — fix184) 읽은 시간을 계정에 합산 — 세는 방식·이 기기 기록(mct_rt)은 그대로 두고,
+    //   이 기기 총합(이 책·오늘)을 1분마다·화면을 떠날 때 서버에 보냄(vprefs.php op=rt — 서버는 기기마다 큰 값만 남겨 두 번 더하지 않음)
+    //   화면 = 다른 기기들 합(열 때 받음, op=rtget) + 이 기기 총합. 서버에 못 닿으면(로그인 안 함·서버 오류) 예전처럼 이 기기 것만
+    //   기기 구분: 저장소 'mct_dev'(처음에 무작위로 만듦 — 브라우저 데이터를 지우면 새 기기로 셈, 예전 기기 몫은 서버에 그대로 남음)
+    function rtDev() {
+        try { var v = localStorage.getItem('mct_dev'); if (/^[a-z0-9]{8,16}$/.test(v || '')) return v;
+            var a = new Uint8Array(6); crypto.getRandomValues(a); v = Array.prototype.map.call(a, function (b) { return ('0' + b.toString(16)).slice(-2); }).join('');
+            localStorage.setItem('mct_dev', v); return v; } catch (e) { return ''; }
     }
     function readTime(o) {
         var key = String(o.key || '').slice(0, 300), T = o.t || {}, out = o.el;
         var STEP = 15;
+        var dev = rtDev(), oth = null; // oth = { day, ob(이 책 다른 기기 합), od(그날 다른 기기 합) }
+        // ★ (2026-11-16 11:40 fix185) 이 기기 기록을 계정마다 따로(저장소 'mct_rt:계정 지문') — 같은 브라우저에서 계정을 바꾸면 앞 계정이 읽은 시간이
+        //   다른 계정에 올라갔음(시험으로 확인). 예전 기록(계정 구분 없던 'mct_rt')은 이 브라우저에서 맞춤을 처음 쓰는 계정 하나만 넘겨받음('mct_rt_owner')
+        var acct = (window.MC_LSYNC && /^[0-9a-f]{6}$/.test(window.MC_LSYNC.u || '')) ? window.MC_LSYNC.u : '';
+        if (acct) {
+            RTK = 'mct_rt:' + acct;
+            try {
+                if (localStorage.getItem(RTK) === null && !localStorage.getItem('mct_rt_owner')) {
+                    var old = localStorage.getItem('mct_rt');
+                    if (old) localStorage.setItem(RTK, old);
+                    localStorage.setItem('mct_rt_owner', acct);
+                }
+            } catch (x) {}
+        } else dev = ''; // 계정을 모르면 서버에 보내지 않고 예전처럼 이 기기 것만
+        function rtPost(op, d0) {
+            var d = d0 || rtLoad(), day = dayKey(), e = d.b[key] || { s: 0 }, fd = new FormData();
+            fd.append('op', op); fd.append('dev', dev); fd.append('k', key); fd.append('day', day);
+            fd.append('s', String(Math.max(0, Math.floor(e.s || 0)))); fd.append('ds', String(Math.max(0, Math.min(86400, Math.floor(d.d[day] || 0)))));
+            return fetch('vprefs.php', { method: 'POST', body: fd, credentials: 'same-origin', keepalive: op === 'rt' }).then(function (r) { return r.ok ? r.json() : null; });
+        }
         function show() {
             if (!out) return;
             var d = rtLoad(), b = d.b[key] ? d.b[key].s || 0 : 0, t = d.d[dayKey()] || 0;
+            if (oth) { b += oth.ob; if (oth.day === dayKey()) t += oth.od; } // 다른 기기에서 읽은 것도 더함(날이 바뀌면 오늘 몫은 다시 열 때 받음)
             out.textContent = String(T.rt_line || '%s · %s').replace('%s', fmtDur(b, T)).replace('%s', fmtDur(t, T));
         }
         show();
+        var sent = '';
+        function flush() { // 이 기기 총합이 지난번 보낸 것과 다를 때만
+            if (!dev) return;
+            var d = rtLoad(), e = d.b[key] || { s: 0 }, sig = (e.s || 0) + '|' + dayKey() + '|' + (d.d[dayKey()] || 0);
+            if (sig === sent || !(e.s > 0)) return;
+            sent = sig;
+            try { rtPost('rt', d).catch(function () { sent = ''; }); } catch (x) {}
+        }
+        if (dev) {
+            try {
+                var day0 = dayKey();
+                rtPost('rtget').then(function (r) { if (r && r.ok) { oth = { day: day0, ob: Math.max(0, r.ob | 0), od: Math.max(0, r.od | 0) }; show(); } }).catch(function () {});
+            } catch (x) {}
+            flush(); // 이 기기의 예전 기록도 계정에 올림(처음 한 번 — 이후엔 같은 값이라 안 보냄)
+            setInterval(flush, 60000);
+            window.addEventListener('pagehide', flush);
+            document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'hidden') flush(); });
+        }
         setInterval(function () {
             if (document.visibilityState !== 'visible' || Date.now() - lastAct > 180000) return;
             var d = rtLoad(), k = dayKey();

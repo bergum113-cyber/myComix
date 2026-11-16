@@ -932,7 +932,7 @@ return [
     'bt_sec' => '%d초마다',
     'bt_ch_left' => '이 장 %d쪽 남음',
     'bt_ch_last' => '이 장 마지막 쪽',
-    'bt_readtime' => '읽은 시간 (이 기기)',
+    'bt_readtime' => '읽은 시간', // ★ (2026-11-16 fix184) 계정 합산이라 '(이 기기)' 뺌
     'bt_rt_line' => '이 책 %s · 오늘 %s',
     'bt_rt_h' => '%d시간 %d분',
     'bt_rt_m' => '%d분',
@@ -3295,6 +3295,11 @@ return [
     'mcv2_bright_down' => '어둡게',
     'mcv2_bright_up' => '밝게',
     'mcv2_bright_zero' => '밝기 원래대로',
+    'mcv2_zoom' => '크기', // ★ (2026-11-16 fix181) 툰모드 그림 크기
+    'mcv2_zoom_down' => '작게',
+    'mcv2_zoom_up' => '크게',
+    'mcv2_zoom_reset' => '원래 크기(100%)로',
+    'mcv2_zoom_tip' => '툰모드 그림 크기 — 이 기기에만 기억(PC 큰 화면에서 한 쪽이 한눈에 보이게 줄여 보세요)',
     'mcv2_cover' => '표지로 지정',
     // ★ (2026-11-10 13:56, 펜닐 요청 — fix98) 표지 직접 지정(관리자) — 파일 표지·폴더 표지·자동으로
     'mcv2_cover_file' => '이 쪽을 파일 표지로',

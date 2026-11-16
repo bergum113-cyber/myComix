@@ -1739,6 +1739,7 @@ if (isset($_POST['mode']) && $_POST['mode'] === "theme_change") {
                 "./src/".$sid."_vpos.json",   // ★ (2026-11-15 19:01 fix175) 책마다 읽던 위치
                 "./src/".$sid."_vprefs.json", // ★ (2026-11-15 19:01 fix175) 뷰어 설정(fix173 에서 만들고 여기 넣는 걸 빠뜨렸음)
                 "./src/".$sid."_vres.json",   // ★ (2026-11-15 19:01 fix175) 동영상 위치(fix173 에서 만들고 여기 넣는 걸 빠뜨렸음)
+                "./src/".$sid."_rtime.json",  // ★ (2026-11-16 fix184) 전자책·텍스트 읽은 시간(계정 합산 — vprefs.php)
             ];
             foreach ($user_files as $file) {
                 @unlink($file);

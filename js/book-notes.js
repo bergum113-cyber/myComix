@@ -187,12 +187,15 @@
         core.say = say;
 
         // ── 서버
+        var busy = 0; // ★ (2026-11-16 fix181) 보내는 중인 저장 수 — 다른 기기 노트 다시 읽기(core.sync)가 그동안 건너뜀
         function post(params) {
             var fd = new FormData();
             fd.append('file', o.file); fd.append('csrf_token', o.csrf);
             Object.keys(params).forEach(function (k) { fd.append(k, params[k]); });
+            busy++;
             return fetch(o.api + '?action=notes_save&bidx=' + o.bidx, { method: 'POST', body: fd, credentials: 'same-origin' })
-                .then(function (r) { return r.json().catch(function () { return { success: false, error: 'http ' + r.status }; }); });
+                .then(function (r) { return r.json().catch(function () { return { success: false, error: 'http ' + r.status }; }); })
+                .then(function (r) { busy--; return r; }, function (e) { busy--; throw e; });
         }
         function failMsg(err) { return err === 'too_many' ? (T.too_many || 'Too many notes') : (T.save_fail || 'Could not save'); }
         function find(id) { for (var i = 0; i < items.length; i++) if (items[i].id === id) return i; return -1; }
@@ -235,6 +238,35 @@
                     refresh();
                 }).catch(function () { items = []; refresh(); });
         };
+        // ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 다른 기기에서 칠하거나 고친 노트 — 이 화면으로 돌아오면(5초 넘게 떠나 있었으면) 다시 읽어 바뀐 것만 다시 그림
+        //   (전엔 책을 다시 열어야 보였음. 저장은 노트 하나씩이라 원래 서로 덮지 않음) — 보내는 중인 저장이 있으면 건너뜀(되돌림과 겹치지 않게)
+        var hidAt = 0;
+        function sameItem(a, b) { return a.m === b.m && a.c === b.c && a.k === b.k && a.n === b.n && a.cfi === b.cfi && a.s === b.s && a.e === b.e; }
+        core.sync = function () {
+            if (busy) return Promise.resolve(false);
+            return fetch(o.api + '?action=notes_load&bidx=' + o.bidx + '&file=' + encodeURIComponent(o.file), { credentials: 'same-origin', cache: 'no-store' })
+                .then(function (r) { return r.json(); })
+                .then(function (d) {
+                    if (busy || !d || !d.success || !Array.isArray(d.items)) return false;
+                    var nx = d.items.filter(function (x) { return x && x.id && x.k; });
+                    var was = {}, now = {}, changed = false;
+                    items.forEach(function (x) { was[x.id] = x; });
+                    nx.forEach(function (x) { now[x.id] = x; });
+                    items.forEach(function (x) { if (!now[x.id] || !sameItem(now[x.id], x)) { try { A.undraw(x); } catch (e) {} changed = true; } });
+                    var add = nx.filter(function (x) { return !was[x.id] || !sameItem(was[x.id], x); });
+                    if (add.length) changed = true;
+                    if (!changed) return false;
+                    items = nx;
+                    add.forEach(function (x) { try { A.draw(x); } catch (e) {} });
+                    refresh();
+                    return true;
+                }).catch(function () { return false; });
+        };
+        document.addEventListener('visibilitychange', function () {
+            if (document.visibilityState === 'hidden') { hidAt = Date.now(); return; }
+            if (hidAt && Date.now() - hidAt > 5000) core.sync();
+            hidAt = 0;
+        });
 
         function copyText(text) {
             var done = function () { say(T.copied || 'Copied'); };

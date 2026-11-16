@@ -170,11 +170,22 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_progress' && $_SERVER['R
     
     // ★ (2026-11-06 00:50) 콘텐츠 폴더별 키("bidx|경로") — 예전 키(경로만)는 여기서 옮기며 지움(같은 경로의 다른 콘텐츠 폴더 책과 위치가 섞이던 것)
     $__pk = mc_prog_key($bidx, $getfile);
+    // ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 두 기기: 위치를 바꾼 시각(pt = 지금 - pa)이 기록된 것보다 앞서면(다른 기기가 그 뒤에 더 읽음) 저장하지 않음 — 만화 뷰어 bookmark.php(fix180)와 같은 방식
+    //   [왜] 열어 둔 채 가만히 둔 기기를 나중에 닫으면 떠날 때 저장이 옛 위치로 덮었음(시험으로 확인: 폰 2% → PC 닫음 → 0%)
+    //   pa 가 없으면(예전 화면) 지금 것으로 봄 · 예전 기록(pt 없음)은 마지막 저장 시각(time)과 비교
+    $__pa = (is_string($_POST['pa'] ?? null) && ctype_digit($_POST['pa']) && strlen($_POST['pa']) <= 8) ? (int)$_POST['pa'] : -1;
+    $__pt = time() - max(0, $__pa);
+    $__old = mc_prog_get($progress, $bidx, $getfile);
+    if ($__pa >= 0 && is_array($__old)) {
+        $__opt = isset($__old['pt']) ? (int)$__old['pt'] : (is_string($__old['time'] ?? null) ? (int)strtotime($__old['time']) : 0);
+        if ($__opt > 0 && $__pt < $__opt - 2) { echo json_encode(['success' => true, 'kept' => true]); exit; }
+    }
     unset($progress[$getfile]);
     $progress[$__pk] = [
         'percent' => $percent,
         'position' => $position,
-        'time' => date('Y-m-d H:i:s')
+        'time' => date('Y-m-d H:i:s'),
+        'pt' => $__pt // ★ fix181 위치를 바꾼 시각
     ];
     if ($yoff !== 0) $progress[$__pk]['yoff'] = $yoff;
     
@@ -456,6 +467,7 @@ $txt_font_family = !empty($txt_font_name) ? "'" . h($txt_font_name) . "', 'Nanum
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <title><?php echo h($title); ?> - TXT <?php echo __h("viewer_label"); ?></title>
+<?php if (function_exists('mc_lprefs_head')) echo mc_lprefs_head(); /* ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 계정에 맞출 설정(브라우저 저장소)을 다른 스크립트보다 먼저 맞춤 — js/mc-lsync.js */ ?>
     <!-- ✅ 핵심 레이아웃 + 페이지 전환 -->
     <style>
         html{opacity:0;transition:opacity .15s ease-in}
@@ -1803,12 +1815,21 @@ render_viewer_i18n([
             return Math.abs(v) <= 400 ? v : 0;
         } catch (e) { return 0; }
     }
+    // ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 위치(글자 번호)를 바꾼 뒤 지난 초 — 저장할 때 같이 보냄(pa). 서버는 다른 기기가 그 뒤에 더 읽었으면 이 저장을 버림
+    //   (열어 둔 채 가만히 둔 기기를 나중에 닫아도 다른 기기에서 읽은 곳을 덮지 않게 — 만화 뷰어 fix180 과 같은 방식)
+    var posKey = null, posAt = Date.now(); // var — 이 줄보다 먼저 저장이 불려도 오류 나지 않게
+    function posAge(position, leaving) {
+        if (leaving && posKey === null) posKey = position; // 떠날 때 저장인데 연 뒤로 한 번도 저장 안 함 = 연 뒤로 안 옮김 → 연 시각 그대로
+        if (position !== posKey) { posKey = position; posAt = Date.now(); }
+        return Math.max(0, Math.round((Date.now() - posAt) / 1000));
+    }
     function saveProgress(percent, position) {
         const data = new FormData();
         data.append('file', FILE);
         data.append('percent', percent);
         data.append('position', position);
         data.append('yoff', yoffOf(position));
+        data.append('pa', posAge(position)); // ★ fix181
         
         fetch(`txt_viewer.php?action=save_progress&bidx=${BIDX}`, {
             method: 'POST',
@@ -1947,6 +1968,7 @@ render_viewer_i18n([
         data.append('percent', percent);
         data.append('position', position);
         data.append('yoff', yoffOf(position)); // ★ (2026-11-02 01:40)
+        data.append('pa', posAge(position, true)); // ★ fix181 떠날 때
         navigator.sendBeacon(`txt_viewer.php?action=save_progress&bidx=${BIDX}`, data);
     }
     

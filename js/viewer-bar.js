@@ -381,6 +381,18 @@
     // ★ (2026-11-04 22:08) 표지·가로 그림은 혼자(켬/끔, 이 기기 쿠키) · 이 책만 짝 한 쪽 밀기(이 기기에 책마다) — 그림 구성이 바뀌어 보던 쪽 그대로 다시 엶
     var soloIt = $id('mcvSolo'), shiftIt = $id('mcvShift');
     var offKey = 'mcv_off:' + String(C.favPath || '');
+    // ★ (2026-11-16 10:52, 펜닐 요청 — fix183) 계정에 책마다 저장 — 계정 값이 있으면 이 기기 저장소를 그 값으로(viewer.php 도 같은 일을 하지만 이 스크립트가 먼저 돎),
+    //   없는데 이 기기에 '켬'이 있으면 계정에 올림(처음 한 번) · 바꿀 때마다 올림(vprefs.php op=off)
+    function offSave(on) {
+      try { var fd = new FormData(); fd.append('op', 'off'); fd.append('b', String(C.bidx)); fd.append('f', String(C.favPath || '')); fd.append('v', on ? '1' : '0');
+        return fetch('vprefs.php', { method: 'POST', body: fd, credentials: 'same-origin', keepalive: true }).catch(function () {}); } catch (x) {}
+      return Promise.resolve();
+    }
+    try {
+      if (C.offSrv === '1') localStorage.setItem(offKey, '1');
+      else if (C.offSrv === '0') localStorage.removeItem(offKey);
+      else if (C.favPath && localStorage.getItem(offKey) === '1') offSave(true);
+    } catch (x) {}
     if (shiftIt) { try { shiftIt.setAttribute('aria-checked', localStorage.getItem(offKey) === '1' ? 'true' : 'false'); } catch (x) {} }
     if (soloIt) soloIt.addEventListener('click', function (e) {
       e.preventDefault(); e.stopPropagation();
@@ -395,8 +407,9 @@
       var on = shiftIt.getAttribute('aria-checked') !== 'true';
       shiftIt.setAttribute('aria-checked', on ? 'true' : 'false');
       try { if (on) localStorage.setItem(offKey, '1'); else localStorage.removeItem(offKey); } catch (x) {}
+      var saved = offSave(on); // ★ fix183 계정에도 — 다시 열기 전에 저장이 닿게(안 그러면 다시 열 때 계정의 예전 값으로 돌아감) · 최대 2초
       toast(on ? T.shift_on : T.shift_off);
-      if (!(window._mcBook && window._mcBook.portSingle)) setTimeout(reopenHere, 350);
+      if (!(window._mcBook && window._mcBook.portSingle)) { var _rw = false, _re = function () { if (_rw) return; _rw = true; setTimeout(reopenHere, 350); }; saved.then(_re, _re); setTimeout(_re, 2000); }
     });
 
     // ★ (2026-11-04 18:01) 화면 맞춤(화면·너비·높이) — body class 만 바꿈(다시 열지 않음). 너비·높이는 그림 칸을 밀어 봄
@@ -610,6 +623,28 @@
     var idx = Math.floor(f * total);
     if (typeof window.mcvToonJump === 'function') window.mcvToonJump(idx);
     else { var el = $id('image' + idx) || $id('image' + idx + '_left'); if (el) el.scrollIntoView({ block: 'start' }); }
+  });
+
+  // ★ (2026-11-16 09:28, 펜닐 요청 — fix181) 그림 크기(%) — 이 기기 쿠키 mcv_tz(30~100, 10씩). 첫 화면 값은 viewer_bar.php 가 #mcvTzCss 에 넣어 둠
+  //   바꾼 뒤에도 보던 쪽·그 쪽 안 위치(맨 위 줄 기준, current())를 그대로 둠
+  var tzCss = $id('mcvTzCss'), tzLbl = $id('mcvTzLbl');
+  var tzNow = (function () { var n = parseInt(getPref('mcv_tz'), 10); return (n >= 30 && n <= 100 && n % 10 === 0) ? n : 100; })();
+  function setTz(n) {
+    n = Math.max(30, Math.min(100, n));
+    if (n === tzNow) return;
+    var c = current(), el = $id('image' + c.idx) || $id('image' + c.idx + '_left') || $id('image' + c.idx + '_right');
+    tzNow = n; setPref('mcv_tz', n);
+    if (tzCss) tzCss.textContent = n < 100 ? '#lightgallery img.lg-item{zoom:' + (n / 100) + '}' : '';
+    if (tzLbl) tzLbl.textContent = n + '%';
+    if (el) { var r = el.getBoundingClientRect(); window.scrollBy(0, r.top + r.height * c.frac - (barH() + 2)); }
+    sched();
+  }
+  if (morePop) morePop.addEventListener('click', function (e) {
+    var t = e.target.closest ? e.target.closest('[data-act^="zoom-"]') : null;
+    if (!t) return;
+    e.preventDefault();
+    var a = t.getAttribute('data-act');
+    setTz(a === 'zoom-zero' ? 100 : tzNow + (a === 'zoom-up' ? 10 : -10));
   });
 
   // 📖 북모드 — 지금 보던 쪽으로

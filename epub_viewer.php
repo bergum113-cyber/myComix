@@ -250,12 +250,22 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_progress' && $_SERVER['R
     if ($percent < 0) {
         $percent = $existing_percent;
     }
-    
+    // ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 두 기기: 쪽을 바꾼 시각(pt = 지금 - pa)이 기록된 것보다 앞서면(다른 기기가 그 뒤에 더 읽음) 저장하지 않음 — 만화 뷰어 bookmark.php(fix180)와 같은 방식
+    //   [왜] 열어 둔 채 가만히 둔 기기를 나중에 닫으면 떠날 때 저장이 옛 위치로 덮었음(시험으로 확인: 폰 9% → PC 닫음 → 0%)
+    //   pa(쪽을 바꾼 뒤 지난 초)가 없으면(예전 화면) 지금 것으로 봄 · 예전 기록(pt 없음)은 마지막 저장 시각(updated)과 비교
+    $__pa = (is_string($_POST['pa'] ?? null) && ctype_digit($_POST['pa']) && strlen($_POST['pa']) <= 8) ? (int)$_POST['pa'] : -1;
+    $__pt = time() - max(0, $__pa);
+    if ($__pa >= 0 && is_array($__old)) {
+        $__opt = (int)($__old['pt'] ?? ($__old['updated'] ?? 0));
+        if ($__opt > 0 && $__pt < $__opt - 2) { echo json_encode(['success' => true, 'kept' => true]); exit; }
+    }
+
     unset($progress[$getfile]);
     $progress[$__pk] = [
         'cfi' => $cfi,
         'percent' => $percent,
-        'updated' => time()
+        'updated' => time(),
+        'pt' => $__pt // ★ fix181 쪽을 바꾼 시각
     ];
     
     save_json_with_lock($progress_file, $progress);
@@ -356,6 +366,7 @@ $epub_font_family = !empty($epub_font_name) ? "'" . h($epub_font_name) . "', 'Na
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
     <title><?php echo h($title); ?> - EPUB <?php echo __h("viewer_label"); ?></title>
+<?php if (function_exists('mc_lprefs_head')) echo mc_lprefs_head(); /* ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 계정에 맞출 설정(브라우저 저장소)을 다른 스크립트보다 먼저 맞춤 — js/mc-lsync.js */ ?>
     <!-- ✅ 핵심 레이아웃 + 페이지 전환 -->
     <style>
         html{opacity:0;transition:opacity .15s ease-in}
@@ -2078,13 +2089,21 @@ async function initBook() {
         const s = document.getElementById('selAutoTurn'); if (s) s.value = '0';
     }
 
+    // ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 위치(cfi)를 바꾼 뒤 지난 초 — 저장할 때 같이 보냄(pa). 서버는 다른 기기가 그 뒤에 더 읽었으면 이 저장을 버림
+    //   (열어 둔 채 가만히 둔 기기를 나중에 닫아도 다른 기기에서 읽은 곳을 덮지 않게 — 만화 뷰어 fix180 과 같은 방식)
+    var posKey = null, posAt = Date.now(); // var — 이 줄보다 먼저 저장이 불려도 오류 나지 않게
+    function posAge(cfi, leaving) {
+        if (leaving && posKey === null) posKey = cfi; // 떠날 때 저장인데 연 뒤로 한 번도 저장 안 함 = 연 뒤로 안 옮김 → 연 시각 그대로
+        if (cfi !== posKey) { posKey = cfi; posAt = Date.now(); }
+        return Math.max(0, Math.round((Date.now() - posAt) / 1000));
+    }
     // 진행 저장
     async function saveProgress(cfi, percent) {
         try {
             await fetch('epub_viewer.php?action=save_progress&bidx=<?php echo $current_bidx; ?>', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: `file=${encodeURIComponent(FILE_KEY)}&cfi=${encodeURIComponent(cfi)}&percent=${percent}`
+                body: `file=${encodeURIComponent(FILE_KEY)}&cfi=${encodeURIComponent(cfi)}&percent=${percent}&pa=${posAge(cfi)}`
             });
         } catch (err) {
             console.warn('진행 저장 실패:', err);
@@ -2208,6 +2227,7 @@ async function initBook() {
             data.append('file', FILE_KEY);
             data.append('cfi', cfi);
             data.append('percent', percent);
+            data.append('pa', posAge(cfi, true)); // ★ fix181 떠날 때
             navigator.sendBeacon(`epub_viewer.php?action=save_progress&bidx=<?php echo $current_bidx; ?>`, data);
         }
     }

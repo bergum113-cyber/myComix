@@ -6279,9 +6279,19 @@ function mcAsUrl(u){
 		var b = m[2] ? Math.floor(parseInt(m[2], 10) / Math.max(200, window.innerHeight || 600)) : (m[3] ? Math.floor(parseInt(m[3], 10) / 250) : 0);
 		return m[1] + ':' + b;
 	}
+	// ★ (2026-11-16 13:37, 펜닐 제보 — fix186) 주소 끝(#imageN·#pdf_N…)을 지금 보는 곳으로 바꿔 둠(방문 기록은 늘리지 않음 — replaceState)
+	//   [왜] 열 때 붙인 '그때 기록의 쪽'이 주소에 그대로 남아, 새로고침·폰이 탭을 다시 불러옴·브라우저 앞/뒤(다시 읽기)면 처음 연 쪽으로 돌아가고
+	//        그 자리가 다시 저장돼 읽은 곳이 덮였음(툰·북모드·PDF, 압축·폴더 모두 — 시험으로 확인, 11-01 부터 있던 동작). 전자책·텍스트는 주소를 안 써서 해당 없음
+	//   위치 모양은 가림막 복귀와 같은 window.myComixCurrentHash() — 위치 맞추기·북모드 시작 쪽·PDF 시작 쪽이 원래 읽는 모양. '이어서 볼까요?'에 답하기 전엔 안 바꿈
+	function syncUrl(){
+		var h = ''; try { h = String(window.myComixCurrentHash ? (window.myComixCurrentHash() || '') : ''); } catch(e){}
+		if (!/^#(image\d+|pdf_\d+)/.test(h) || h === location.hash) return;
+		try { history.replaceState(history.state, '', location.pathname + location.search + h); } catch(e){}
+	}
 	function sample(){
 		if (window.mcRsPending) { wasPend = true; return; }
 		var k = key(); if (!k) return;
+		syncUrl();
 		if (last === null) { last = k; if (wasPend) { wasPend = false; at = Date.now(); } return; }
 		if (k !== last) { last = k; at = Date.now(); }
 	}
@@ -6295,6 +6305,12 @@ function mcAsUrl(u){
 })();
 function sendAutosave(u){
 	try { if (typeof window.mcPosAge === 'function') u += '&pa=' + window.mcPosAge(); } catch(e){} // ★ fix180 위 설명
+	// ★ (2026-11-16 14:30, 펜닐 제보 — fix186) 기기 표시(이 브라우저 저장소 'mc_dev', 처음에 무작위로 만듦)·보낸 시각(이 기기 시계) — 늦게 도착한 같은 기기의 예전 저장을 서버가 가려냄(bookmark.php)
+	try {
+		var _dv = localStorage.getItem('mc_dev');
+		if (!/^[a-f0-9]{12}$/.test(_dv || '')) { var _a = new Uint8Array(6); crypto.getRandomValues(_a); _dv = Array.prototype.map.call(_a, function(b){ return ('0' + b.toString(16)).slice(-2); }).join(''); localStorage.setItem('mc_dev', _dv); }
+		u += '&dv=' + _dv + '&ct=' + Date.now();
+	} catch(e){}
 	// ✅ 페이지 이탈/숨김 시점 호출: sendBeacon으로 확실히 전송(비동기 $.get가 이탈로 취소되는 race 방지).
 	//    sendBeacon은 같은 출처라 세션 쿠키를 함께 보내고, bookmark.php의 autosave는 토큰 없이 세션만으로 허용됨.
 	//    미지원 브라우저 또는 큐잉 실패(false) 시에만 기존 $.get로 폴백 → 무회귀(최악의 경우 현재 동작과 동일).

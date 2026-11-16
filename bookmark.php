@@ -177,6 +177,28 @@ if ($mode === "delete_bookmark") {
         } catch (\Throwable $e) { /* 무시 — 예전처럼 저장 */ }
         if ($__old_pt > 0 && $__pt < $__old_pt - 2) exit; // 다른 기기가 더 나중에 바꾼 기록 — 그대로 둠
     }
+    // ★ (2026-11-16 14:30, 펜닐 제보 — fix186) 같은 기기에서 늦게 도착한 예전 저장은 버림 — 뷰어가 기기 표시(dv)·보낸 시각(ct, 그 기기 시계 ms)을 같이 보냄
+    //   [왜] 나갈 때 저장을 두세 번 보내는데(숨김·떠남), 그중 하나가 브라우저 안에 묶여 있다가 몇 초~수십 초 뒤(다음 책을 읽는 중·탭을 닫을 때) 도착하면
+    //        pa(보낼 때 기준 '지난 초')로는 방금 바꾼 위치로 보여 새 기록을 예전 쪽으로 덮었음(시험으로 확인: 8쪽 저장 0.3초 뒤 20초 전에 만든 2쪽 저장이 도착)
+    //   → 같은 기기의 기록이면 그 기기 시계로 '쪽을 바꾼 시각'(pc = ct - pa초)을 비교(같은 기기라 시계 차이 없음). 1.5초 차이까지는 같은 때로 봄
+    //   dv 가 없는 저장(모드 바꾸기·북모드 닫기 등 지금 누른 것·예전 화면)은 예전처럼 · 다른 기기 기록과는 위(fix180) 방식 그대로
+    $__dv = (is_string($_GET['dv'] ?? null) && preg_match('/^[a-f0-9]{8,16}$/', $_GET['dv'])) ? $_GET['dv'] : '';
+    $__ct = (is_string($_GET['ct'] ?? null) && ctype_digit($_GET['ct']) && strlen($_GET['ct']) <= 15) ? (int)$_GET['ct'] : -1;
+    $__pc = ($__dv !== '' && $__ct > 0 && $__pa >= 0) ? $__ct - $__pa * 1000 : -1;
+    if ($__pc >= 0) {
+        $__same = [is_array($autosave_arr[$__ak] ?? null) ? $autosave_arr[$__ak] : null];
+        try {
+            if (function_exists('get_vpos_file') && is_file(get_vpos_file())) {
+                $__v1 = load_json_with_lock(get_vpos_file());
+                $__v1k = (int)$bidx . '|/' . ltrim((string)$getfile, '/');
+                if (is_array($__v1) && is_array($__v1[$__v1k] ?? null)) $__same[] = $__v1[$__v1k];
+                unset($__v1);
+            }
+        } catch (\Throwable $e) { /* 무시 */ }
+        foreach ($__same as $__se) {
+            if (is_array($__se) && ($__se['dv'] ?? '') === $__dv && isset($__se['pc']) && $__pc < (int)$__se['pc'] - 1500) exit; // 같은 기기의 더 나중 기록이 이미 있음
+        }
+    }
     // ✅ max_autosave 개수 초과 시 가장 오래된 항목 제거 (현재 파일이 '새 항목'일 때만 — 기존 재저장 시 개수 유지)
     if (!isset($autosave_arr[$__ak]) && count($autosave_arr) >= (int)$max_autosave) {
         mc_bm_evict_oldest($autosave_arr); // ★ (2026-11-02 08:56) 가장 오래 안 본 것부터(전에는 처음 넣은 것 — 매일 보는 책이 먼저 밀려났음)
@@ -188,6 +210,8 @@ if ($mode === "delete_bookmark") {
     $autosave_arr[$__ak]['bidx'] = $bidx;
     $autosave_arr[$__ak]['t'] = time(); // ★ (2026-11-02 08:56) 마지막 저장 시각(밀어낼 순서용 — 표시 순서는 그대로)
     $autosave_arr[$__ak]['pt'] = $__pt; // ★ (2026-11-15 20:06 fix180) 이 쪽으로 바꾼 시각(위 설명) — 책마다 위치 기록에도 같이 들어감
+    if ($__pc >= 0) { $autosave_arr[$__ak]['dv'] = $__dv; $autosave_arr[$__ak]['pc'] = $__pc; } // ★ (2026-11-16 fix186) 어느 기기가 그 기기 시계로 언제 바꿨는지(위 설명)
+    else unset($autosave_arr[$__ak]['dv'], $autosave_arr[$__ak]['pc']);
     // ★ (2026-11-02 00:59) 쪽 안 위치(천분율) — 툰모드·PDF 가 보냄(북모드는 쪽 단위라 안 보냄 → 지움)
     $_f = sanitize_frac($_GET['f'] ?? null);
     if ($_f !== null) $autosave_arr[$__ak]['f'] = $_f; else unset($autosave_arr[$__ak]['f']);

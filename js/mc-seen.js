@@ -38,6 +38,11 @@
     '.fav-item.mc-viewed,.bm-item.mc-viewed{outline:2px solid #f39c12!important;outline-offset:2px;border-radius:4px}' +
     // 서재 칸: '읽는 중'·'최근' 가로 줄은 바깥이 잘리고 표지가 칸 테두리를 덮음 → 칸 안쪽에 표지 위로 덧그림
     '.sc{position:relative}.sc.mc-viewed::after{content:"";position:absolute;inset:0;border:2px solid #f39c12;border-radius:4px;pointer-events:none;z-index:3}' +
+    // ★ (2026-11-16 14:17, 펜닐 제보 — fix186) 서재 격자·가로 줄 칸은 테두리를 바깥으로 5px 띄움 — 칸 안쪽에 그리면 표지·제목 글자에 바로 붙어 폴더 목록·즐겨찾기처럼 여백이 없었음
+    //   가로 줄(.sc-row)은 바깥이 잘리는 틀이라 틀 안쪽에 5px 여유를 주고 같은 만큼 바깥 여백을 빼 배치는 그대로(목록 보기는 칸 안 여백이 있어 그대로)
+    '.sc-grid .sc.mc-viewed::after,.sc-row .sc.mc-viewed::after{inset:-5px;border-radius:7px}' +
+    '@media (hover:hover) and (pointer:fine){.sc-grid .sc:hover::after,.sc-row .sc:hover::after{inset:-5px;border-radius:7px}}' +
+    '.sc-row{padding:5px 5px 11px;margin:-5px -5px -5px}' +
     // fix161 작품 화면: 권(.vol — 이미 position:relative)·다른 작품(.sr-same-it — 폰에선 가로 줄이라 바깥이 잘림)도 서재 칸처럼 안쪽 덧그림. 초록 '고른 권'(.is-pick, 표지 테두리)과는 따로
     '.sr-same-it{position:relative}' +
     '@media (hover:hover) and (pointer:fine){.vol:hover::after,.sr-same-it:hover::after{content:"";position:absolute;inset:-3px;border:2px solid rgba(243,156,18,.45);border-radius:5px;pointer-events:none;z-index:3}}' +

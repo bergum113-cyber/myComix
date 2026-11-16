@@ -180,6 +180,13 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_progress' && $_SERVER['R
         $__opt = isset($__old['pt']) ? (int)$__old['pt'] : (is_string($__old['time'] ?? null) ? (int)strtotime($__old['time']) : 0);
         if ($__opt > 0 && $__pt < $__opt - 2) { echo json_encode(['success' => true, 'kept' => true]); exit; }
     }
+    // ★ (2026-11-16 14:33, 펜닐 제보 — fix186) 같은 기기에서 늦게 도착한 예전 저장은 버림 — 화면이 기기 표시(dv)·보낸 시각(ct, 그 기기 시계 ms)을 같이 보냄
+    //   떠날 때 여러 번 보내는 저장 중 하나가 늦게(앞 화면 것이 다음 화면을 읽는 중에) 도착하면 pa 로는 방금 것으로 보여 새 위치를 덮었음(텍스트 시험으로 확인)
+    //   같은 기기 기록이면 그 기기 시계로 '위치를 바꾼 시각'(pc = ct - pa초)을 비교 — 만화 뷰어 bookmark.php 와 같은 방식
+    $__dv = (is_string($_POST['dv'] ?? null) && preg_match('/^[a-f0-9]{8,16}$/', $_POST['dv'])) ? $_POST['dv'] : '';
+    $__ct = (is_string($_POST['ct'] ?? null) && ctype_digit($_POST['ct']) && strlen($_POST['ct']) <= 15) ? (int)$_POST['ct'] : -1;
+    $__pc = ($__dv !== '' && $__ct > 0 && $__pa >= 0) ? $__ct - $__pa * 1000 : -1;
+    if ($__pc >= 0 && is_array($__old) && ($__old['dv'] ?? '') === $__dv && isset($__old['pc']) && $__pc < (int)$__old['pc'] - 1500) { echo json_encode(['success' => true, 'kept' => true]); exit; }
     unset($progress[$getfile]);
     $progress[$__pk] = [
         'percent' => $percent,
@@ -187,6 +194,7 @@ if (isset($_GET['action']) && $_GET['action'] === 'save_progress' && $_SERVER['R
         'time' => date('Y-m-d H:i:s'),
         'pt' => $__pt // ★ fix181 위치를 바꾼 시각
     ];
+    if ($__pc >= 0) { $progress[$__pk]['dv'] = $__dv; $progress[$__pk]['pc'] = $__pc; } // ★ fix186 어느 기기가 그 기기 시계로 언제 바꿨는지
     if ($yoff !== 0) $progress[$__pk]['yoff'] = $yoff;
     
     save_json_with_lock($progress_file, $progress);
@@ -1818,6 +1826,14 @@ render_viewer_i18n([
     // ★ (2026-11-16 09:31, 펜닐 요청 — fix181) 위치(글자 번호)를 바꾼 뒤 지난 초 — 저장할 때 같이 보냄(pa). 서버는 다른 기기가 그 뒤에 더 읽었으면 이 저장을 버림
     //   (열어 둔 채 가만히 둔 기기를 나중에 닫아도 다른 기기에서 읽은 곳을 덮지 않게 — 만화 뷰어 fix180 과 같은 방식)
     var posKey = null, posAt = Date.now(); // var — 이 줄보다 먼저 저장이 불려도 오류 나지 않게
+    // ★ (2026-11-16 14:33, 펜닐 제보 — fix186) 기기 표시(저장소 'mc_dev' — 만화 뷰어와 같은 값)·보낸 시각을 저장에 같이 — 늦게 도착한 같은 기기의 예전 저장을 서버가 버림
+    function devQs() {
+        try {
+            let d = localStorage.getItem('mc_dev');
+            if (!/^[a-f0-9]{12}$/.test(d || '')) { const a = new Uint8Array(6); crypto.getRandomValues(a); d = Array.prototype.map.call(a, b => ('0' + b.toString(16)).slice(-2)).join(''); localStorage.setItem('mc_dev', d); }
+            return { dv: d, ct: String(Date.now()) };
+        } catch (e) { return null; }
+    }
     function posAge(position, leaving) {
         if (leaving && posKey === null) posKey = position; // 떠날 때 저장인데 연 뒤로 한 번도 저장 안 함 = 연 뒤로 안 옮김 → 연 시각 그대로
         if (position !== posKey) { posKey = position; posAt = Date.now(); }
@@ -1830,6 +1846,7 @@ render_viewer_i18n([
         data.append('position', position);
         data.append('yoff', yoffOf(position));
         data.append('pa', posAge(position)); // ★ fix181
+        { const q = devQs(); if (q) { data.append('dv', q.dv); data.append('ct', q.ct); } } // ★ fix186
         
         fetch(`txt_viewer.php?action=save_progress&bidx=${BIDX}`, {
             method: 'POST',
@@ -1969,6 +1986,7 @@ render_viewer_i18n([
         data.append('position', position);
         data.append('yoff', yoffOf(position)); // ★ (2026-11-02 01:40)
         data.append('pa', posAge(position, true)); // ★ fix181 떠날 때
+        { const q = devQs(); if (q) { data.append('dv', q.dv); data.append('ct', q.ct); } } // ★ fix186
         navigator.sendBeacon(`txt_viewer.php?action=save_progress&bidx=${BIDX}`, data);
     }
     

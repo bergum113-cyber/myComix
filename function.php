@@ -1774,6 +1774,7 @@ if (!function_exists('mc_up_back_js')) {
   if (u && LU.test(u)) btn.setAttribute('href', u);
   btn.addEventListener('click', function (ev) {
     if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.button === 1) return; // 새 탭은 링크 그대로
+    try { if (window.mcBackLog) window.mcBackLog('up_back', { how: (d > 0 && history.length > d) ? 'back' : 'link', gap: d, url: String(btn.getAttribute('href') || '').slice(0, 200) }); } catch (x) {} // ★ (2026-11-17 13:08 fix187) 기록만(src/perf/날짜.log) — 뒤로 몇 칸(gap) 또는 링크로
     if (d > 0 && history.length > d) { ev.preventDefault(); history.go(-d); }
   });
 })();
@@ -2048,6 +2049,13 @@ function mc_perf_write(array $rec) {
     $rec = ['t' => date('Y-m-d H:i:s')] + $rec;
     @file_put_contents($f, json_encode($rec, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_INVALID_UTF8_SUBSTITUTE) . "\n", FILE_APPEND | LOCK_EX);
 }
+// ★ (2026-11-17 13:08, 펜닐 요청 — fix187) 동작 기록 — 속도 기록과 같은 파일(src/perf/날짜.log)에 k:"e" 한 줄. 같은 조건(폴더 있음·설정 켬)일 때만, 기록만(동작은 그대로)
+//   save(이어 읽기 저장: 쪽·화면 기준 쪽·전체·%·앞 기록) / save_skip(버린 저장과 이유) / bm_save(북마크 저장)
+function mc_ev_log($ev, array $d = []) {
+    if (!function_exists('mc_perf_enabled') || !mc_perf_enabled()) return;
+    list($dev, $os, $br) = mc_perf_device((string)($_SERVER['HTTP_USER_AGENT'] ?? ''));
+    mc_perf_write(['k' => 'e', 'ev' => (string)$ev, 'user' => preg_replace('/[^a-zA-Z0-9_]/', '', (string)($_SESSION['user_id'] ?? '')), 'dev' => $dev, 'os' => $os, 'br' => $br] + $d);
+}
 /** 페이지 끝에서 부름: 서버 기록(요청이 끝날 때 전체 시간 포함)을 남기고, 브라우저 쪽 측정을 보내는 짧은 스크립트를 돌려줌 */
 function mc_perf_script($page, array $extra = []) {
     if (!mc_perf_enabled() || empty($_SESSION['user_id'])) return '';
@@ -2064,7 +2072,7 @@ function mc_perf_script($page, array $extra = []) {
         $base['ua'] = substr($ua, 0, 200);
         mc_perf_write($base);
     });
-    return '<script>(function(){var R=' . json_encode($rid) . ',P=' . json_encode((string)$page) . ';function send(){try{var n=(performance.getEntriesByType&&performance.getEntriesByType("navigation")[0])||null;if(!n)return;var c=navigator.connection||navigator.mozConnection||navigator.webkitConnection||{};var d={rid:R,page:P,nav:n.type||"",ttfb:Math.round(n.responseStart),dl:Math.round(n.responseEnd-n.responseStart),dom:Math.round(n.domInteractive),dcl:Math.round(n.domContentLoadedEventEnd),load:Math.round(n.loadEventEnd),kb:Math.round((n.transferSize||0)/1024),body_kb:Math.round((n.encodedBodySize||0)/1024),net:c.type||"",eff:c.effectiveType||"",down:c.downlink||0,rtt:c.rtt||0,sw:screen.width||0,img:document.images?document.images.length:0};var b=JSON.stringify(d);if(!(navigator.sendBeacon&&navigator.sendBeacon("perf_log.php",new Blob([b],{type:"text/plain"})))){var x=new XMLHttpRequest();x.open("POST","perf_log.php",true);x.send(b);}}catch(e){}}if(document.readyState==="complete")setTimeout(send,300);else window.addEventListener("load",function(){setTimeout(send,300);});})();</script>';
+    return '<script>(function(){var R=' . json_encode($rid) . ',P=' . json_encode((string)$page) . ',H0=String(location.hash||"").slice(0,40);function send(){try{var n=(performance.getEntriesByType&&performance.getEntriesByType("navigation")[0])||null;if(!n)return;var c=navigator.connection||navigator.mozConnection||navigator.webkitConnection||{};var d={rid:R,page:P,nav:n.type||"",ttfb:Math.round(n.responseStart),dl:Math.round(n.responseEnd-n.responseStart),dom:Math.round(n.domInteractive),dcl:Math.round(n.domContentLoadedEventEnd),load:Math.round(n.loadEventEnd),kb:Math.round((n.transferSize||0)/1024),body_kb:Math.round((n.encodedBodySize||0)/1024),net:c.type||"",eff:c.effectiveType||"",down:c.downlink||0,rtt:c.rtt||0,sw:screen.width||0,img:document.images?document.images.length:0,h0:H0,h1:String(location.hash||"").slice(0,40),hl:history.length||0};var b=JSON.stringify(d);if(!(navigator.sendBeacon&&navigator.sendBeacon("perf_log.php",new Blob([b],{type:"text/plain"})))){var x=new XMLHttpRequest();x.open("POST","perf_log.php",true);x.send(b);}}catch(e){}}if(document.readyState==="complete")setTimeout(send,300);else window.addEventListener("load",function(){setTimeout(send,300);});window.addEventListener("pageshow",function(e){if(!e.persisted)return;try{var b=JSON.stringify({rid:R,page:P,nav:"bfcache",h1:String(location.hash||"").slice(0,40),hl:history.length||0});if(navigator.sendBeacon)navigator.sendBeacon("perf_log.php",new Blob([b],{type:"text/plain"}));}catch(x){}});})();</script>'; // ★ (2026-11-17 13:08 fix187) 주소 뒤 위치(#imageN — 열 때 h0·보낼 때 h1)·방문 기록 개수(hl) · 브라우저가 보관한 화면을 되살린 때(뒤로·앞으로 — nav:"bfcache")도 한 줄
 }
 
 

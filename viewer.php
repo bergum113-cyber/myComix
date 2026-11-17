@@ -1954,6 +1954,23 @@ if ($type === 'zip' || $type === 'images') {
 if ($type === 'pdf') {
     $_mcv_resume = function_exists('mc_mv_resume_mark') ? mc_mv_resume_mark($getfile, $current_bidx, 'pdf') : '';
 }
+// ★ (2026-11-17 13:24, 펜닐 제보 — fix188) 나갈 때 보낸 저장이 서버에 닿기 전에 같은 책을 다시 열면 예전 쪽에서 열리고, 그대로 나가면 그 예전 쪽이 새 기록으로 저장됐음
+//   (11-17 아이폰 크롬 기록: 같은 책을 7초 간격으로 다시 엶 · 시험: 저장을 4초 늦추고 바로 다시 열면 40% → 3% 로 덮어씀)
+//   → 뷰어가 저장을 보낼 때 이 기기 브라우저에도 위치·바꾼 시각(그 기기 시계)을 적어 두고(sendAutosave — localStorage 'mc_lp'),
+//     열 때 서버 기록이 이 기기 기록보다 예전에 쪽을 바꾼 것(같은 기기 = 그 기기 시계, 다른 기기 = 서버 시계로 맞춰 — 서버 저장 판정과 같은 기준)이거나 아직 없고,
+//     이 기기 기록이 2분 안에 보낸 것이면 그 위치로(<head> 스크립트가 주소에 #위치를 붙임 — 목록이 붙여 여는 것과 같은 길)
+//   · 이어 보기 끔·주소에 위치가 이미 있음은 그대로 · 만화(압축·그림 폴더)·PDF 만
+//   ★ (2026-11-17 13:36 fix189) 열쇠에 계정을 넣음('계정|폴더 번호|파일') — 한 브라우저에서 계정을 바꿔 2분 안에 같은 책을 열면 앞 계정이 본 쪽에서 열리고 그 쪽이 뒤 계정 기록으로 저장됐음(시험으로 확인)
+$_mcv_lp = null;
+if (((($type === 'zip' || $type === 'images') && ($mode === 'toon' || $mode === 'book')) || $type === 'pdf')
+    && (is_string($_COOKIE['mcv_resume'] ?? null) ? $_COOKIE['mcv_resume'] : '1') !== '0' && function_exists('mc_mv_autosave_entry')) {
+    $_mcv_lp_e = mc_mv_autosave_entry($getfile, $current_bidx);
+    $_mcv_lp = ['k' => preg_replace('/[^a-zA-Z0-9_]/', '', (string)($_SESSION['user_id'] ?? '')) . '|' . (int)$current_bidx . '|' . encode_url($getfile), 'kind' => $type === 'pdf' ? 'pdf' : $mode, 'sx' => is_array($_mcv_lp_e) ? 1 : 0,
+        'dv' => (is_array($_mcv_lp_e) && is_string($_mcv_lp_e['dv'] ?? null) && preg_match('/^[a-f0-9]{8,16}$/', $_mcv_lp_e['dv'])) ? $_mcv_lp_e['dv'] : '',
+        'pc' => (is_array($_mcv_lp_e) && isset($_mcv_lp_e['pc'])) ? (int)$_mcv_lp_e['pc'] : 0, 'cur' => (string)($_mcv_resume ?? ''),
+        'pt' => (is_array($_mcv_lp_e) && isset($_mcv_lp_e['pt'])) ? (int)$_mcv_lp_e['pt'] : ((is_array($_mcv_lp_e) && isset($_mcv_lp_e['t'])) ? (int)$_mcv_lp_e['t'] : 0), // 쪽을 바꾼 시각(서버 시계, fix180 — 예전 기록은 저장 시각)
+        'now' => (int)round(microtime(true) * 1000)]; // 서버 지금(ms) — 기기 시계와의 차이를 맞춤
+}
 // ★ (2026-11-15 16:15, 펜닐 요청 — fix169) 툰·북모드는 이어 보기가 켜져 있으면 바로 보던 쪽으로 가지 않고 '이어서 볼까요?' 먼저 물음(js/mc-resume-ask.js)
 // ★ (2026-11-15 17:10, 펜닐 요청 — fix170) '어디서 열든 늘 묻기' — 목록 '이어 읽기' 단추·이어 읽기/북마크 목록·서재처럼 위치(#imageN)를 붙여 들어와도 물음(그 위치로)
 //   · 묻는 경우: 이어 보기 켬 + 갈 곳(주소의 위치, 없으면 내 기록)이 2쪽 이상 · 툰모드는 1쪽이라도 그 쪽 안에서 내려가 있으면(f 10 이상 = 1% 넘게)
@@ -2054,6 +2071,26 @@ flush(); ob_flush();
 <?php if ($type != "pdf" && $mode == "book"): /* ★ (2026-11-08 fix80, 펜닐 제보) 북모드는 늘 검은 바탕(lightGallery) — 그 창이 뜨기 전 흰 바탕이 잠깐 보이던 것(테마와 상관없이 처음부터 검게) */ ?><style>html, html body { background-color: #000; }</style>
 <?php endif; ?>
 <?php if (function_exists('mc_back_origin_viewer_js')) echo mc_back_origin_viewer_js(); /* ★ (2026-11-05) 뒤로가기 = 들어온 곳(서재·즐겨찾기·북마크 등) — function.php */ ?>
+<?php if (is_array($_mcv_lp)): /* ★ (2026-11-17 13:24 fix188) 이 기기가 방금 보낸(아직 서버에 안 닿았을 수 있는) 위치 — 위 PHP 설명. 아래 '물을지 판단'·위치 붙이기보다 먼저 */ ?>
+	<script>(function(){ try {
+	  var C = <?php echo json_encode($_mcv_lp, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>;
+	  window.mcLpK = C.k; // ★ fix189 저장할 때(sendAutosave) 이 열쇠로 — 주소에서 파일을 읽지 않음(계정이 들어가게)
+	  if (location.hash) return; // 주소에 위치가 있으면 그대로(목록·북모드 닫기·새로고침 등)
+	  var all = JSON.parse(localStorage.getItem('mc_lp') || '{}'), L = all && all[C.k];
+	  if (!L || typeof L.b !== 'string') return;
+	  var now = Date.now(); if (!(L.t > 0 && now - L.t >= 0 && now - L.t < 120000)) return; // 2분 안에 보낸 것만
+	  if (C.sx) { // 서버 기록이 있으면 그 기록보다 이 기기가 더 나중에 쪽을 바꿨을 때만 — 서버 저장 판정(bookmark.php)과 같은 기준
+	    if (C.dv && C.dv === (localStorage.getItem('mc_dev') || '') && C.pc > 0) { if (!(L.pc > C.pc + 1500)) return; } // 같은 기기: 그 기기 시계로(fix186, 1.5초)
+	    else { var off = now - C.now; if (!(C.pt > 0) || !(L.pc - off > C.pt * 1000 + 2000)) return; } // 다른 기기·예전 기록: 서버 시계로 맞춰(fix180, 2초 — 받는 데 걸린 시간만큼 이 기기 쪽이 더 이르게 잡혀 덜 바뀜)
+	  }
+	  var mk = L.b;
+	  if (C.kind === 'pdf') { if (!/^pdf_\d{1,6}(f\d{1,3})?$/.test(mk)) return; }
+	  else { if (!/^image\d{1,6}(f\d{1,3})?$/.test(mk)) return; if (C.kind === 'book') mk = mk.replace(/f\d+$/, ''); } // 북모드는 쪽 단위(서버 이어 보기와 같게)
+	  if (mk === C.cur) return;
+	  history.replaceState(history.state, '', location.pathname + location.search + '#' + mk);
+	  try { if (window.mcBackLog) window.mcBackLog('lp_use', { url: mk + ' srv:' + (C.cur || '-') }); } catch (e2) {} // 기록만(src/perf/날짜.log — 속도 기록이 켜져 있을 때)
+	} catch (e) {} })();</script>
+<?php endif; ?>
 <?php if ($_mcv_rs_on): // ★ (2026-11-15 16:15 fix169 · 17:10 fix170) 물을지 판단 — 바로 아래 줄이 기록 위치(#imageN)를 붙이기 전에(붙은 뒤엔 주소에 원래 위치가 있었는지 구분 안 됨) ?>
 	<script>
 	(function(){ try {
@@ -6311,6 +6348,20 @@ function sendAutosave(u){
 		if (!/^[a-f0-9]{12}$/.test(_dv || '')) { var _a = new Uint8Array(6); crypto.getRandomValues(_a); _dv = Array.prototype.map.call(_a, function(b){ return ('0' + b.toString(16)).slice(-2); }).join(''); localStorage.setItem('mc_dev', _dv); }
 		u += '&dv=' + _dv + '&ct=' + Date.now();
 	} catch(e){}
+	// ★ (2026-11-17 13:24 fix188) 보낸 위치를 이 기기에도(위 <head> 'mc_lp' 설명) — 서버에 늦게 닿아도 바로 다시 열면 이 위치에서. 최근 30권만
+	try {
+		var _lkey = window.mcLpK, _lk = u.match(/[?&]bookmark=([^&]*)/); // ★ (2026-11-17 13:36 fix189) 열쇠 = <head> 가 정한 '계정|폴더 번호|파일'(이어 보기 끔이면 없음 → 안 적음)
+		if (typeof _lkey === 'string' && _lkey && _lk) {
+			var _lm = decodeURIComponent(_lk[1]), _lff = u.match(/[?&]f=(\d{1,3})(?:&|$)/), _lct = u.match(/[?&]ct=(\d+)/), _lpa = u.match(/[?&]pa=(\d+)/);
+			if (_lff && !/f\d+$/.test(_lm)) _lm += 'f' + _lff[1];
+			var _lnow = Date.now(), _lc = _lct ? parseInt(_lct[1], 10) : _lnow, _lall = {};
+			try { _lall = JSON.parse(localStorage.getItem('mc_lp') || '{}') || {}; } catch(e2){ _lall = {}; }
+			_lall[_lkey] = { b: _lm, pc: _lc - (_lpa ? parseInt(_lpa[1], 10) * 1000 : 0), t: _lnow };
+			var _lks = Object.keys(_lall);
+			if (_lks.length > 30) { _lks.sort(function(a, b){ return (+(_lall[a] && _lall[a].t) || 0) - (+(_lall[b] && _lall[b].t) || 0); }); for (var _li = 0; _li < _lks.length - 30; _li++) delete _lall[_lks[_li]]; }
+			localStorage.setItem('mc_lp', JSON.stringify(_lall));
+		}
+	} catch(e){}
 	// ✅ 페이지 이탈/숨김 시점 호출: sendBeacon으로 확실히 전송(비동기 $.get가 이탈로 취소되는 race 방지).
 	//    sendBeacon은 같은 출처라 세션 쿠키를 함께 보내고, bookmark.php의 autosave는 토큰 없이 세션만으로 허용됨.
 	//    미지원 브라우저 또는 큐잉 실패(false) 시에만 기존 $.get로 폴백 → 무회귀(최악의 경우 현재 동작과 동일).
@@ -7229,6 +7280,6 @@ window._mcDimsCache = <?php echo json_encode($_mc_dims); ?>;
 <?php } ?>
 <?php require_once __DIR__ . '/privacy_shield.php'; ?>
 <?php if (function_exists('mc_icons_script')) echo mc_icons_script(); /* ★ (2026-10-30) 이모지 → 선 아이콘 */ ?>
-<?php if (function_exists('mc_perf_script')) echo mc_perf_script('viewer'); // ★ (2026-11-03 14:10) 속도 기록(src/perf) ?>
+<?php if (function_exists('mc_perf_script')) echo mc_perf_script('viewer', ['mode' => (string)($mode ?? ''), 'resume' => (string)($_mcv_resume ?? ''), 'rs' => (is_string($_COOKIE['mcv_resume'] ?? null) ? substr($_COOKIE['mcv_resume'], 0, 2) : '')]); // ★ (2026-11-03 14:10) 속도 기록(src/perf) / ★ (2026-11-17 13:08 fix187) 열린 모드·이어 볼 위치(내 기록에서 고른 값, ''=처음부터·없음)·이어 보기 설정 ?>
 </body>
 </html>

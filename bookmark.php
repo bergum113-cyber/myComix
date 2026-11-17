@@ -175,7 +175,7 @@ if ($mode === "delete_bookmark") {
                 unset($__v0);
             }
         } catch (\Throwable $e) { /* 무시 — 예전처럼 저장 */ }
-        if ($__old_pt > 0 && $__pt < $__old_pt - 2) exit; // 다른 기기가 더 나중에 바꾼 기록 — 그대로 둠
+        if ($__old_pt > 0 && $__pt < $__old_pt - 2) { if (function_exists('mc_ev_log')) mc_ev_log('save_skip', ['why' => 'other_dev', 'file' => (string)$getfile, 'bidx' => (int)$bidx, 'mk' => sanitize_bookmark($_GET['bookmark'] ?? '')]); exit; } // 다른 기기가 더 나중에 바꾼 기록 — 그대로 둠 / ★ (2026-11-17 fix187) 기록만
     }
     // ★ (2026-11-16 14:30, 펜닐 제보 — fix186) 같은 기기에서 늦게 도착한 예전 저장은 버림 — 뷰어가 기기 표시(dv)·보낸 시각(ct, 그 기기 시계 ms)을 같이 보냄
     //   [왜] 나갈 때 저장을 두세 번 보내는데(숨김·떠남), 그중 하나가 브라우저 안에 묶여 있다가 몇 초~수십 초 뒤(다음 책을 읽는 중·탭을 닫을 때) 도착하면
@@ -196,7 +196,7 @@ if ($mode === "delete_bookmark") {
             }
         } catch (\Throwable $e) { /* 무시 */ }
         foreach ($__same as $__se) {
-            if (is_array($__se) && ($__se['dv'] ?? '') === $__dv && isset($__se['pc']) && $__pc < (int)$__se['pc'] - 1500) exit; // 같은 기기의 더 나중 기록이 이미 있음
+            if (is_array($__se) && ($__se['dv'] ?? '') === $__dv && isset($__se['pc']) && $__pc < (int)$__se['pc'] - 1500) { if (function_exists('mc_ev_log')) mc_ev_log('save_skip', ['why' => 'late', 'file' => (string)$getfile, 'bidx' => (int)$bidx, 'mk' => sanitize_bookmark($_GET['bookmark'] ?? '')]); exit; } // 같은 기기의 더 나중 기록이 이미 있음 / ★ (2026-11-17 fix187) 기록만
         }
     }
     // ✅ max_autosave 개수 초과 시 가장 오래된 항목 제거 (현재 파일이 '새 항목'일 때만 — 기존 재저장 시 개수 유지)
@@ -258,6 +258,22 @@ if ($mode === "delete_bookmark") {
             }
         }
     } catch (\Throwable $e) { /* 무시 */ }
+    // ★ (2026-11-17 13:08, 펜닐 요청 — fix187) 저장 기록만(src/perf/날짜.log — function.php mc_ev_log). mk = 이어 볼 위치, vp = 화면 기준 쪽, pct = 작품 화면 % 와 같은 셈, prev = 이 저장 전 이어 읽기 기록의 위치
+    if (function_exists('mc_ev_log')) {
+        $__lt = (is_string($_GET['total'] ?? null) && ctype_digit($_GET['total'])) ? (int)$_GET['total'] : 0;
+        $__lp = $__vp >= 0 ? $__vp : $__mp; $__lf = -1;
+        try { // 서재 DB 에 들어간 값(작품 화면 % 가 쓰는 값 — 뷰어는 전체 쪽수를 보내지 않음)
+            $__ldb = function_exists('mc_lib_db') ? mc_lib_db() : null;
+            if ($__ldb && function_exists('mc_lib_norm_path')) {
+                $__lst = $__ldb->prepare('SELECT page, total, finished FROM reads WHERE user=? AND bidx=? AND path=?');
+                $__lst->execute([preg_replace('/[^a-zA-Z0-9_]/', '', (string)($_SESSION['user_id'] ?? '')), (int)$bidx, mc_lib_norm_path($getfile)]);
+                $__lr = $__lst->fetch();
+                if (is_array($__lr)) { $__lp = (int)$__lr['page']; if ((int)$__lr['total'] > 0) $__lt = (int)$__lr['total']; $__lf = (int)$__lr['finished']; }
+            }
+        } catch (\Throwable $e) { /* 무시 */ }
+        mc_ev_log('save', ['file' => (string)$getfile, 'bidx' => (int)$bidx, 'mk' => $__mk, 'vp' => $__vp, 'pg' => $__lp, 'total' => $__lt, 'pct' => $__lt > 0 ? (int)min(100, floor(($__lp + 1) / $__lt * 100)) : -1, 'fin' => $__lf,
+            'viewer' => (string)$autosave_arr[$__ak]['viewer'], 'prev' => (string)(is_array($__as_before[$__ak] ?? null) ? ($__as_before[$__ak]['bookmark'] ?? '') : ''), 'pa' => $__pa, 'dv' => $__dv]);
+    }
 
 } elseif ($mode === "save_dims") {
     // ✅ [B단계1] 뷰어 이미지 크기(가로x세로) 저장 — 세션 사용자만(토큰 불필요, autosave 동일 권한).
@@ -573,6 +589,7 @@ if ($mode === "delete_bookmark") {
             }
         }
     } catch (\Throwable $e) { /* 무시 */ }
+    if (function_exists('mc_ev_log')) mc_ev_log('bm_save', ['file' => (string)$getfile, 'bidx' => (int)$bidx, 'mk' => (string)$bookmark_arr[$__bk]['bookmark']]); // ★ (2026-11-17 13:08 fix187) 북마크 저장 기록만
     
     // ✅ XSS 방어: 출력 이스케이프
     $bookmark_num = str_replace("image", "", sanitize_bookmark($_GET['bookmark'] ?? 'image0'));

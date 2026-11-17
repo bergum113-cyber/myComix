@@ -84,6 +84,13 @@ function bm_item($type, $no, $path, $mark) {
         $_bf = $mark['f'] ?? null;
         if (is_int($_bf) && $_bf >= 0 && $_bf <= 999) $url .= 'f' . $_bf;
     }
+    // ★ (2026-11-17 14:58, 펜닐 요청 확인 — fix190) '이어 읽기' 칸은 뷰어가 기록에서 이어 볼 수 있으면(이어 보기 켬 + 기록 있음) 위치(#…)를 붙이지 않음 — 작품 화면(mc_lib_view_url, 11-03)과 같은 규칙
+    //   [왜] 뷰어에서 읽다 이 화면으로 돌아오면 다시 그린 목록이 뷰어 저장(나갈 때 보냄)보다 먼저 만들어져 예전 위치가 붙은 링크가 남음 → 누르면 예전 쪽에서 열리고 그 쪽이 다시 저장됨(시험으로 확인 — 저장을 늦추지 않아도 PC 에서)
+    //   위치 없이 열면 뷰어가 최신 기록(책마다 위치 + 이 기기가 방금 보낸 위치 fix188)에서 엶. 이어 보기를 끈 경우·북마크(직접 찍은 쪽)는 예전 그대로 위치를 붙임
+    if ($type === 'autosave' && is_array($mark) && function_exists('mc_mv_resume_mark') && preg_match('/^(image|pdf_)\d+$/', $anchor)
+        && mc_mv_resume_mark($path, $ib, strpos($anchor, 'pdf_') === 0 ? 'pdf' : 'toon') !== '') {
+        $url = preg_replace('/#.*$/', '', $url);
+    }
     $parts = explode('/', trim(str_replace('\\', '/', $path), '/'));
     $name = end($parts);
     return [

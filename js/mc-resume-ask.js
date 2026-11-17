@@ -124,6 +124,7 @@
     function close(which) {
       if (done) return; done = true;
       openBox = null; onKey = null;
+      try { if (window.mcBackLog) window.mcBackLog('ask', { how: which === 'go' ? 'go' : 'start', n: pct }); } catch (x) {} // ★ (2026-11-17 13:08 fix187) 고른 답 기록만(src/perf/날짜.log — 이어서/처음부터, n = 창에 보인 %)
       try { ov.parentNode && ov.parentNode.removeChild(ov); } catch (e) {}
       try { (which === 'go' ? o.onGo : o.onStart) && (which === 'go' ? o.onGo() : o.onStart()); } catch (e) { try { console.warn('mcResumeAsk', e); } catch (x) {} }
     }

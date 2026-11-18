@@ -4049,6 +4049,40 @@ function toggleViewerFavorite(btn) {
     xhr.send('file=' + encodeURIComponent(<?php echo js($_viewer_fav_path); ?>) + '&bidx=<?php echo $current_bidx; ?>');
 }
 </script>
+<script>
+/* ★ (2026-11-18 17:50, 펜닐 요청 — fix214) 즐겨찾기인 책이면 화면 왼쪽 아래 구석에 작은 ⭐ 를 늘 표시(설정을 열지 않아도 앎)
+ *   - 보기만(누르는 기능 없음 · 밑의 그림/단추 누르기를 막지 않음)
+ *   - 메뉴의 즐겨찾기(js/viewer-bar.js setFav)·예전 단추(toggleViewerFavorite) 둘 다 #favBtn 의 btn-warning 을 바꾸므로 그것을 따라감 */
+(function () {
+    function setup() {
+        var btn = document.getElementById('favBtn');
+        if (!btn || document.getElementById('mcFavCorner')) return;
+        var st = document.createElement('style');
+        st.textContent = '#mcFavCorner{position:fixed;left:calc(8px + env(safe-area-inset-left,0px));bottom:calc(8px + env(safe-area-inset-bottom,0px));z-index:1040;pointer-events:none;'
+            + 'font-size:14px;line-height:1;padding:4px;border-radius:50%;background:rgba(0,0,0,.35);opacity:.85;user-select:none}'
+            + '#mcFavCorner[hidden]{display:none}';
+        document.head.appendChild(st);
+        var el = document.createElement('div');
+        el.id = 'mcFavCorner'; el.setAttribute('aria-hidden', 'true'); el.textContent = '\u2B50';
+        // ★ (2026-11-18 23:30, 펜닐 요청 — fix221) 툰 모드는 구석 대신 위 쪽 번호(#mcvPos — 누르면 쪽 목록) 앞에 ★(배경 그림이라 쪽 번호 글자를 바꿔도 남음). 북 모드는 예전처럼 구석
+        var pos = document.getElementById('mcvPos'); // ★ (2026-11-18 23:54, 펜닐 요청 — fix224) 북 모드도 쪽 번호 앞에(예전: 툰 모드만, 북 모드는 구석). 쪽 목록 아이콘(::before)과 안 겹치게 왼쪽 여백 23px 안에 별
+        if (pos) {
+            st.textContent += '#mcvPos.mcv-favon{background-image:url("data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 24 24%27%3E%3Cpath fill=%27%23f5b301%27 stroke=%27%23a87800%27 stroke-width=%271%27 d=%27M12 2.5l2.9 6.1 6.6.8-4.9 4.6 1.3 6.6L12 17.3l-5.9 3.3 1.3-6.6-4.9-4.6 6.6-.8z%27/%3E%3C/svg%3E")!important;background-repeat:no-repeat!important;background-size:12px 12px!important;background-position:7px center!important;padding-left:23px!important}';
+        }
+        function upd() { var on = btn.classList.contains('btn-warning'); if (pos) { el.hidden = true; pos.classList.toggle('mcv-favon', on); } else el.hidden = !on; }
+        upd();
+        document.body.appendChild(el);
+        try { new MutationObserver(upd).observe(btn, { attributes: true, attributeFilter: ['class'] }); } catch (e) {}
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', setup); else setup();
+})();
+</script>
+<style>
+/* ★ (2026-11-18 23:30, 펜닐 요청 — fix221) 뷰어: PC 키보드 Tab 으로 옮길 때 브라우저가 그리는 검정·흰 테두리(포커스 선) 안 보이게 · 북 모드는 맨 위로(▲) 단추 숨김 */
+body *:focus, body *:focus-visible { outline: none !important; }
+body .btn:focus, body .btn:focus-visible, body .form-control:focus, body .form-select:focus { box-shadow: none !important; }
+<?php if ($mode === 'book'): ?>#scrollTopBtn { display: none !important; }<?php endif; ?>
+</style>
 <?php
          if (!isset($totalfile[$next]) || count($totalfile) <= $next) {
 			 ?>

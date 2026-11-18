@@ -246,6 +246,10 @@ $_debug = $_privacy_settings['debug'] ?? false;
       }
     }
 
+    // ★ (2026-11-18 15:33, 펜닐 제보 — fix206) 업로드·삭제가 진행 중(또는 업로드 창에 담아 둔 파일·결과가 있음)이면 가림막 페이지로 이동하지 않고 덮개만 —
+    //   예전엔 폰에서 탭·앱을 바꾸는 순간 blank.php 로 이동해 진행 중이던 업로드·삭제 요청이 끊겼음. 덮개(showCover)는 hidden 때 이미 씌워져 사생활은 그대로,
+    //   돌아오면(visible) 덮개만 걷힘. 페이지가 '바쁨'을 알려 주는 window.mcPsBusy() 가 없으면 예전 그대로
+    try { if (typeof window.mcPsBusy === 'function' && window.mcPsBusy()) { showCover(); debugLog('blank held (busy)'); return; } } catch (eb) {}
     jumped = true;
     debugLog('→ blank.php');
     
@@ -265,6 +269,9 @@ $_debug = $_privacy_settings['debug'] ?? false;
       debugLog('error: ' + e.message);
     }
   }
+
+  // ★ (2026-11-18 15:33, 펜닐 제보 — fix206) 바쁜 일이 끝났는데 아직 숨겨진 상태면 그때 가림막으로(삭제 응답 뒤 등에서 부름)
+  window.mcPsRecheck = function () { try { if (document.visibilityState === 'hidden' && !(typeof window.mcPsBusy === 'function' && window.mcPsBusy())) goBlank(true); } catch (e) {} };
 
   /* ===========================
    * 탭 전환 감지

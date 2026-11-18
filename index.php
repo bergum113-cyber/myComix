@@ -67,6 +67,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && in
     
     $uploadTmpDir = __DIR__ . '/src/upload_tmp';
     if (!is_dir($uploadTmpDir)) @mkdir($uploadTmpDir, 0755, true);
+    // ★ (2026-11-18 13:52, 펜닐 요청 — fix201) 업로드 이름은 자모 붙인 형태(NFC)로 저장 — 맥·아이폰은 자모 분리형(NFD)으로 보내 디스크에 그대로 남았음(탐색기에서 깨져 보임·같은 이름 판단 어긋남)
+    //   _mc_have: 그 폴더에 같은 글자 이름(NFC·NFD 상관없이)이 있으면 디스크의 실제 이름, 없으면 null — 같은 이름 처리·이미 있는 NFD 폴더 다시 쓰기에 씀
+    $_mc_nfc = function ($s) {
+        if (is_string($s) && $s !== '' && class_exists('Normalizer')) { $n = Normalizer::normalize($s, Normalizer::FORM_C); if (is_string($n) && $n !== '') return $n; }
+        return $s;
+    };
+    $_mc_nmap = [];
+    $_mc_have = function ($dir, $name) use (&$_mc_nmap, $_mc_nfc) {
+        if (file_exists($dir . '/' . $name)) return $name;
+        if (!class_exists('Normalizer') || !is_dir($dir)) return null;
+        if (!isset($_mc_nmap[$dir])) {
+            $_mc_nmap[$dir] = [];
+            foreach ((@scandir($dir) ?: []) as $_e) { if ($_e !== '.' && $_e !== '..') $_mc_nmap[$dir][$_mc_nfc($_e)] = $_e; }
+        }
+        $k = $_mc_nfc($name);
+        return isset($_mc_nmap[$dir][$k]) ? $_mc_nmap[$dir][$k] : null;
+    };
     
     $action = $_POST['admin_action'];
     // ★ (2026-10-30) 업로드·삭제 뒤 작품 정보(라이브러리) 자동 스캔 예약 — 표시만 남기고(가벼움), 15초 조용해진 뒤 화면을 열 때 서버에서 빠른 스캔
@@ -82,8 +99,40 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && in
     if ($action === 'chunk_init') {
         $uploadId = bin2hex(random_bytes(16));
         $fileName = $_POST['file_name'] ?? 'unknown';
+        if (is_string($fileName)) $fileName = $_mc_nfc($fileName); // fix201 자모 붙인 이름으로
         if (!is_string($fileName) || $_mc_upload_blocked(basename(str_replace('\\', '/', $fileName)))) {
             echo json_encode(['success' => false, 'error' => __('api_disallowed_ext', strtolower(pathinfo(rtrim((string)$fileName, ". \t"), PATHINFO_EXTENSION)))]); // ★ (2026-11-04 00:28) 'x.php. ' 같은 이름도 확장자가 보이게
+            exit;
+        }
+        // ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 관리자 '업로드 허용 확장자'에 있는 것만(위 위험한 확장자는 그와 상관없이 항상 막음)
+        $_mc_ext = strtolower(pathinfo(rtrim(basename(str_replace('\\', '/', $fileName)), ". \t"), PATHINFO_EXTENSION));
+        if (function_exists('mc_upload_allowed_exts') && !in_array($_mc_ext, mc_upload_allowed_exts(), true)) {
+            echo json_encode(['success' => false, 'error' => __('api_disallowed_ext', $_mc_ext)]);
+            exit;
+        }
+        // ★ (2026-11-18 13:42, 펜닐 요청 — fix200) 폴더째 업로드 — 지금 폴더 아래 하위 경로(rel_dir 'a/b'). 단계마다 금지 문자 빼고 앞뒤 점·빈칸 정리,
+        //   앞뒤 점을 지워 '..'·'.' 은 빈 단계가 되어 거부('.숨김' 은 '숨김'), 빈 단계·20단계 넘음·한 단계 200자 넘음이면 거부 → 현재 폴더 밖으로 나갈 수 없음. 폴더는 마무리 때 만듦(화면은 숨김 폴더를 아예 안 보냄)
+        $_mc_rel = '';
+        if (isset($_POST['rel_dir']) && $_POST['rel_dir'] !== '') {
+            $_mc_rd = is_string($_POST['rel_dir']) ? $_mc_nfc(str_replace('\\', '/', $_POST['rel_dir'])) : null; // fix201 NFC
+            $_mc_segs = $_mc_rd === null ? null : explode('/', trim($_mc_rd, '/'));
+            if ($_mc_segs === null || count($_mc_segs) > 20) { echo json_encode(['success' => false, 'error' => __('api_invalid_path')]); exit; }
+            foreach ($_mc_segs as $_mc_k => $_mc_sg) {
+                $_mc_sg = trim(preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $_mc_sg), ". ");
+                if ($_mc_sg === '' || $_mc_sg[0] === '.' || strlen($_mc_sg) > 200) { echo json_encode(['success' => false, 'error' => __('api_invalid_path')]); exit; }
+                $_mc_segs[$_mc_k] = $_mc_sg;
+            }
+            $_mc_rel = implode('/', $_mc_segs);
+        }
+        $_mc_tdir = $target_base;
+        foreach (($_mc_rel === '' ? [] : explode('/', $_mc_rel)) as $_mc_sg) { // fix201 같은 글자(NFD) 폴더가 이미 있으면 그 폴더를 씀(겉보기 같은 폴더가 둘 생기지 않게)
+            $_mc_h = $_mc_have($_mc_tdir, $_mc_sg);
+            $_mc_tdir .= '/' . (($_mc_h !== null && is_dir($_mc_tdir . '/' . $_mc_h)) ? $_mc_h : $_mc_sg);
+        }
+        // ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 같은 이름이 있고 '건너뛰기'면 올리기 전에 알려 줌(큰 파일을 다 보낸 뒤 버리지 않게) — 마무리 때 한 번 더 확인
+        $_mc_pre = preg_replace('/[<>:"\/\\\\|?*\x00-\x1f]/', '', $fileName);
+        if (trim($_mc_pre) !== '' && function_exists('mc_upload_dup_mode') && mc_upload_dup_mode() === 'skip' && $_mc_have($_mc_tdir, $_mc_pre) !== null) { // fix201 NFD 같은 이름도
+            echo json_encode(['success' => true, 'skip' => true, 'file' => $_mc_pre]);
             exit;
         }
         $fileSize = (int)($_POST['file_size'] ?? 0);
@@ -92,7 +141,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && in
             'upload_id' => $uploadId,
             'file_name' => $fileName,
             'file_size' => $fileSize,
-            'target_path' => $target_base,
+            'target_path' => $_mc_tdir, // fix200 폴더째 업로드면 하위 폴더
+            'base_path' => $target_base, // fix200 목록 캐시 정리 기준
             'created_at' => time()
         ]));
         touch($uploadTmpDir . '/' . $uploadId . '.tmp');
@@ -151,8 +201,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && in
             exit;
         }
         
+        $_mc_ext = strtolower(pathinfo(rtrim($safeName, ". \t"), PATHINFO_EXTENSION)); // ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 허용 목록(시작 때와 같은 검사)
+        if (function_exists('mc_upload_allowed_exts') && !in_array($_mc_ext, mc_upload_allowed_exts(), true)) {
+            @unlink($tmpFile); @unlink($sessionFile);
+            echo json_encode(['success' => false, 'error' => __('api_disallowed_ext', $_mc_ext)]);
+            exit;
+        }
+        
+        // ★ (2026-11-18 13:42, 펜닐 요청 — fix200) 폴더째 업로드 — 하위 폴더가 없으면 만들고, 만든 뒤 실제 경로가 콘텐츠 폴더 안인지 다시 확인
+        if (!is_dir($session['target_path'])) @mkdir($session['target_path'], 0755, true);
+        $_mc_rt = @realpath($session['target_path']); $_mc_rb = @realpath($base_dir);
+        if ($_mc_rt === false || $_mc_rb === false || !mc_path_within($_mc_rt, $_mc_rb)) {
+            @unlink($tmpFile); @unlink($sessionFile);
+            echo json_encode(['success' => false, 'error' => __('api_invalid_path')]);
+            exit;
+        }
+        
         $dest = $session['target_path'] . '/' . $safeName;
         
+        // ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 같은 이름이 있을 때 — 관리자 설정: rename(이름 (1).zip, 기본) / skip(건너뜀) / overwrite(아래 예전 덮어쓰기)
+        $_mc_renamed = false;
+        $_mc_dup = function_exists('mc_upload_dup_mode') ? mc_upload_dup_mode() : 'overwrite';
+        $_mc_hv = $_mc_have($session['target_path'], $safeName); // fix201 같은 글자 이름(NFD 포함)이 있으면 그 실제 이름
+        if ($_mc_hv !== null && $_mc_dup === 'skip') {
+            @unlink($tmpFile); @unlink($sessionFile);
+            echo json_encode(['success' => true, 'skip' => true, 'file' => $safeName]);
+            exit;
+        }
+        if ($_mc_hv !== null && $_mc_dup === 'rename') {
+            $_mc_pi = pathinfo($safeName);
+            $_mc_stem = isset($_mc_pi['extension']) ? substr($safeName, 0, -(strlen($_mc_pi['extension']) + 1)) : $safeName;
+            $_mc_tail = isset($_mc_pi['extension']) ? '.' . $_mc_pi['extension'] : '';
+            for ($_mc_i = 1; $_mc_i <= 9999; $_mc_i++) {
+                $_mc_try = $session['target_path'] . '/' . $_mc_stem . ' (' . $_mc_i . ')' . $_mc_tail;
+                if ($_mc_have($session['target_path'], $_mc_stem . ' (' . $_mc_i . ')' . $_mc_tail) === null) { $dest = $_mc_try; $_mc_renamed = true; break; } // fix201 NFD 같은 이름도 피함
+            }
+        }
+        
+        // fix201 덮어쓰기 — 있는 파일이 같은 글자의 자모 분리형(NFD) 이름이면 그것을 지우고 붙인 이름으로 저장
+        if ($_mc_hv !== null && $_mc_hv !== $safeName && $_mc_dup === 'overwrite' && is_file($session['target_path'] . '/' . $_mc_hv)) {
+            mc_clear_file_caches($session['target_path'] . '/' . $_mc_hv);
+            @unlink($session['target_path'] . '/' . $_mc_hv);
+        }
         // 기존 파일 있으면 덮어쓰기 (삭제 후 이동)
         if (file_exists($dest)) {
             if (is_file($dest)) mc_clear_file_caches($dest); // ★ (2026-10-30) 옛 캐시도 정리
@@ -163,8 +253,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && in
             @unlink($sessionFile);
             $cache = dirname($dest) . '/.folder_cache.json';
             if (file_exists($cache)) @unlink($cache);
+            // fix200 폴더째 업로드 — 새로 생긴 하위 폴더가 보이게 현재 폴더까지 올라가며 폴더 캐시도 정리
+            if (!empty($session['base_path']) && is_string($session['base_path'])) {
+                $_mc_cd = dirname($dest); $_mc_bp = rtrim(str_replace('\\', '/', $session['base_path']), '/');
+                for ($_mc_n = 0; $_mc_n < 25 && strlen(rtrim(str_replace('\\', '/', $_mc_cd), '/')) > strlen($_mc_bp); $_mc_n++) {
+                    $_mc_cd = dirname($_mc_cd);
+                    if (file_exists($_mc_cd . '/.folder_cache.json')) @unlink($_mc_cd . '/.folder_cache.json');
+                }
+            }
             if (function_exists('log_user_activity')) @log_user_activity('파일 업로드', basename($dest)); // ★ (2026-11-04 00:28) 업로드도 활동 기록에(화면이 쓰는 이 경로엔 없었음)
-            echo json_encode(['success' => true, 'file' => basename($dest)]);
+            echo json_encode(['success' => true, 'file' => basename($dest), 'renamed' => $_mc_renamed]); // fix199 renamed
         } else {
             echo json_encode(['success' => false, 'error' => __('api_move_failed')]);
         }
@@ -223,6 +321,71 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
         }
         $target_base = $validated_dir;
     }
+    // ★ (2026-11-18 12:54, 펜닐 제보 — fix198) 삭제할 경로를 디스크의 실제 이름으로 — 목록 화면은 경로를 h()(자모 붙인 NFC)로 내보내는데
+    //   아이폰·맥에서 올린 파일·폴더는 디스크 이름이 자모 분리형(NFD)이라 '파일이 존재하지 않습니다'·'삭제 실패'로 지워지지 않았음(시험 폴더에서 재현)
+    //   그대로 있으면 그대로, 없을 때만 단계마다 같은 폴더 안에서 NFC 로 같은 이름을 찾음(경로 검사는 아래 validate_file_path 가 그대로 함)
+    $_mc_disk_rel = function ($rel) use ($base_dir) {
+        if (!is_string($rel) || $rel === '' || !class_exists('Normalizer')) return $rel;
+        $cur = rtrim((string)$base_dir, '/\\');
+        if (file_exists($cur . '/' . trim($rel, '/\\'))) return $rel;
+        $out = [];
+        foreach (explode('/', str_replace('\\', '/', trim($rel, '/\\'))) as $seg) {
+            if ($seg === '' || $seg === '.' || $seg === '..') return $rel;
+            if (!file_exists($cur . '/' . $seg)) {
+                $want = Normalizer::normalize($seg, Normalizer::FORM_C); $hit = null;
+                foreach ((@scandir($cur) ?: []) as $n) {
+                    if ($n === '.' || $n === '..') continue;
+                    if (Normalizer::normalize($n, Normalizer::FORM_C) === $want) { $hit = $n; break; }
+                }
+                if ($hit === null) return $rel;
+                $seg = $hit;
+            }
+            $out[] = $seg; $cur .= '/' . $seg;
+        }
+        return implode('/', $out);
+    };
+    
+    // ★ (2026-11-18 14:46, 펜닐 제보 — fix203) 지우는 파일·책 폴더로 만든 자동 폴더 표지([cover].jpg)도 같이 지움 — 예전엔 남아서 폴더를 비워도 옛 표지가 보였고,
+    //   표지는 한 번 생기면 덮어쓰지 않아 새로 올려도 안 바뀌었음. 자동 표지 = 목록이 첫 책 정보(json)의 썸네일을 그대로 복사한 것이라 바이트가 같을 때만(mc_thumb_fit_upgrade 와 같은 판단).
+    //   직접 지정한 표지·동영상·문서 폴더 표지(크기를 바꿔 저장해 같지 않음)는 그대로. 지우기 전에 판단하고(정보 파일도 같이 지워지므로), 지우기에 성공했을 때만 표지를 지움
+    $_mc_cover_auto_of = function ($path) {
+        $path = rtrim((string)$path, '/\\');
+        if ($path === '' || strcasecmp(basename($path), '[cover].jpg') === 0) return '';
+        $cf = dirname($path) . '/[cover].jpg';
+        if (!is_file($cf)) return '';
+        $cd = (string)@file_get_contents($cf);
+        if ($cd === '') return '';
+        $js = [];
+        if (is_file($path)) { if (function_exists('get_cache_json_path')) $js[] = get_cache_json_path($path); }
+        elseif (is_dir($path)) $js[] = $path . '.image_files.json';
+        foreach ($js as $j) {
+            if (!is_string($j) || $j === '' || $j === $path || !is_file($j)) continue;
+            $d = @json_decode((string)@file_get_contents($j), true);
+            $t = (is_array($d) && isset($d['thumbnail']) && is_string($d['thumbnail'])) ? base64_decode($d['thumbnail'], true) : false;
+            if (is_string($t) && $t !== '' && strlen($t) === strlen($cd) && $t === $cd) return $cf;
+        }
+        return '';
+    };
+    
+    // ★ (2026-11-18 16:12, 펜닐 제보 — fix208) 지운 뒤 정리 —
+    //   ① 책 폴더(이미지·동영상 폴더)를 지우면 옆(부모 폴더)에 있는 그 폴더의 정보 파일(이름.image_files.json·이름.video_files.json)도 지움 — 예전엔 폴더 안만 지워 남았음
+    //   ② 지운 뒤 그 폴더에 내용(파일·폴더)이 하나도 없으면 폴더 표지([cover].jpg)를 지움 — 썸네일을 다시 만들어 바이트가 달라진 자동 표지는 fix203 비교로 못 알아봐 남았음(제보 사진).
+    //      빈 폴더라 직접 넣은 표지도 지움(펜닐 요청). 숨김·.json·[cover].jpg·썸네일(.thumb.jpg 등)·Thumbs.db·desktop.ini 는 내용으로 치지 않음
+    $_mc_dir_sidecars_drop = function ($path) {
+        $path = rtrim((string)$path, '/\\');
+        foreach (['.image_files.json', '.video_files.json'] as $_sx) { if ($path !== '' && is_file($path . $_sx)) @unlink($path . $_sx); }
+    };
+    $_mc_cover_if_empty = function ($dir) {
+        $dir = rtrim((string)$dir, '/\\');
+        if ($dir === '' || !is_file($dir . '/[cover].jpg')) return;
+        foreach ((@scandir($dir) ?: []) as $_n) {
+            if ($_n === '.' || $_n === '..') continue;
+            if ($_n[0] === '.' && is_dir($dir . '/' . $_n)) continue; // 숨김 폴더(NAS 썸네일 폴더 등) — 점으로 시작하는 진짜 책 파일('.hack 1권.zip')은 내용으로 셈(검색 색인과 같게)
+            if ((function_exists('mc_index_skip_name') && mc_index_skip_name($_n)) || strcasecmp($_n, '[cover].jpg') === 0 || preg_match('/\.json$/i', $_n) || preg_match('/\.(thumb\.jpg|thumb\.webp|pdf_thumb\.jpg|epub_thumb\.jpg|video_thumb\.jpg)$/i', $_n) || in_array(strtolower($_n), ['thumbs.db', 'desktop.ini', 'ehthumbs.db'], true)) continue;
+            return; // 내용이 남아 있음
+        }
+        @unlink($dir . '/[cover].jpg');
+    };
     
     switch ($action) {
         case 'create_folder':
@@ -397,6 +560,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                 // 오피스
                 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'
             ];
+            if (function_exists('mc_upload_allowed_exts')) $allowed_ext = mc_upload_allowed_exts(); // fix199 관리자 '업로드 허용 확장자'
             
             $files = $_FILES['upload_files'];
             $file_count = count($files['name']);
@@ -476,6 +640,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                 'pdf', 'epub', 'txt', 'hwp', 'hwpx',
                 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'
             ];
+            if (function_exists('mc_upload_allowed_exts')) $allowed_ext = mc_upload_allowed_exts(); // fix199 관리자 '업로드 허용 확장자'
             
             if (!in_array($ext, $allowed_ext)) {
                 echo json_encode(['success' => false, 'error' => __('api_disallowed_ext', $ext)]);
@@ -515,7 +680,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
             }
             
             // 경로 검증
-            $validated_path = validate_file_path($file_path, $base_dir);
+            $validated_path = validate_file_path($_mc_disk_rel($file_path), $base_dir); // fix198
             if ($validated_path === false) {
                 echo json_encode(['success' => false, 'error' => __('api_invalid_path')]);
                 break;
@@ -527,8 +692,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
             }
             
             $file_name = basename($validated_path);
+            $_mc_cvr = $_mc_cover_auto_of($validated_path); // fix203
             
             if (@unlink($validated_path)) {
+                if ($_mc_cvr !== '') @unlink($_mc_cvr); // fix203 이 파일로 만든 자동 폴더 표지
                 // 관련 캐시/메타 파일도 삭제
                 $related_files = [
                     // 동영상 썸네일
@@ -549,6 +716,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                         @unlink($related);
                     }
                 }
+                $_mc_cover_if_empty(dirname($validated_path)); // fix208 폴더가 비었으면 표지도
                 
                 // ✅ [B] 삭제된 파일에 연결된 북마크/자동저장/즐겨찾기 항목도 함께 정리(고아 항목 방지).
                 //    키는 상대경로($file_path)로 저장되므로 원본 입력 경로로 매칭. best-effort(실패해도 삭제 자체는 성공).
@@ -592,7 +760,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
             }
             
             // 경로 검증
-            $validated_path = validate_file_path($folder_path, $base_dir);
+            $validated_path = validate_file_path($_mc_disk_rel($folder_path), $base_dir); // fix198
             if ($validated_path === false) {
                 echo json_encode(['success' => false, 'error' => __('api_invalid_path')]);
                 break;
@@ -634,7 +802,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                 }
             }
             
+            $_mc_cvr = $_mc_cover_auto_of($validated_path); // fix203 이미지 책 폴더로 만든 자동 표지
             if (deleteDirectory($validated_path)) {
+                if ($_mc_cvr !== '') @unlink($_mc_cvr); // fix203
+                $_mc_dir_sidecars_drop($validated_path); $_mc_cover_if_empty(dirname(rtrim($validated_path, '/\\'))); // fix208 옆 정보 파일·빈 폴더 표지
                 if (function_exists('mc_rec_cleanup_deleted')) mc_rec_cleanup_deleted($bidx, [], [$folder_path]); // ★ (2026-11-06 01:05) 그 폴더와 안의 책 기록(북마크·자동 저장·즐겨찾기) 정리 — 예전엔 남아 '파일 없음'으로 보였음(파일 하나 지우기와 같게)
                 log_user_activity('폴더 삭제', $validated_path);
                 echo json_encode(['success' => true, 'message' => __('api_folder_deleted', $folder_name)]);
@@ -655,7 +826,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
             $deleted_files = 0;
             $deleted_folders = 0;
             $failed = 0;
-            $__rc_files = []; $__rc_dirs = []; // ★ (2026-11-06 01:05) 지운 것들의 기록 정리용(아래 끝에서 한 번)
+            $__rc_files = []; $__rc_dirs = []; $__mc_pd = []; // fix208 $__mc_pd: 지운 것들의 부모 폴더 // ★ (2026-11-06 01:05) 지운 것들의 기록 정리용(아래 끝에서 한 번)
             
             // 재귀적 폴더 삭제 함수
             if (!function_exists('deleteDirectoryRecursive')) {
@@ -683,13 +854,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
             // 파일 삭제
             foreach ((is_array($files) ? $files : []) as $file_path) {
                 if (!is_string($file_path)) continue; // ★ (2026-11-02 19:05) 배열 원소면 TypeError(500)
-                $validated_path = validate_file_path($file_path, $base_dir);
+                $validated_path = validate_file_path($_mc_disk_rel($file_path), $base_dir); // fix198
                 if ($validated_path === false || !is_file($validated_path)) {
                     $failed++;
                     continue;
                 }
                 
+                $_mc_cvr = $_mc_cover_auto_of($validated_path); // fix203
                 if (@unlink($validated_path)) {
+                    if ($_mc_cvr !== '') @unlink($_mc_cvr); // fix203 이 파일로 만든 자동 폴더 표지
                     // 관련 캐시/메타 파일도 삭제
                     $related_files = [
                         $validated_path . '.video_thumb.jpg',
@@ -706,6 +879,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                             @unlink($related);
                         }
                     }
+                    $__mc_pd[dirname($validated_path)] = 1; // fix208 지운 뒤 빈 폴더 표지 확인(아래 한 번에)
                     $deleted_files++;
                     $__rc_files[] = $file_path;
                 } else {
@@ -716,7 +890,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
             // 폴더 삭제
             foreach ((is_array($folders) ? $folders : []) as $folder_path) {
                 if (!is_string($folder_path)) continue; // ★ (2026-11-02 19:05) 배열 원소면 TypeError(500)
-                $validated_path = validate_file_path($folder_path, $base_dir);
+                $validated_path = validate_file_path($_mc_disk_rel($folder_path), $base_dir); // fix198
                 if ($validated_path === false || !is_dir($validated_path)) {
                     $failed++;
                     continue;
@@ -728,7 +902,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
                     continue;
                 }
                 
+                $_mc_cvr = $_mc_cover_auto_of($validated_path); // fix203 이미지 책 폴더로 만든 자동 표지
                 if (deleteDirectoryRecursive($validated_path)) {
+                    if ($_mc_cvr !== '') @unlink($_mc_cvr); // fix203
+                    $_mc_dir_sidecars_drop($validated_path); $__mc_pd[dirname(rtrim($validated_path, '/\\'))] = 1; // fix208 옆 정보 파일 · 빈 폴더 표지는 아래 한 번에
                     $deleted_folders++;
                     $__rc_dirs[] = $folder_path;
                 } else {
@@ -737,6 +914,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['admin_action']) && $i
             }
             
             $total_deleted = $deleted_files + $deleted_folders;
+            foreach (array_keys($__mc_pd ?? []) as $_mc_d) $_mc_cover_if_empty($_mc_d); // fix208
             if (($__rc_files || $__rc_dirs) && function_exists('mc_rec_cleanup_deleted')) mc_rec_cleanup_deleted($bidx, $__rc_files, $__rc_dirs); // ★ (2026-11-06 01:05) 파일 하나 지우기처럼 기록도 정리
             if ($total_deleted > 0) {
                 log_user_activity('다중 삭제', "파일 {$deleted_files}개, 폴더 {$deleted_folders}개 삭제");
@@ -3039,6 +3217,13 @@ $_i18n_data = [
     'upload_failed' => __('js_upload_fail_status'),
     'upload_count_status' => __('js_upload_count_status'),
     'upload_complete' => __('js_upload_complete_msg'),
+    'upload_result' => __('js_upload_result'), // ★ (2026-11-18 11:27, 펜닐 요청 — fix195) 끝난 뒤 창 안 결과 줄
+    'upload_result_skip' => __('js_upload_result_skip'), // fix199
+    'upload_skipped' => __('js_upload_skipped'), // fix199
+    'upload_pick_folder' => __('js_upload_pick_folder'), // fix200
+    'upload_pick_files' => __('js_upload_pick_files'), 'upload_done_title' => __('js_upload_done_title'), // fix204
+    'upload_only_fail' => __('js_upload_only_fail'), 'upload_show_all' => __('js_upload_show_all'), // fix204
+    'upload_close_refresh' => __('js_upload_close_refresh'),
     'upload_cancel_confirm' => __('js_upload_cancel_confirm'),
     'upload_in_progress' => __('js_upload_in_progress'),
     'upload_total_count' => __('js_upload_total_count'),
@@ -6854,7 +7039,9 @@ $_mc_up_btn = $_mc_up_url === '' ? '' : '<button type="button" class="mc-up-btn"
 $__rc = '';
 if ($getdir !== '' && isset($recent) && is_array($recent)) {
     $__rv = $recent[(int)$current_bidx . '|' . $getdir] ?? null;
-    if (is_string($__rv) && $__rv !== '') $__rc = $__rv;
+    // ★ (2026-11-18 16:44, 펜닐 제보 — fix210) 새 형식 기록도 그 책이 지금 이 폴더에 있을 때만 — 예전엔 확인 없이 띄워, 책을 지워도(빈 폴더) '이어 읽기 바람의검심 03' 이 남았음.
+    //   기록은 그대로 두고 단추만 안 띄움(다른 책을 읽으면 기록이 바뀜). 탐색기·FTP 로 지운 경우도 같음. 읽고 돌아올 때 단추를 바꾸는 쪽(서버 화면을 다시 받아 옴)도 같이 맞음
+    if (is_string($__rv) && $__rv !== '' && file_exists($dir . '/' . ((substr($__rv, -10) === '_imgfolder') ? substr($__rv, 0, -10) : $__rv))) $__rc = $__rv;
     else {
         $__rv = $recent[$getdir] ?? null;
         if (is_string($__rv) && $__rv !== '' && strpos($__rv, '/') === false && strpos($__rv, '\\') === false) {
@@ -10952,12 +11139,16 @@ function createFolder() {
 // 파일 업로드 (하위 폴더에서만) - 드래그앤드롭 UI + 파일별 순차 업로드
 var uploadQueue = [];
 var isUploading = false;
+var uploadNeedReload = false; // ★ (2026-11-18 11:27, 펜닐 요청 — fix195) 하나라도 올라갔으면 창을 닫을 때 목록 새로 불러오기
 
 function openUploadModal() {
     var modal = document.getElementById('uploadModal');
     if (!modal) {
         var html = '<div id="uploadModal" class="modal fade" tabindex="-1">';
-        html += '<div class="modal-dialog modal-dialog-centered modal-lg">';
+        // ★ (2026-11-18 15:16, 펜닐 요청 — fix204) 창이 화면보다 크면 창 안에서만 스크롤(아래 단추는 늘 보임) · 파일을 담으면 끌어다 놓는 칸을 한 줄로 · 끝나면 결과 화면
+        html += '<style>#dropZone.dz-small{padding:10px!important;margin-bottom:10px!important}#dropZone.dz-small .dz-big,#uploadModal.up-done #dropZone{display:none!important}'
+            + '#fileListTable.up-onlyfail tbody tr[class^="up-st-"]:not(.up-st-error){display:none}</style>';
+        html += '<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">';
         html += '<div class="modal-content">';
         html += '<div class="modal-header bg-primary text-white py-2">';
         html += '<h5 class="modal-title">📤 ' + i18n.upload_title + '</h5>';
@@ -10967,11 +11158,21 @@ function openUploadModal() {
         
         // 드래그앤드롭 영역
         html += '<div id="dropZone" style="border:2px dashed #ccc; border-radius:10px; padding:40px; text-align:center; background:#fafafa; color:#212529; cursor:pointer; margin-bottom:15px; transition:all 0.3s;">'; // ★ (2026-11-02 22:17) 글자색 — 다크에서 큰 📁 아이콘이 밝은 바탕 위 밝은 색이라 안 보였음
-        html += '<div style="font-size:48px; margin-bottom:10px;">📁</div>';
+        html += '<div class="dz-big" style="font-size:48px; margin-bottom:10px;">📁</div>'; // fix204 dz-big: 파일을 담으면 숨김
         html += '<div style="font-size:16px; color:#666;">' + i18n.upload_drag + '</div>';
-        html += '<div style="font-size:12px; color:#999; margin-top:5px;">' + i18n.upload_info + '</div>';
+        // ★ (2026-11-18 15:30, 펜닐 요청 — fix205) 따로 있던 [파일 선택]·[폴더 선택] 단추 줄 대신 칸 안 글자 링크 — 칸 아무 데나 누르면 파일 고르기(여러 개), 폴더는 '폴더 선택'(브라우저 고르기 창은 파일·폴더 중 하나만이라)
+        //   파일을 담아 칸이 한 줄로 줄어도 남아 계속 더 담을 수 있음 · 폴더 링크는 지원하는 브라우저만(아이폰 숨김)
+        html += '<div style="font-size:13px; margin-top:6px;"><a href="#" id="uploadFileBtn">📄 ' + i18n.upload_pick_files + '</a><span id="uploadFolderSep" style="display:none;"> &nbsp;·&nbsp; <a href="#" id="uploadFolderBtn">📂 ' + i18n.upload_pick_folder + '</a></span></div>';
+        html += '<div class="dz-big" style="font-size:12px; color:#999; margin-top:5px;">' + i18n.upload_info + '</div>';
         html += '</div>';
         html += '<input type="file" id="uploadFiles" multiple style="display:none;">';
+        // ★ (2026-11-18 13:42, 펜닐 요청 — fix200) 폴더째 업로드 — 폴더 고르기(지원하는 브라우저에서만 단추가 보임)
+        html += '<input type="file" id="uploadFolder" webkitdirectory multiple style="display:none;">';
+        // ★ (2026-11-18 15:16, 펜닐 요청 — fix204) 끝난 뒤 결과 — 업로드 끝 · 완료·실패·건너뜀, 실패가 있으면 [실패만 보기]
+        html += '<div id="uploadDoneBox" style="display:none; text-align:center; background:#f6fbf6; color:#212529; border:1px solid #cfe8d2; border-radius:8px; padding:14px 10px; margin-bottom:12px;">'
+            + '<div id="uploadDoneTitle" style="font-size:18px; font-weight:bold;"></div><div id="uploadDoneSub" style="font-size:13px; color:#555; margin-top:4px;"></div>'
+            + '<div id="uploadDoneHint" style="font-size:12px; color:#007bff; margin-top:4px; display:none;">' + i18n.upload_close_refresh + '</div>' // fix208 하나라도 올라갔으면 '창을 닫으면 목록을 새로 불러옵니다.'
+            + '<button type="button" class="btn btn-outline-danger btn-sm mt-2" id="uploadOnlyFailBtn" style="display:none;"></button></div>';
         
         // 파일 목록 테이블
         html += '<div id="fileListContainer" style="display:none; max-height:250px; overflow-y:auto; margin-bottom:15px;">';
@@ -10998,7 +11199,7 @@ function openUploadModal() {
         
         html += '<div style="font-size:12px; color:#888;">';
         html += '<strong>' + i18n.upload_current_loc + ':</strong> <?php echo h((string)$getdir ?: '/'); ?><br>';
-        html += i18n.upload_supported;
+        html += <?php echo json_encode(function_exists('mc_upload_allowed_exts') ? implode(', ', mc_upload_allowed_exts()) : __('js_upload_supported'), JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT); ?>; // fix199 실제 허용 확장자(관리자 설정)
         html += '</div>';
         html += '<div style="font-size:11px; color:#dc3545; margin-top:8px; padding:6px 10px; background:#fff5f5; border-radius:4px; border-left:3px solid #dc3545;">';
         html += '⚠️ ' + i18n.upload_vpn_warning;
@@ -11006,7 +11207,7 @@ function openUploadModal() {
         html += '</div>';
         html += '<div class="modal-footer py-2">';
         html += '<button type="button" class="btn btn-outline-danger" id="cancelUploadBtn" onclick="cancelUpload()" style="display:none;">' + i18n.upload_cancel_btn + '</button>';
-        html += '<button type="button" class="btn btn-secondary" data-dismiss="modal">' + i18n.close + '</button>';
+        html += '<button type="button" class="btn btn-secondary" data-dismiss="modal" id="uploadCloseBtn">' + i18n.close + '</button>';
         html += '<button type="button" class="btn btn-primary" onclick="startUpload()" id="uploadBtn" disabled>' + i18n.upload_start + '</button>';
         html += '</div></div></div></div>';
         document.body.insertAdjacentHTML('beforeend', html);
@@ -11029,14 +11230,37 @@ function openUploadModal() {
             e.preventDefault(); 
             this.style.borderColor = '#ccc'; 
             this.style.background = '#fafafa';
-            addFilesToQueue(e.dataTransfer.files);
+            // fix200 폴더를 끌어다 놓으면 안의 파일(하위 폴더 포함)을 경로와 함께 읽음 — 폴더를 못 읽는 브라우저는 예전처럼 파일만
+            var its = e.dataTransfer.items, ents = [];
+            if (its && its.length && its[0].webkitGetAsEntry) {
+                for (var k = 0; k < its.length; k++) { var en = its[k].kind === 'file' ? its[k].webkitGetAsEntry() : null; if (en) ents.push(en); }
+            }
+            if (ents.some(function (en) { return en.isDirectory; })) { mcUpReadEntries(ents); }
+            else { addFilesToQueue(e.dataTransfer.files); }
         };
-        fileInput.onchange = function() { addFilesToQueue(this.files); };
+        fileInput.onchange = function() { addFilesToQueue(this.files); this.value = ''; }; // fix204 같은 파일을 다시 골라도 더해지게
+        var folderInput = document.getElementById('uploadFolder'); // fix200
+        document.getElementById('uploadFileBtn').onclick = function (e) { e.preventDefault(); e.stopPropagation(); if (!isUploading) fileInput.click(); }; // fix205 칸 안 링크(칸 누르기와 겹치지 않게)
+        document.getElementById('uploadOnlyFailBtn').onclick = function () { var t = document.getElementById('fileListTable'); t.classList.toggle('up-onlyfail'); this.textContent = t.classList.contains('up-onlyfail') ? i18n.upload_show_all : i18n.upload_only_fail; };
+        if ('webkitdirectory' in folderInput && !/iPhone|iPad|iPod/.test(navigator.userAgent)) {
+            document.getElementById('uploadFolderSep').style.display = 'inline'; // fix205
+            document.getElementById('uploadFolderBtn').onclick = function (e) { e.preventDefault(); e.stopPropagation(); if (!isUploading) folderInput.click(); };
+            folderInput.onchange = function () {
+                var list = [];
+                for (var k = 0; k < this.files.length; k++) { var f = this.files[k], rp = String(f.webkitRelativePath || ''); list.push({ file: f, rel: rp.indexOf('/') > 0 ? rp.slice(0, rp.lastIndexOf('/')) : '' }); }
+                addFilesToQueue(list);
+                this.value = '';
+            };
+        }
+        // ★ (2026-11-18 11:27, 펜닐 요청 — fix195) 끝나자마자 닫고 새로고침하면 결과 표가 사라져 실패를 확인할 수 없었음 → 결과는 창에 남기고, 닫을 때 새로고침
+        $('#uploadModal').on('hidden.bs.modal', function() { if (uploadNeedReload && !isUploading) { uploadNeedReload = false; location.reload(); } });
     }
     
     // 초기화
     uploadQueue = [];
     isUploading = false;
+    uploadNeedReload = false; // fix195
+    mcUpDoneView(false); // fix204
     document.getElementById('uploadFiles').value = '';
     document.getElementById('fileListContainer').style.display = 'none';
     document.getElementById('totalProgressArea').style.display = 'none';
@@ -11046,12 +11270,40 @@ function openUploadModal() {
     $('#uploadModal').modal({backdrop: 'static', keyboard: true});
 }
 
+// ★ (2026-11-18 13:42, 펜닐 요청 — fix200) 끌어다 놓은 폴더 읽기 — 하위 폴더까지, 파일마다 상대 폴더 경로(rel)
+function mcUpReadEntries(entries) {
+    var out = [], pending = 0;
+    function done() { if (--pending === 0) addFilesToQueue(out); }
+    function walk(en, dir) {
+        pending++;
+        if (en.isFile) {
+            en.file(function (f) { out.push({ file: f, rel: dir }); done(); }, function () { done(); });
+        } else if (en.isDirectory) {
+            var rd = en.createReader(), sub = dir ? dir + '/' + en.name : en.name;
+            (function readMore() {
+                rd.readEntries(function (arr) {
+                    if (!arr.length) { done(); return; }
+                    for (var k = 0; k < arr.length; k++) walk(arr[k], sub);
+                    readMore(); // 한 번에 100개씩만 주는 브라우저가 있음
+                }, function () { done(); });
+            })();
+        } else { done(); }
+    }
+    pending++;
+    for (var k = 0; k < entries.length; k++) walk(entries[k], '');
+    done();
+}
+
 function addFilesToQueue(files) {
     for (var i = 0; i < files.length; i++) {
+        // fix200 폴더째 업로드면 {file, rel} — 숨김·시스템 파일(.DS_Store, Thumbs.db, desktop.ini 등)은 넣지 않음
+        var _f = files[i] && files[i].file ? files[i].file : files[i], _rel = files[i] && files[i].file ? String(files[i].rel || '') : '';
+        if (files[i] && files[i].file && (/^\./.test(_f.name) || /^(thumbs\.db|desktop\.ini|ehthumbs\.db)$/i.test(_f.name) || /(^|\/)\./.test(_rel))) continue;
         uploadQueue.push({
-            file: files[i],
-            name: files[i].name,
-            size: files[i].size,
+            file: _f,
+            rel: _rel,
+            name: _f.name,
+            size: _f.size,
             status: 'pending', // pending, uploading, done, error
             progress: 0
         });
@@ -11068,22 +11320,9 @@ function removeFromQueue(idx) {
     }
 }
 
-function renderFileList() {
-    var container = document.getElementById('fileListContainer');
-    var tbody = document.getElementById('fileListBody');
-    
-    if (uploadQueue.length === 0) {
-        container.style.display = 'none';
-        return;
-    }
-    
-    container.style.display = 'block';
-    var html = '';
-    var totalSize = 0;
-    
-    for (var i = 0; i < uploadQueue.length; i++) {
-        var item = uploadQueue[i];
-        totalSize += item.size;
+// ★ (2026-11-18 14:09 fix202) 업로드 표 한 줄 — renderFileList 안에 있던 그대로 떼어 냄(모양 같음)
+function mcUpRowHtml(item, i) {
+        var html = '';
         var sizeStr = item.size < 1048576 ? (item.size/1024).toFixed(1)+' KB' : (item.size/1048576).toFixed(1)+' MB';
         
         var statusHtml = '';
@@ -11099,17 +11338,64 @@ function renderFileList() {
         } else if (item.status === 'error') {
             statusHtml = '<span style="color:#dc3545;">❌' + i18n.upload_failed + '</span>';
             rowBg = 'background:#ffebee; color:#212529;';
+        } else if (item.status === 'skipped') { // fix199 같은 이름 — 건너뜀
+            statusHtml = '<span style="color:#6c757d;">⏭' + i18n.upload_skipped + '</span>';
+            rowBg = 'background:#f1f3f5; color:#212529;';
         }
         
         var removeBtn = (item.status === 'pending' && !isUploading) ? 
             '<button onclick="removeFromQueue('+i+')" style="border:none; background:none; color:#dc3545; cursor:pointer; font-size:16px;">×</button>' : '';
         
-        html += '<tr style="border-bottom:1px solid #eee;'+rowBg+'">';
-        html += '<td style="padding:8px; word-break:break-all;">'+escapeHtml(item.name)+'</td>';
+        html += '<tr class="up-st-'+item.status+'" style="border-bottom:1px solid #eee;'+rowBg+'">'; // fix204 up-st-: 실패만 보기
+        html += '<td style="padding:8px; word-break:break-all;">'+(item.rel ? '<span style="color:#6c757d;">'+escapeHtml(item.rel)+'/</span>' : '')+escapeHtml(item.name)+(item.status === 'error' && item.error ? '<div style="color:#dc3545; font-size:12px; margin-top:2px;">'+escapeHtml(item.error)+'</div>' : '')+(item.newName ? '<div style="color:#6c757d; font-size:12px; margin-top:2px;">→ '+escapeHtml(item.newName)+'</div>' : '')+'</td>'; // fix199 바뀐 이름 // fix195 실패 이유
         html += '<td style="padding:8px; text-align:right;">'+sizeStr+'</td>';
         html += '<td style="padding:8px; text-align:center;">'+statusHtml+'</td>';
         html += '<td style="padding:8px; text-align:center;">'+removeBtn+'</td>';
         html += '</tr>';
+        return html;
+}
+// ★ (2026-11-18 15:16, 펜닐 요청 — fix204) 끝난 뒤 결과 화면 켜기/끄기 — 끌어다 놓는 칸·선택 단추 숨김, 결과 상자, 아래 단추 [더 올리기]·[목록 새로고침](하나라도 올라갔을 때)
+function mcUpDoneView(on, done, fail, skip) { // ★ (2026-11-18 16:12, 펜닐 요청 — fix208) [더 올리기]·[목록 새로고침] 없애고 [닫기] 하나 — 하나라도 올라갔으면 파란 [닫기] + 결과 상자에 '닫으면 목록을 새로 불러옵니다'(닫으면 새로고침은 fix195 그대로)
+    var m = document.getElementById('uploadModal'); if (!m) return;
+    m.classList.toggle('up-done', !!on);
+    var g = function (id) { return document.getElementById(id); };
+    g('uploadDoneBox').style.display = on ? 'block' : 'none';
+    var cb = g('uploadCloseBtn'); cb.className = 'btn ' + ((on && done > 0) ? 'btn-primary' : 'btn-secondary');
+    g('uploadBtn').style.display = on ? 'none' : 'inline-block';
+    g('fileListTable').classList.remove('up-onlyfail');
+    if (!on) { g('totalProgressArea').style.display = 'none'; g('totalProgressBar').style.width = '0%'; g('uploadPercentText').textContent = '0%'; g('currentFileName').textContent = ''; return; }
+    g('uploadDoneTitle').textContent = (fail > 0 ? '⚠️ ' : '✅ ') + i18n.upload_done_title;
+    g('uploadDoneSub').textContent = skip > 0 ? i18n.upload_result_skip.replace('%d', done).replace('%d', fail).replace('%d', skip) : i18n.upload_result.replace('%d', done).replace('%d', fail);
+    g('uploadDoneHint').style.display = done > 0 ? 'block' : 'none';
+    var fb = g('uploadOnlyFailBtn'); fb.style.display = fail > 0 ? 'inline-block' : 'none'; fb.textContent = i18n.upload_only_fail;
+    g('uploadDoneBox').style.background = fail > 0 ? '#fff8f0' : '#f6fbf6'; g('uploadDoneBox').style.borderColor = fail > 0 ? '#f3d2a8' : '#cfe8d2';
+    try { cb.focus(); } catch (e) {}
+}
+// fix202 한 줄만 다시 그림 — 파일 시작·끝마다 표 전체를 다시 그려 파일이 많으면 화면이 굳었음(작은 파일 300개 폴더째: 83초 중 65초 멈춤). 줄을 못 찾으면 예전처럼 표 전체
+function mcUpPaintRow(i) {
+    var tb = document.getElementById('fileListBody'), tr = tb ? tb.rows[i] : null;
+    if (!tr || !uploadQueue[i] || tb.rows.length !== uploadQueue.length + 1) { renderFileList(); return; }
+    var tmp = document.createElement('tbody'); tmp.innerHTML = mcUpRowHtml(uploadQueue[i], i);
+    if (tmp.firstElementChild) tb.replaceChild(tmp.firstElementChild, tr); else renderFileList();
+}
+
+function renderFileList() {
+    var container = document.getElementById('fileListContainer');
+    var tbody = document.getElementById('fileListBody');
+    
+    var _dz = document.getElementById('dropZone'); if (_dz) _dz.classList.toggle('dz-small', uploadQueue.length > 0); // fix204 담으면 끌어다 놓는 칸 한 줄로
+    if (uploadQueue.length === 0) {
+        container.style.display = 'none';
+        return;
+    }
+    
+    container.style.display = 'block';
+    var html = '';
+    var totalSize = 0;
+    
+    for (var i = 0; i < uploadQueue.length; i++) {
+        totalSize += uploadQueue[i].size;
+        html += mcUpRowHtml(uploadQueue[i], i); // fix202 줄 만들기는 아래 함수로(한 줄만 다시 그릴 때도 같은 모양)
     }
     
     // 합계
@@ -11143,6 +11429,7 @@ async function startUpload() {
     
     isUploading = true;
     document.getElementById('uploadBtn').disabled = true;
+    document.getElementById('uploadStatusText').style.color = ''; document.getElementById('uploadStatusText').style.fontWeight = ''; // fix195 결과 줄 색 되돌림
     document.getElementById('cancelUploadBtn').style.display = 'inline-block';
     document.getElementById('totalProgressArea').style.display = 'block';
     
@@ -11150,8 +11437,9 @@ async function startUpload() {
     window.addEventListener('beforeunload', preventPageLeave);
     
     var total = uploadQueue.length;
-    var completed = 0, failed = 0;
+    var completed = 0, failed = 0, skipped = 0; // fix199 skipped
     
+    renderFileList(); // fix202 시작할 때 한 번 전체(대기 줄의 × 단추 숨김 — 예전엔 첫 파일 때 전체를 그리며 숨겼음)
     for (var i = 0; i < uploadQueue.length; i++) {
         if (!isUploading) break; // 취소됨
         
@@ -11160,47 +11448,58 @@ async function startUpload() {
         
         item.status = 'uploading';
         item.progress = 0;
-        renderFileList();
+        mcUpPaintRow(i); // fix202 (예전: renderFileList)
         
         document.getElementById('uploadStatusText').textContent = i18n.upload_count_status.replace('%d', completed + 1).replace('%d', total);
         document.getElementById('currentFileName').textContent = '📁 ' + item.name;
         
         try {
-            await uploadSingleFile(item, i, total, completed);
+            var _r = await uploadSingleFile(item, i, total, completed);
+            if (_r && _r.skip) { item.status = 'skipped'; skipped++; } // fix199 같은 이름 — 건너뜀
+            else {
             item.status = 'done';
             item.progress = 100;
+            if (_r && _r.renamed && _r.file) item.newName = String(_r.file); // fix199 같은 이름 — 이름 바꿔 저장
             completed++;
+            }
         } catch (err) {
             item.status = 'error';
+            item.error = (err && err.message) ? String(err.message) : ''; // fix195 — 예전엔 콘솔에만 남아 화면에서 이유를 알 수 없었음
             failed++;
             console.error('업로드 실패:', item.name, err);
         }
         
-        renderFileList();
+        mcUpPaintRow(i); // fix202 (예전: renderFileList)
         
         // 전체 진행률 업데이트
-        var pct = Math.round((completed + failed) / total * 100);
+        var pct = Math.round((completed + failed + skipped) / total * 100);
         document.getElementById('totalProgressBar').style.width = pct + '%';
         document.getElementById('uploadPercentText').textContent = pct + '%';
     }
     
     isUploading = false;
+    renderFileList(); // fix202 끝날 때 한 번 전체 — 취소 뒤 남은 대기 줄의 × 단추가 다시 보이게(예전엔 마지막 파일 뒤 전체를 그리며 보였음)
     
     // 페이지 이탈 방지 해제
     window.removeEventListener('beforeunload', preventPageLeave);
     
     document.getElementById('cancelUploadBtn').style.display = 'none';
-    document.getElementById('uploadBtn').disabled = false;
-    document.getElementById('uploadStatusText').textContent = i18n.upload_complete;
-    
-    var msg = i18n.upload_complete;
-    if (failed > 0) msg += ' (' + failed + ' failed)';
-    alert('✅ ' + msg);
-    
+    // ★ (2026-11-18 11:27, 펜닐 요청 — fix195) 브라우저 알림('✅ 완료! (1 failed)' — 실패해도 ✅, 실패 영어 고정)·바로 닫고 새로고침 대신 창 안에 결과를 남김
+    //   결과 줄 '완료 n · 실패 n'(실패 있으면 빨강), 실패 이유는 표의 파일 이름 아래, 남은 대기(취소 뒤)가 있을 때만 [업로드 시작] 다시 누를 수 있음
+    //   하나라도 올라갔으면 창을 닫을 때(닫기·X·Esc) 목록 새로 불러옴. 업로드 중에 창을 이미 닫았으면 예전처럼 끝나자마자 새로 불러옴
+    var leftPending = uploadQueue.some(function(q) { return q.status === 'pending'; });
+    document.getElementById('uploadBtn').disabled = !leftPending;
+    var stEl = document.getElementById('uploadStatusText');
+    stEl.textContent = skipped > 0 ? i18n.upload_result_skip.replace('%d', completed).replace('%d', failed).replace('%d', skipped) : i18n.upload_result.replace('%d', completed).replace('%d', failed); // fix199 건너뜀
+    stEl.style.color = failed > 0 ? '#dc3545' : '#28a745';
+    stEl.style.fontWeight = 'bold';
+    document.getElementById('currentFileName').textContent = completed > 0 ? i18n.upload_close_refresh : '';
+    if (!leftPending) { mcUpDoneView(true, completed, failed, skipped); document.getElementById('totalProgressArea').style.display = 'none'; } // fix204 끝 화면(취소로 남은 대기가 있으면 예전처럼)
     if (completed > 0) {
-        $('#uploadModal').modal('hide');
-        location.reload();
+        uploadNeedReload = true;
+        if (!$('#uploadModal').hasClass('show')) { uploadNeedReload = false; location.reload(); }
     }
+    if ($('#uploadModal').hasClass('show')) { try { document.getElementById('uploadModal').focus(); } catch (e) {} } // fix195 [업로드 시작]이 잠기며 포커스가 창 밖으로 빠져 끝난 뒤 Esc 로 안 닫혔음
 }
 
 // 파일 하나 업로드 (청크 방식 - php.ini 제한 무시)
@@ -11221,6 +11520,7 @@ async function uploadSingleFile(item, idx, total, completedBefore) {
     initData.append('csrf_token', adminCsrfToken);
     initData.append('file_name', file.name);
     initData.append('file_size', file.size);
+    if (item.rel) initData.append('rel_dir', item.rel); // fix200 폴더째 업로드
     
     var initRes = await fetch('index.php?bidx=<?php echo $current_bidx; ?>', { method: 'POST', body: initData });
     var initJson = await initRes.json();
@@ -11228,6 +11528,7 @@ async function uploadSingleFile(item, idx, total, completedBefore) {
     if (!initJson.success) {
         throw new Error(initJson.error || i18n.upload_init_fail);
     }
+    if (initJson.skip) return { skip: true, file: initJson.file }; // fix199 같은 이름 — 건너뛰기(보내지 않음)
     
     var uploadId = initJson.upload_id;
     
@@ -11255,7 +11556,15 @@ async function uploadSingleFile(item, idx, total, completedBefore) {
                     var chunkLoaded = start + e.loaded;
                     var pct = Math.round(chunkLoaded / file.size * 100);
                     item.progress = pct;
-                    renderFileList();
+                    // ★ (2026-11-18 14:09 fix202) 진행 중엔 지금 파일 줄의 %만 바꿈 — 예전엔 진행 알림마다 표 전체를 다시 그려, 폴더째 업로드로 파일이 많으면
+                    //   화면이 굳었음(작은 파일 300개 폴더째·폰 속도 흉내: 이것만 되돌리면 80초 중 53초 멈춤). 줄을 못 찾으면 예전처럼 표 전체
+                    //   큰 표는 칸 하나만 바꿔도 배치를 다시 계산하므로 0.5초에 한 번만(안 묶으면 2000줄 표 + 40MB: 멈춤 5.9초 → 11.8초로 오히려 늘었음)
+                    var _now = Date.now();
+                    if (!item._paintAt || _now - item._paintAt >= 500 || pct >= 100) {
+                        item._paintAt = _now;
+                        var _tr = document.getElementById('fileListBody').rows[idx];
+                        if (_tr && _tr.cells[2] && uploadQueue[idx] === item) _tr.cells[2].innerHTML = '<span style="color:#007bff;">' + pct + '%</span>'; else renderFileList();
+                    }
                     
                     // 전체 진행률
                     var overallPct = Math.round((completedBefore + pct/100) / total * 100);
@@ -11530,6 +11839,25 @@ function deselectAllItems() {
     updateSelectedCount();
 }
 
+// ★ (2026-11-18 15:33, 펜닐 제보 — fix206) 사생활 모드(privacy_shield.php)에 '지금 바쁨'을 알려 줌 — 업로드 중·업로드 창에 담은 파일(결과 포함)이 있음·삭제 요청 응답 기다리는 중이면
+//   탭·앱을 바꿔도 가림막 페이지로 이동하지 않고 덮개만(이동하면 요청이 끊겨 취소처럼 됐음). 삭제는 mcBusyJson 으로 보내고 응답 뒤 다시 확인
+window.mcDelBusy = 0;
+window.mcPsBusy = function () {
+    try {
+        if (typeof isUploading !== 'undefined' && isUploading) return true;
+        if (window.mcDelBusy > 0) return true;
+        var m = document.getElementById('uploadModal');
+        return !!(m && m.classList.contains('show') && typeof uploadQueue !== 'undefined' && uploadQueue.length > 0);
+    } catch (e) { return false; }
+};
+function mcBusyJson(url, opts) {
+    window.mcDelBusy++;
+    return fetch(url, opts).then(function (r) { return r.json(); }).finally(function () {
+        window.mcDelBusy = Math.max(0, window.mcDelBusy - 1);
+        if (window.mcPsRecheck) setTimeout(window.mcPsRecheck, 0);
+    });
+}
+
 function deleteSelectedItems() {
     var total = selectedItems.files.length + selectedItems.folders.length;
     if (total === 0) {
@@ -11566,8 +11894,7 @@ function deleteSelectedItems() {
     btn.disabled = true;
     btn.textContent = i18n.deleting;
     
-    fetch('index.php?bidx=<?php echo $current_bidx; ?>', { method: 'POST', body: formData })
-    .then(function(r) { return r.json(); })
+    mcBusyJson('index.php?bidx=<?php echo $current_bidx; ?>', { method: 'POST', body: formData }) // fix206 (예전: fetch + r.json)
     .then(function(data) {
         if (data.success) {
             alert('✅ ' + data.message);
@@ -11602,8 +11929,7 @@ function deleteFile(filePath) {
     formData.append('file_path', filePath);
     formData.append('csrf_token', adminCsrfToken);
     
-    fetch('index.php?bidx=<?php echo $current_bidx; ?>', { method: 'POST', body: formData })
-    .then(function(r) { return r.json(); })
+    mcBusyJson('index.php?bidx=<?php echo $current_bidx; ?>', { method: 'POST', body: formData }) // fix206 (예전: fetch + r.json)
     .then(function(data) {
         if (data.success) {
             alert('✅ ' + data.message);
@@ -11633,8 +11959,7 @@ function deleteFolder(folderPath) {
     formData.append('folder_path', folderPath);
     formData.append('csrf_token', adminCsrfToken);
     
-    fetch('index.php?bidx=<?php echo $current_bidx; ?>', { method: 'POST', body: formData })
-    .then(function(r) { return r.json(); })
+    mcBusyJson('index.php?bidx=<?php echo $current_bidx; ?>', { method: 'POST', body: formData }) // fix206 (예전: fetch + r.json)
     .then(function(data) {
         if (data.success) {
             alert('✅ ' + data.message);

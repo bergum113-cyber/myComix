@@ -760,11 +760,12 @@ return [
     'js_upload_cancelled' => '취소됨',
     'js_upload_chunk_fail' => '청크 전송 실패',
     'js_upload_chunk_info' => '청크',
+    'js_upload_close_refresh' => '창을 닫으면 목록을 새로 불러옵니다.', // fix195
     'js_upload_complete_msg' => '완료!',
     'js_upload_count_status' => '업로드 중 (%d/%d)',
     'js_upload_current_loc' => '현재 위치',
     'js_upload_done' => '완료',
-    'js_upload_drag' => '파일을 드래그하거나 클릭하여 선택',
+    'js_upload_drag' => '파일·폴더를 드래그하거나 클릭하여 선택', // fix200 폴더도
     'js_upload_eta_done' => '거의 완료',
     'js_upload_eta_hour' => '시간',
     'js_upload_eta_min' => '분',
@@ -779,6 +780,14 @@ return [
     'js_upload_parse_error' => '응답 파싱 오류',
     'js_upload_progress' => '진행률',
     'js_upload_remaining' => '남은 시간',
+    'js_upload_result' => '완료 %d · 실패 %d', // fix195
+    'js_upload_result_skip' => '완료 %d · 실패 %d · 건너뜀 %d', // fix199
+    'js_upload_pick_files' => '파일 선택', // fix204
+    'js_upload_done_title' => '업로드가 끝났습니다', // fix204
+    'js_upload_only_fail' => '실패만 보기', // fix204
+    'js_upload_show_all' => '전체 보기', // fix204
+    'js_upload_pick_folder' => '폴더 선택', // fix200
+    'js_upload_skipped' => '건너뜀', // fix199
     'js_upload_size' => '크기',
     'js_upload_start' => '업로드 시작',
     'js_upload_status' => '상태',
@@ -1297,6 +1306,13 @@ return [
     'adm_cfg_folder_list_mobile' => '폴더 리스트 수 (모바일)',
     'adm_cfg_viewed_mark' => '최근 본 항목 강조 시간(초)', // ★ (2026-11-02 09:11)
     'adm_cfg_viewed_mark_help' => '만화·폴더를 열었다가 뒤로가기로 목록에 돌아오면 방금 본 항목이 테두리로 강조됩니다(즐겨찾기·북마크·자동저장 목록도 동일). 이 강조를 몇 초 동안 유지할지 정합니다. 0 = 계속 유지 (기본: 2초)',
+    'adm_cfg_upload_ext' => '업로드 허용 확장자', // fix199
+    'adm_cfg_upload_ext_help' => '여기 적은 확장자만 업로드할 수 있습니다(쉼표나 빈칸으로 구분). 비우고 저장하면 기본값으로 돌아갑니다. php 등 서버에서 실행될 수 있는 확장자는 적어도 항상 막습니다.', // fix199
+    'adm_cfg_upload_dup' => '같은 이름 파일이 있을 때', // fix199
+    'adm_cfg_upload_dup_rename' => '이름 바꿔 저장 — 이름 (1).zip (기본)', // fix199
+    'adm_cfg_upload_dup_skip' => '건너뛰기 — 있는 파일 그대로', // fix199
+    'adm_cfg_upload_dup_overwrite' => '덮어쓰기 — 있는 파일을 새 파일로', // fix199
+    'adm_cfg_upload_dup_help' => '업로드할 폴더에 같은 이름 파일이 이미 있을 때 어떻게 할지 정합니다. 결과는 업로드 창 표에 표시됩니다.', // fix199
     'adm_cfg_max_autosave' => '최대 이어 읽기(자동 저장)',
     'adm_cfg_max_autosave_help' => '계정별 · 북마크 \'이어 읽기\'에 최근 본 책을 몇 권까지 보여 줄지 — 넘으면 가장 오래된 것부터 빠짐. 뷰어에서 읽던 위치(아래)와는 따로 (기본 10)', // ★ (2026-11-15 19:47 fix179)
     'adm_cfg_max_vpos' => '최대 책별 이어 보기 위치(뷰어)', // ★ (2026-11-15 19:25 fix176)
@@ -3250,6 +3266,7 @@ return [
     'lib_tag' => '태그',
     'lib_terms_help' => '여러 개는 쉼표(,)로 구분. 비워서 저장하면 지워집니다.',
     'lib_unread_only' => '안 읽은 작품만',
+    'lib_ftog' => '필터', // ★ (2026-11-19 00:43 fix228) 폰: 거르기 칸 접기·펼치기 단추 — ★ (00:59 fix230) '거르기' → '필터'(펜닐 선택)
     'lib_vol_count' => '%d권',
     'lib_vol_edit_help' => '번호·표시 이름 수정, 체크 후 다른 시리즈로 이동·빼기·자동으로 되돌리기',
     'lib_vol_label_num' => '%s권',

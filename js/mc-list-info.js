@@ -9,6 +9,8 @@
  * ★ (2026-11-13 00:15, 펜닐 요청 — fix133) 모양을 '작가 [칩] [칩]'처럼 종류별 줄로(작품 상세 정보 표와 같은 말·같은 칩 색 — 작가 파랑·그룹 초록·장르 빨강·태그 회색).
  *   글자는 제목보다 작게(12px). 파일 목록은 배지 줄과 같은 곳에서 시작(제목 앞 아이콘 폭만큼 들여씀 — index.php 배지 줄과 같은 --mc-ci-w).
  *   칩은 누를 수 없는 표시(카드 전체가 링크라 그 안에 링크를 둘 수 없음). 즐겨찾기·북마크는 쪽수를 마지막 줄 끝에 흐리게
+ * ★ (2026-11-18 17:30, 펜닐 요청 — fix212) 그리드 보기에도 작가 이름 한 줄(.mc-li-ga — 제목 아래 회색, 누를 수 없음). 그래서 그리드 보기에서도 받아 옴(예전: 목록 보기일 때만).
+ *   목록 줄(.mc-li)과 그리드 줄(.mc-li-ga)을 한 번에 넣어 두고 보기에 따라 CSS 로만 보이고 숨김(보기를 바꿔도 다시 받지 않음). 서재(browse.php)는 이 스크립트를 쓰지 않음(작가 칩이 따로 있음)
  */
 (function () {
     'use strict';
@@ -34,7 +36,17 @@
             '.mc-li-p{margin-left:2px}' +
             // 파일 목록: 카드 격자의 셋째 줄(제목·배지 아래), 시작은 배지 줄과 같게
             '.mc-li-box{display:none}html.mc-list-view .grid .card>.mc-li-box{display:block;grid-column:2;grid-row:3;min-width:0;margin-top:1px}' +
-            'html.mc-list-view .grid .card:has(> .card-body > .mc-ci:first-child)>.mc-li-box{padding-left:var(--mc-ci-w,0px)}';
+            'html.mc-list-view .grid .card:has(> .card-body > .mc-ci:first-child)>.mc-li-box{padding-left:var(--mc-ci-w,0px)}' +
+            // fix212 그리드: 제목 아래 작가 이름 한 줄(넘치면 …)
+            '.mc-li-ga{display:none}' +
+            // ★ (2026-11-18 23:27, 펜닐 요청 — fix220) 그리드 작가도 서재 그리드(browse.php .sc-t-author)와 같은 파란 칩으로(예전: 회색 글자 한 줄). 폴더 위치 줄은 넣지 않음
+            //   클래스를 겹쳐 쓴 것은 파일 목록 링크 글자색 규칙(index.php — 검정 !important)보다 강하게(그 규칙 때문에 예전 회색 글자도 검정으로 나왔음)
+            '.fav-grid .mc-li-ga,.bm-grid .mc-li-ga,html:not(.mc-list-view) .grid .card .mc-li-ga{display:flex;flex-wrap:wrap;gap:3px 4px;margin-top:3px;min-width:0;text-align:left;font-weight:400;white-space:normal}' +
+            '.mc-li-ga.mc-li-ga.mc-li-ga .mc-li-gc.mc-li-gc.mc-li-gc.mc-li-gc{display:inline-block;max-width:100%;font-size:.72rem;line-height:1.4;padding:1px 6px;border-radius:4px;border:1px solid #bcd0f5;background:#eef4ff;color:#1a56c4 !important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-shadow:none}' +
+            // ★ (2026-11-19 00:01, 펜닐 요청 — fix225) 폴더 목록(파일 목록 카드) 그리드: 칩 글자 = 제목과 같은 크기(예전 .72rem 고정이라 제목보다 훨씬 작았음) · 제목처럼 가운데
+            'html:not(.mc-list-view) .grid .card .mc-li-ga.mc-li-ga.mc-li-ga{justify-content:center}' +
+            'html:not(.mc-list-view) .grid .card .mc-li-ga.mc-li-ga.mc-li-ga .mc-li-gc.mc-li-gc.mc-li-gc.mc-li-gc{font-size:.88em;line-height:1.3;padding:0 .4em}' + // ★ (2026-11-19 00:33, 펜닐 요청 — fix227) 1em·줄 높이 1.4 는 칸이 너무 큼 → 즐겨찾기·북마크처럼 제목의 약 0.88배·줄 높이 1.3·위아래 여백 0
+            'html.dark-mode .mc-li-ga.mc-li-ga.mc-li-ga .mc-li-gc.mc-li-gc.mc-li-gc.mc-li-gc,[data-theme="dark"] .mc-li-ga.mc-li-ga.mc-li-ga .mc-li-gc.mc-li-gc.mc-li-gc.mc-li-gc{background:#1a2a45;border-color:#34507f;color:#9ec1ff !important}';
         (document.head || document.documentElement).appendChild(st);
     } catch (e) {}
 
@@ -42,6 +54,8 @@
         if (el.closest('.fav-list, .bm-list')) return true;
         return document.documentElement.classList.contains('mc-list-view') && !!el.closest('.grid');
     }
+    // fix212 그리드 보기(즐겨찾기·북마크 격자, 파일 목록 격자)도 받을 대상
+    function gridMode(el) { return !!el.closest('.fav-grid, .bm-grid') || (!document.documentElement.classList.contains('mc-list-view') && !!el.closest('.grid')); }
     function span(cls, text) { var s = document.createElement('span'); s.className = cls; s.textContent = text; return s; }
     // 한 줄 = 종류 이름 + 칩들
     function row(to, label, kind, list) {
@@ -53,7 +67,12 @@
         return d;
     }
     function apply(el, inf) {
-        var card = !el.closest('.fav-list, .bm-list') && el.classList.contains('card'); // ★ fix132 파일 목록 카드 → 카드 바로 아래 상자(배지 줄 아래)
+        // fix212 그리드 줄(작가 이름) — 제목 칸(파일 목록 카드는 .card-body) 끝에 한 번
+        try {
+            var ga = Array.isArray(inf.a) ? inf.a : [], gto = el.querySelector('.fav-text, .bm-text, .card-body');
+            if (ga.length && gto && !gto.querySelector('.mc-li-ga')) { var gd = document.createElement('div'); gd.className = 'mc-li-ga'; for (var gi = 0; gi < ga.length; gi++) { var gc = span('mc-li-gc', String(ga[gi])); gc.title = String(ga[gi]); gd.appendChild(gc); } gto.appendChild(gd); } // fix220 작가마다 칩
+        } catch (e) {}
+        var card = !el.closest('.fav-list, .bm-list, .fav-grid, .bm-grid') && el.classList.contains('card'); // ★ fix132 파일 목록 카드 → 카드 바로 아래 상자(배지 줄 아래) · fix212 즐겨찾기·북마크 격자는 카드 아님
         var to = card ? null : (el.querySelector('.fav-text, .bm-text, .card-body') || el);
         if (card) {
             if (el.querySelector(':scope > .mc-li-box')) return;
@@ -77,7 +96,7 @@
         var map = {}, want = [];
         for (var i = 0; i < els.length; i++) {
             var el = els[i];
-            if (!listMode(el)) continue;
+            if (!listMode(el) && !gridMode(el)) continue; // fix212 그리드도
             var v = el.getAttribute('data-mcli') || '', k = v.indexOf('|');
             if (k < 1) continue;
             el.setAttribute('data-mcli-done', '1');

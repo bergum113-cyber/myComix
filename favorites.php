@@ -122,6 +122,51 @@ $_kind_label = ['archive' => '📦', 'epub' => '📖', 'txt' => '📝', 'folder'
     .fav-tools select { flex:1 1 auto; min-width:0; }
   }
   @media (max-width:360px) { .fav-head .fav-back-lbl { display:none; } .fav-head h1 { font-size:1.05rem; } } /* 아주 좁은 화면: 돌아가기는 ← 만(제목·개수가 한 줄로) */
+  /* ★ (2026-11-19 00:59, 펜닐 요청 — fix230) 폰(세로·가로) 머리를 서재(fix228)와 같게: 1줄 [←][서재][즐겨찾기][북마크] · 2줄 개수·정렬·보기 · 제목 숨김(탭에 있음)
+     탭 줄(mc_shelf_nav)을 머리 안으로 옮김 — PC 는 맨 아래 한 줄(order:99)이라 예전과 같은 자리·간격(줄 사이 8+4 = 12px) */
+  .fav-head > .mc-shelf-nav { order:99; flex:1 0 100%; margin:4px 0 0; }
+  .fav-head > .fav-hr { display:contents; } /* fix231 PC: 묶음 없는 것처럼(제목·도구가 예전처럼 머리의 칸) */
+  @media (max-width:576px), (orientation:landscape) and (max-height:500px) and (pointer:coarse) {
+    .fav-head { gap:6px; }
+    .fav-head > #favBack { order:1; flex:0 0 auto; width:34px; height:32px; padding:0; font-size:0; display:inline-flex; align-items:center; justify-content:center; border-radius:16px; }
+    .fav-head > #favBack::before { content:""; width:18px; height:18px; background:currentColor; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
+    /* ★ (2026-11-19 01:10, 펜닐 요청 — fix231) 자리가 남으면 한 줄: [←][탭][⭐ 개수 · 정렬 · 보기] — 좁으면(세로 폰) 개수·정렬·보기 묶음이 통째로 둘째 줄 */
+    .fav-head > .mc-shelf-nav { order:2; flex:0 1 auto; min-width:0; margin:0; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+    .fav-head > .mc-shelf-nav::-webkit-scrollbar { display:none; }
+    .fav-head .mc-shelf-nav { gap:4px; } .fav-head .mc-shelf-nav a { padding:0 10px; font-size:.8rem; gap:4px; } /* ★ (01:11 fix231) 폰: 탭을 조금 좁게(세 화면 같게) — 좁은 폰에서도 북마크 머리가 한 줄에 들어가게 */
+    .fav-head { gap:6px 4px; }
+    .fav-head > .fav-hr { display:flex; order:3; flex:1 1 260px; min-width:0; align-items:center; gap:6px; }
+    .fav-head > .fav-hr > h1 { flex:0 0 auto; font-size:0 !important; min-width:0; margin:0; }
+    .fav-head > .fav-hr > h1 > svg.fav-h1-star { display:none; } /* 제목 별만 숨김(개수 앞 ⭐ 는 아이콘으로 바뀌어도 그대로) */
+    .fav-head > .fav-hr > h1 .fav-count { font-size:.85rem; margin-left:2px; }
+    .fav-head > .fav-hr > .fav-tools { flex:1 1 0; min-width:0; flex-wrap:nowrap; }
+    .fav-head > .fav-hr > .fav-tools select { flex:1 1 auto; min-width:0; height:34px; }
+  }
+  /* ★ (2026-11-19 01:17, 펜닐 요청 — fix232) 폰 세로(576px 이하): 머리 단추를 30px 로 작게(←·탭·보기·검색·필터·정렬) — 여백 확보 · 정렬 칸은 글자 길이만큼(늘어나지 않게, 보기 단추 옆) */
+  @media (max-width:576px) {
+    .fav-head > #favBack { width:30px; height:30px; }
+    .fav-head .mc-shelf-nav a { height:30px; padding:0 8px; font-size:.78rem; }
+    .fav-head .mc-shelf-nav a svg { width:14px; height:14px; }
+    .fav-head .fav-view-btn { width:30px; height:30px; }
+  }
+  @media (max-width:576px), (orientation:landscape) and (max-height:500px) and (pointer:coarse) {
+    .fav-head > .fav-hr > .fav-tools { flex:0 0 auto; margin-left:auto; }
+    .fav-head > .fav-hr { flex:1 1 auto; } /* 묶음 폭 = 실제 내용 폭(자리가 되면 탭 옆 한 줄) */
+    .fav-head > .fav-hr > .fav-tools select { flex:0 0 auto; width:auto; }
+  }
+  @media (max-width:576px) { .fav-head > .fav-hr > .fav-tools select { height:30px; } }
+  /* ★ (2026-11-19 01:32, 펜닐 요청 — fix233) 폰 세로: 둘째 줄이 [⭐ 개수 ……… 정렬·보기]로 양 끝에 떨어져 어색 →
+     1줄 [←][탭] … [보기 단추](북마크와 같은 자리) · 2줄 [⭐ 개수][정렬] 왼쪽에 붙여서. 묶음(.fav-hr·.fav-tools)을 풀어(display:contents) 칸마다 순서만 바꿈
+     520px 넘는 세로 화면은 fix232 처럼 한 줄에 다 들어가서 그대로 */
+  @media (max-width:520px) {
+    .fav-head > .fav-hr, .fav-head > .fav-hr > .fav-tools { display:contents; }
+    .fav-head .fav-view-btn { order:3; }
+    .fav-head .fav-view-btn[data-view="grid"] { margin-left:auto; }
+    .fav-head { row-gap:0; }
+    .fav-head::before { content:""; order:4; flex:1 0 100%; height:0; } /* 여기서 줄 바꿈 — 줄 간격은 0 으로 두고 둘째 줄 칸에 위 여백 6px(빈 줄 때문에 간격이 두 번 들어가지 않게) */
+    .fav-head > .fav-hr > h1 { order:5; margin-top:6px; }
+    .fav-head > .fav-hr > .fav-tools select { order:6; margin-top:6px; }
+  }
   /* 보기 전환 버튼 — 목록 화면(index.php)과 같은 모양: 현재 보기만 회색 배경, 클릭 후 포커스 그림자 없음 */
   .fav-view-btn { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; padding:0;
                   border:1px solid #dcdcdc; border-radius:7px; background:#fff; color:#555; cursor:pointer; line-height:1;
@@ -174,6 +219,16 @@ $_kind_label = ['archive' => '📦', 'epub' => '📖', 'txt' => '📝', 'folder'
                                background:linear-gradient(#cf9459 0, #ad6e3c 35%, #7a4722 100%);
                                box-shadow:0 7px 9px -3px rgba(0,0,0,.6), inset 0 1px 0 rgba(255,255,255,.35); }
   @media (max-width:576px) { .fav-list .fav-item::after { left:-10px; right:-10px; } }
+  /* ★ (2026-11-18 23:05, 펜닐 요청 — fix218) 목록 보기 주황(마우스·본 항목)이 칸 전체(아래 선반까지)를 2px 바깥으로 둘러 너무 컸음 → 선반 위 책 자리만 두름(js/mc-seen.js 의 outline 끔). 그리드는 그대로 */
+  /* ★ (2026-11-18 23:10, 펜닐 요청 — fix219) 목록: 위 4px→6px·양옆 0→2px(표지·✕ 와 2px 틈) · 그리드: 바깥 2px→3px 띄움(✕ 단추에 붙어 보였음) */
+  .fav-grid .fav-item.mc-viewed { outline-offset:3px !important; }
+  @media (hover:hover) and (pointer:fine) { .fav-grid .fav-item:hover { outline-offset:3px; } }
+  .fav-list .fav-item.mc-viewed { outline:none !important; }
+  .fav-list .fav-item.mc-viewed::before { content:''; position:absolute; left:2px; right:2px; top:6px; bottom:18px; border:2px solid #f39c12; border-radius:4px; pointer-events:none; z-index:2; }
+  @media (hover:hover) and (pointer:fine) {
+    .fav-list .fav-item:hover { outline:none; }
+    .fav-list .fav-item:hover:not(.mc-viewed)::before { content:''; position:absolute; left:2px; right:2px; top:6px; bottom:18px; border:2px solid rgba(243,156,18,.45); border-radius:4px; pointer-events:none; z-index:2; }
+  }
   .fav-list .fav-link { display:flex; align-items:flex-start; gap:12px; flex:1 1 auto; min-width:0; color:inherit; text-decoration:none; } /* ★ 제목은 썸네일 맨 위 기준 */
   .fav-list .fav-cover { position:relative; z-index:1; flex:0 0 72px; width:72px; height:96px; background:#3b2412; border-radius:2px 3px 3px 2px; overflow:hidden;
                          box-shadow:4px 0 6px -2px rgba(0,0,0,.55), 0 2px 3px rgba(0,0,0,.4); }
@@ -233,6 +288,7 @@ if ($_mc_thumb_css !== ''): ?>
 <div class="fav-wrap">
   <div class="fav-head">
     <a id="favBack" class="btn btn-sm btn-outline-secondary" href="index.php<?php echo $bidx_query; ?>" title="<?php echo __h('fav_shelf_back'); ?>" aria-label="<?php echo __h('fav_shelf_back'); ?>">← <span class="fav-back-lbl"><?php echo __h('fav_shelf_back'); ?></span></a>
+    <div class="fav-hr"><?php // ★ (2026-11-19 01:10 fix231) 제목(개수)+정렬·보기 묶음 — PC 는 display:contents 라 예전과 같고, 폰은 한 덩어리로 줄바꿈 ?>
     <h1 class="fav-h1"><?php // ★ (2026-10-31) '즐겨찾기' — 노란 선 별(예전 📚 책장 — '서재'와 헷갈림) ?><svg class="mc-ico fav-h1-star" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/></svg> <?php echo __h('fav_shelf_title'); ?><span class="fav-count">⭐ <span id="favShelfCount"><?php echo count($items); ?></span>/<?php echo $_fav_max; ?></span></h1>
     <div class="fav-tools">
       <select id="favSort" aria-label="<?php echo __h('fav_shelf_sort'); ?>">
@@ -243,8 +299,9 @@ if ($_mc_thumb_css !== ''): ?>
       <button type="button" class="fav-view-btn" data-view="grid" title="<?php echo __h('fav_shelf_view_grid'); ?>" aria-label="<?php echo __h('fav_shelf_view_grid'); ?>"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zM2.5 2a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zm6.5.5A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zM1 10.5A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zm6.5.5A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3z"/></svg></button>
       <button type="button" class="fav-view-btn" data-view="list" title="<?php echo __h('fav_shelf_view_list'); ?>" aria-label="<?php echo __h('fav_shelf_view_list'); ?>"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5 11.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm-3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/></svg></button>
     </div>
+    </div>
+<?php echo mc_shelf_nav('fav', $bidx_query); // ★ (2026-11-03 01:31) 서재·즐겨찾기·북마크 이동 — ★ (2026-11-19 fix230) 머리(.fav-head) 안으로(폰: ← 와 한 줄) ?>
   </div>
-<?php echo mc_shelf_nav('fav', $bidx_query); // ★ (2026-11-03 01:31) 서재·즐겨찾기·북마크 이동 ?>
 
 <?php if (empty($items)): ?>
   <div class="fav-empty"><?php echo __h('fav_shelf_empty'); ?></div>

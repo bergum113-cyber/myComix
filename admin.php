@@ -1189,6 +1189,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     // ★ (2026-11-04 11:18) 파일 카드 N 기준 — file: 파일 자체 날짜(받은 날짜, 기본 — 예전 그대로) / added: 서재에 들어온 시각(올린 시각, 미디어 서버 일반 기준)
     $settings['new_badge_basis'] = (($_POST['new_badge_basis'] ?? '') === 'added') ? 'added' : ((($_POST['new_badge_basis'] ?? '') === 'file') ? 'file' : (string)($settings['new_badge_basis'] ?? 'file'));
     $settings['viewed_mark_seconds'] = (string)max(0, min(60, (float)($_POST['viewed_mark_seconds'] ?? 2))); // 복귀 표시 유지 시간(초), 0=자동 해제 안 함
+    // ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 업로드 허용 확장자(쉼표·빈칸 구분, 비우면 기본값, 위험한 확장자는 저장 안 함)·같은 이름 처리 — 입력칸이 없는 요청이면 기존 값 유지
+    if (isset($_POST['upload_allowed_ext']) && is_string($_POST['upload_allowed_ext']) && function_exists('mc_upload_parse_exts')) {
+        $_mc_ue = mc_upload_parse_exts($_POST['upload_allowed_ext']);
+        $settings['upload_allowed_ext'] = implode(', ', $_mc_ue ?: mc_upload_default_exts());
+    }
+    if (isset($_POST['upload_dup_mode'])) $settings['upload_dup_mode'] = in_array($_POST['upload_dup_mode'], ['rename', 'skip', 'overwrite'], true) ? $_POST['upload_dup_mode'] : 'rename';
     $settings['use_cover'] = ($_POST['use_cover'] ?? 'n') === 'y' ? 'y' : 'n';
     $settings['use_listcover'] = ($_POST['use_listcover'] ?? 'n') === 'y' ? 'y' : 'n';
     
@@ -3531,6 +3537,9 @@ if (is_array($_bgs) && !empty($_bgs['last_end'])) {
 <?php $_nbb = (string)get_app_settings('new_badge_basis', 'file'); // ★ (2026-11-04 11:18) 파일 카드 N 기준 ?>
 <select name="new_badge_basis" class="form-control form-control-sm mt-1" style="max-width:100%;"><option value="file"<?php echo $_nbb !== 'added' ? ' selected' : ''; ?>><?php echo __h('adm_cfg_new_basis_file'); ?></option><option value="added"<?php echo $_nbb === 'added' ? ' selected' : ''; ?>><?php echo __h('adm_cfg_new_basis_added'); ?></option></select><small class="text-muted"><?php echo __h('adm_cfg_new_basis_help'); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_viewed_mark"); /* ★ (2026-11-02 09:11) 언어 키로 */ ?></td><td class=""><input type="number" name="viewed_mark_seconds" class="form-control" value="<?php echo h($viewed_mark_seconds); ?>" min="0" max="60" step="0.5" required><small class="text-muted"><?php echo __h("adm_cfg_viewed_mark_help"); ?></small></td></tr>
+<?php /* ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 업로드 허용 확장자·같은 이름 처리 */ $_mc_uext = function_exists('mc_upload_allowed_exts') ? implode(', ', mc_upload_allowed_exts()) : ''; $_mc_udup = function_exists('mc_upload_dup_mode') ? mc_upload_dup_mode() : 'rename'; ?>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_upload_ext"); ?></td><td class=""><textarea name="upload_allowed_ext" class="form-control" rows="3" spellcheck="false" style="width:100%;"><?php echo h($_mc_uext); ?></textarea><small class="text-muted"><?php echo __h("adm_cfg_upload_ext_help"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_upload_dup"); ?></td><td class=""><select name="upload_dup_mode" class="form-control" style="width:100%;"><?php foreach (['rename', 'skip', 'overwrite'] as $_m) echo '<option value="' . $_m . '"' . ($_mc_udup === $_m ? ' selected' : '') . '>' . __h('adm_cfg_upload_dup_' . $_m) . '</option>'; ?></select><small class="text-muted"><?php echo __h("adm_cfg_upload_dup_help"); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_folder_cover"); ?></td><td class="">
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_cover" value="y" <?php if($use_cover=="y")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_enable"); ?></label></div>
 <div class="form-check form-check-inline"><input class="form-check-input" type="radio" name="use_cover" value="n" <?php if($use_cover=="n")echo"checked";?>><label class="form-check-label"><?php echo __("adm_label_disable"); ?></label></div>

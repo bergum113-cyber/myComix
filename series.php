@@ -118,6 +118,7 @@ if ($prog_only) {
 }
 $first = $vols[0] ?? null;
 $sr_pickable = $series && count($all_vols) > 1; // ★ (2026-11-12 23:14 fix132) 권(사본 포함)이 둘 이상이면 권을 눌렀을 때 위 표지·단추가 그 권으로(한 번 더 누르면 열림)
+// ★ (2026-11-18 18:03, 펜닐 요청 — fix215) fix211(고른 권 끔) 되돌림 — 위 표지·폴더 열기가 첫 권만 보여 권을 고를 수 있어야 함. 대신 고를 때 화면이 위로 튀지 않고 고른 권 표지에 '▶ 열기' 표시(아래 스크립트)
 $cover = $first ? mc_lib_thumb_url((int)$first['bidx'], $first['path']) : '';
 // ★ (2026-11-12 21:22, 펜닐 요청 — 시안 10 · fix131) '같은 작가의 다른 작품'(작가 → 없으면 그룹, 볼 수 있는 작품만 12개)
 //   ★ (2026-11-12 23:12 fix132) 정보 표의 '파일' 줄(쪽수·용량)은 뺌 — 펜닐 요청
@@ -141,6 +142,30 @@ if ($db && $series) {
         }
     }
 }
+// ★ (2026-11-18 23:31, 펜닐 요청 — fix222) 즐겨찾기 ⭐(보기만) — 권: 그 파일이 즐겨찾기면 · 같은 작가 다른 작품: 그 작품의 책이 하나라도 즐겨찾기면(browse.php fix213 과 같은 판정)
+$sr_fav = []; $sr_fav_sids = [];
+try {
+    $__fv = (function_exists('get_favorites_file') && is_file(get_favorites_file())) ? (load_json_with_lock(get_favorites_file()) ?: []) : [];
+    $__fb = [];
+    foreach ((is_array($__fv) ? $__fv : []) as $__k => $__v) {
+        [$__b, $__p] = mc_rec_split($__k, $__v);
+        if (!is_string($__p) || $__p === '') continue;
+        $__np = '/' . ltrim(mc_lib_nfc(str_replace('\\', '/', $__p)), '/');
+        $sr_fav[(int)$__b . '|' . $__np] = true; $__fb[(int)$__b][] = $__np;
+    }
+    $__ids = array_map(function ($x) { return (int)$x['id']; }, $same);
+    if ($db && $__ids && $__fb) {
+        foreach ($__fb as $__b => $__ps) {
+            foreach (array_chunk(array_values(array_unique($__ps)), 400) as $__ch) {
+                $__st = $db->prepare('SELECT DISTINCT series_id FROM volumes WHERE bidx = ? AND missing = 0 AND series_id IN (' . implode(',', array_fill(0, count($__ids), '?')) . ') AND path IN (' . implode(',', array_fill(0, count($__ch), '?')) . ')');
+                $__st->execute(array_merge([(int)$__b], $__ids, $__ch));
+                foreach ($__st->fetchAll(PDO::FETCH_COLUMN) as $__x) $sr_fav_sids[(int)$__x] = true;
+            }
+        }
+    }
+} catch (Throwable $__e) { $sr_fav = []; $sr_fav_sids = []; }
+$sr_favm = '<span class="vol-favm" title="' . __h('fav_shelf_title') . '" aria-label="' . __h('fav_shelf_title') . '">⭐</span>';
+$sr_favr = str_replace('class="vol-favm"', 'class="vol-favm vol-favr"', $sr_favm); // fix226 권 표지용(오른쪽 위)
 $status_label = ['completed' => __('lib_status_completed'), 'ongoing' => __('lib_status_ongoing'), 'hiatus' => __('lib_status_hiatus')];
 $csrf_token = generate_csrf_token();
 if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((microtime(true) - $_lib_t0) * 1000, 1)); // ★ (2026-10-29) 처리 시간(개발자 도구 → 네트워크 → 타이밍)
@@ -190,6 +215,12 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   @media (max-width:576px) { .vols-grid { grid-template-columns:repeat(3, 1fr); gap:12px 8px; } }
   .vol { position:relative; color:inherit; text-decoration:none !important; display:block; }
   .vols-grid .vol-cover { position:relative; width:100%; aspect-ratio:3/4; border-radius:3px; overflow:hidden; background:#ddd; box-shadow:0 4px 8px -3px rgba(0,0,0,.4); }
+  /* ★ (2026-11-18 08:51, 펜닐 요청 — fix194) 권·같은 작가 다른 작품 칸 테두리: 주황 테두리(js/mc-seen.js — 권 바깥 3px·다른 작품 칸 안쪽, 모서리 5px)와 같은 자리에 평소엔 얇은 연회색 1px. 고르면 주황 2px 이 위에 덮음 */
+  .vols-grid .vol::before, .sr-same-it::before { content:""; position:absolute; inset:-3px; border:1px solid rgba(128,128,128,.3); border-radius:5px; pointer-events:none; z-index:2; }
+  /* ★ (2026-11-18 22:59, 펜닐 요청 — fix217) 같은 작가 다른 작품: 회색 선이 표지에 붙어 있던 것(inset:0) → 권 그리드처럼 3px 띄움. 마우스·본 항목 주황도 같은 자리(js/mc-seen.js 의 inset:0 덮음) */
+  .sr-same .sr-same-row .sr-same-it.mc-viewed::after { inset:-3px; }
+  @media (hover:hover) and (pointer:fine) { .sr-same .sr-same-row .sr-same-it:hover::after { inset:-3px; } }
+  .vols-grid .vol, .sr-same-it { position:relative; } /* ★ (2026-11-18 12:41 fix197) 선 기준 — 예전엔 js/mc-seen.js 가 끝에서 넣어 줘 그 전·스크립트 실패 때 칸이 아닌 곳 기준(스크립트 막고 재현: 12칸) */
   .vol-cover img { width:100%; height:100%; object-fit:cover; display:block; }
   .vols-grid .vol-name { font-size:.85rem; margin-top:5px; line-height:1.3; word-break:keep-all; overflow-wrap:anywhere; } /* ★ 제목 전체 표시(자르지 않음), 낱말 중간에서 끊지 않음 */
   .vols-grid .vol-file { display:none; }
@@ -200,7 +231,7 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   .vol-cover { container-type:inline-size; }
   .vol-chips { display:none; }
   .vols-list .vol-chips:not(:empty) { display:flex; flex-wrap:wrap; gap:4px; margin-top:5px; }
-  .vols-list .vol-cover > .vol-fin, .vols-list .vol-cover > .vol-dupn { display:none; }
+  .vols-list .vol-cover > .vol-fin, .vols-list .vol-cover .vol-dupn { display:none; } /* fix225 ×N 은 .vol-tl 안 */
   .vol-cf, .vol-cd { font-size:.75rem; line-height:1.2; font-weight:600; border-radius:999px; padding:2px 8px; }
   .vol-cf { background:#28a745; color:#fff; }
   .vol-cd { background:#6c757d; color:#fff; }
@@ -209,7 +240,9 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   .vol-cover > .vol-fin { width:auto; height:1.6em; min-width:0; padding:0 .3em; border-radius:3px; background:rgba(0,0,0,.62); color:#8be3a5 !important; /* 높이 = 옆 표시와 같게(글자 크기 × 줄 높이) */
     font-size:.72rem; font-size:clamp(10px, 8cqw, 14px); line-height:1.6; font-weight:700; display:inline-flex; align-items:center; justify-content:center; }
   .vol-cover > .vol-fin svg { width:1.1em !important; height:1.1em !important; vertical-align:0 !important; color:#8be3a5 !important; stroke:currentColor !important; stroke-width:3 !important; }
-  .vol-cover > .vol-dupn, .vol-cover > .vol-copytag { font-size:clamp(10px, 8cqw, 14px); line-height:1.6; top:clamp(2px, 3cqw, 5px); left:clamp(2px, 3cqw, 5px); }
+  .vol-cover .vol-dupn, .vol-cover .vol-copytag { font-size:clamp(10px, 8cqw, 14px); line-height:1.6; top:clamp(2px, 3cqw, 5px); left:clamp(2px, 3cqw, 5px); } /* fix225 '>' 뺌 — .vol-tl 안 */
+  .vol-tl { position:absolute; top:clamp(2px, 3cqw, 5px); left:clamp(2px, 3cqw, 5px); z-index:2; display:flex; align-items:center; gap:3px; pointer-events:none; }
+  .vol-tl > .vol-dupn, .vol-tl > .vol-copytag, .vol-tl > .vol-favm { position:static; }
   /* 권 목록 — 목록 */
   .vols-list .vol { display:flex; align-items:flex-start; gap:10px; padding:8px 4px; border-bottom:1px solid #e2ddd5; }
   .vols-list .vol-cover { position:relative; flex:0 0 60px; width:60px; height:80px; border-radius:3px; overflow:hidden; background:#ddd; }
@@ -222,6 +255,13 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   #vols.show-dups .vol-copy { display:block !important; }
   #vols.vols-list.show-dups .vol-copy { display:flex !important; }
   .vol-copy .vol-cover { opacity:.75; }
+  /* ★ (2026-11-18 23:31, 펜닐 요청 — fix222) 즐겨찾기 ⭐ — 표지 왼쪽 위 작게(서재 카드와 같은 모양) · ×N·사본 표시가 있으면 그 아래 */
+  .vol-favm { position:absolute; top:4px; left:4px; z-index:2; pointer-events:none; background:rgba(0,0,0,.62); border-radius:3px; padding:0 2px; font-size:10px; line-height:15px; }
+  .vols-list .vol-tl { top:2px; left:2px; }
+  /* ★ (2026-11-19 00:09, 펜닐 요청 — fix226) 권 표지 ⭐ 오른쪽 위 · 다 읽음 ✓(오른쪽 위)가 있으면 그 왼쪽(✓ 너비 = 글자 크기 × 1.7) */
+  .vol-cover > .vol-favr { left:auto; top:clamp(2px, 3cqw, 5px); right:clamp(2px, 3cqw, 5px); }
+  .vols-grid .vol-cover:has(> .vol-fin) > .vol-favr { right:calc(clamp(2px, 3cqw, 5px) + clamp(17px, 15.3cqw, 28.9px) + 3px); }
+  .vols-list .vol-cover > .vol-favr { top:2px; right:2px; }
   .vol-dupn { position:absolute; top:4px; left:4px; background:rgba(0,0,0,.6); color:#fff; border-radius:9px; padding:0 6px; font-size:11px; line-height:18px; }
   .vol-copytag { position:absolute; top:4px; left:4px; background:#6c757d; color:#fff; border-radius:3px; padding:0 5px; font-size:11px; line-height:17px; }
   .vol-duptoggle { font-size:.85rem; color:#666; white-space:nowrap; cursor:pointer; }
@@ -256,17 +296,17 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
     .sr-info { width:100%; }
     .sr-info h1 { font-size:1.2rem; text-align:center; }
     .sr-meta { text-align:center; }
-    .sr-same-row { display:flex; overflow-x:auto; gap:10px; padding-bottom:6px; -webkit-overflow-scrolling:touch; }
+    .sr-same-row { display:flex; overflow-x:auto; gap:10px; padding:3px 3px 9px; margin:-3px -3px 0; -webkit-overflow-scrolling:touch; } /* fix217: 가로 줄은 바깥이 잘려 3px 띄운 선이 보이게 안쪽 여유 3px(같은 만큼 바깥 여백을 빼 배치 그대로) */
     .sr-same-it { flex:0 0 96px; }
   }
   /* ★ (2026-11-12 23:13 fix132) 고른 권 — 위 표지·단추가 그 권으로, 목록에서는 테두리 */
   .sr-pick { font-size:.85rem; color:#555; margin:-2px 0 6px; overflow-wrap:anywhere; }
   .sr-pick-l { color:#888; } .sr-pick-hint { color:#999; font-size:.8rem; }
-  .vol.is-pick .vol-cover { outline:3px solid #198754; outline-offset:2px; }
-  .vols-list .vol.is-pick { background:rgba(25,135,84,.08); }
+  /* ★ (2026-11-18 22:34, 펜닐 요청 — fix216) 고른 권: 초록 표지 테두리·초록 바탕·'▶ 열기' 없앰 → 카드 둘레 주황 선(예전 초록과 같은 3px). 본 항목 주황(::after, js/mc-seen.js)과 겹치지 않게 ::before */
+  .vol.is-pick::before { content:""; position:absolute; inset:-3px; border:2px solid #f39c12; border-radius:5px; pointer-events:none; z-index:4; }
+  .vols-list .vol.is-pick::before { inset:-1px; border-radius:8px; } /* ★ (2026-11-18 22:59, 펜닐 요청 — fix217) 3px → 2px(본 항목 주황과 같은 두께) · 목록은 칸의 회색 테두리 바로 위에 */
   @media (max-width:576px) { .sr-pick { text-align:center; } }
   .dark-mode .sr-pick, [data-theme="dark"] .sr-pick { color:#ccc; }
-  .dark-mode .vols-list .vol.is-pick, [data-theme="dark"] .vols-list .vol.is-pick { background:rgba(25,135,84,.18); }
   /* 다크모드 */
   .dark-mode body, [data-theme="dark"] body, body.dark-mode { background:#121212 !important; }
   .dark-mode .sr-head, [data-theme="dark"] .sr-head { background:#1e1e1e; box-shadow:none; }
@@ -277,6 +317,14 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   .dark-mode .chip-genre, [data-theme="dark"] .chip-genre { background:#3c1f1c; border-color:#6e3a33; color:#ffb4a8 !important; }
   .dark-mode .chip-tag, [data-theme="dark"] .chip-tag { background:#26292d; border-color:#454a50; color:#ddd !important; }
   .dark-mode .vols-list .vol, [data-theme="dark"] .vols-list .vol { border-color:#333; }
+  /* ★ (2026-11-18 12:16, 펜닐 요청 — fix196) 권 목록 보기 칸 테두리 — 북마크 목록 보기(.bm-list .bm-item)와 같은 카드(흰 바탕·1px #e6e8eb·모서리 8px·칸 사이 8px). 줄 구분선 대신
+     고른 권(.is-pick 주황 2px 테두리, fix216·217) · 주황 테두리(js/mc-seen.js)는 북마크 목록처럼 카드 바깥 2px 띄운 2px 선으로 맞춤 */
+  .vols-list { display:flex; flex-direction:column; gap:8px; }
+  .vols-list .vol { background:#fff; border:1px solid #e6e8eb; border-radius:8px; padding:8px; }
+  .dark-mode .vols-list .vol, [data-theme="dark"] .vols-list .vol { background:#1e1e1e; }
+  /* ★ (2026-11-18 22:59, 펜닐 요청 — fix217) 목록 보기 주황(본 항목·마우스)은 칸 바깥 2px 띄우지 않고 회색 테두리 바로 위에(예전 inset:-4px) */
+  .vols-list .vol.mc-viewed::after { inset:-1px; border-radius:8px; }
+  @media (hover:hover) and (pointer:fine) { .vols-list .vol:hover::after { inset:-1px; border-radius:8px; } }
   .dark-mode .lib-view-btn, [data-theme="dark"] .lib-view-btn { background:#1e1e1e; border-color:#444; color:#bbb; }
   .dark-mode .lib-view-btn.active, [data-theme="dark"] .lib-view-btn.active { background:#3a3a3a; color:#eee; }
   #scrollTopBtn { position:fixed; bottom:90px; right:20px; z-index:9999; font-size:18px; background-color:rgba(0,0,0,.3); color:#fff; border:none; border-radius:50%; width:40px; height:40px; padding:0; cursor:pointer; outline:none; display:flex; align-items:center; justify-content:center; }
@@ -370,7 +418,8 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
       <div class="vol-cover">
         <img src="<?php echo h(mc_lib_thumb_url((int)$v['bidx'], $v['path'])); ?>" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
         <?php if ($v['_fin']): ?><span class="vol-fin" title="<?php echo __h('lib_finished'); ?>">✓</span><?php endif; ?>
-        <?php if ($ncopy > 1): ?><span class="vol-dupn" title="<?php echo __h('lib_dup_badge', $ncopy); ?>">×<?php echo (int)$ncopy; ?></span><?php endif; ?>
+        <?php if ($ncopy > 1): /* ★ (2026-11-19 00:01 fix225) 왼쪽 위 묶음 */ ?><span class="vol-tl"><span class="vol-dupn" title="<?php echo __h('lib_dup_badge', $ncopy); ?>">×<?php echo (int)$ncopy; ?></span></span><?php endif; ?>
+        <?php if (!empty($sr_fav[(int)$v['bidx'] . '|' . $v['path']])) echo $sr_favr; /* ★ (2026-11-19 00:09, 펜닐 요청 — fix226) ⭐ 는 오른쪽 위(×N·사본은 왼쪽 위 — 서재 카드·북마크처럼 양쪽으로) */ ?>
         <?php if ($v['_pct'] > 0 && !$v['_fin']): ?><div class="vol-prog"><span style="width:<?php echo (int)$v['_pct']; ?>%"></span></div><?php endif; ?>
       </div>
       <div class="vol-text">
@@ -383,7 +432,8 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
     <a class="vol vol-copy" data-i="<?php echo (int)$i; ?>" data-j="<?php echo (int)$j + 1; ?>" href="<?php echo h(mc_lib_view_url((int)$c['bidx'], $c['path'])); ?>" title="<?php echo h($c['filename']); ?>" data-dir="index.php?dir=<?php echo encode_url($c['folder']); ?>&amp;bidx=<?php echo (int)$c['bidx']; ?>">
       <div class="vol-cover">
         <img src="<?php echo h(mc_lib_thumb_url((int)$c['bidx'], $c['path'])); ?>" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'">
-        <span class="vol-copytag"><?php echo __h('lib_dup_copy'); ?></span>
+        <span class="vol-tl"><span class="vol-copytag"><?php echo __h('lib_dup_copy'); ?></span></span>
+        <?php if (!empty($sr_fav[(int)$c['bidx'] . '|' . $c['path']])) echo $sr_favr; /* fix226 오른쪽 위 */ ?>
       </div>
       <div class="vol-text">
         <div class="vol-name"><?php echo h($vol_name($c)); ?></div>
@@ -399,7 +449,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
     <div class="sr-same-row">
     <?php foreach ($same as $s): ?>
       <a class="sr-same-it" href="series.php?sid=<?php echo (int)$s['id']; ?>&amp;bidx=<?php echo (int)$s['bidx']; ?>" title="<?php echo h($s['name']); ?>">
-        <div class="vol-cover"><img src="<?php echo h(mc_lib_thumb_url((int)$s['bidx'], $s['path'])); ?>" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'"></div>
+        <div class="vol-cover"><img src="<?php echo h(mc_lib_thumb_url((int)$s['bidx'], $s['path'])); ?>" alt="" loading="lazy" decoding="async" onerror="this.style.visibility='hidden'"><?php if (!empty($sr_fav_sids[(int)$s['id']])) echo $sr_favm; /* fix222 */ ?></div>
         <div class="sr-same-nm"><?php echo h($s['name']); ?></div>
       </a>
     <?php endforeach; ?>
@@ -522,6 +572,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
   function sel(a, scroll) {
     if (cur) cur.classList.remove('is-pick');
     cur = a; a.classList.add('is-pick');
+    // ★ (2026-11-18 22:34, 펜닐 요청 — fix216) fix215의 고른 권 표지 위 '▶ 열기' 없앰(주황 테두리만). 고른 권을 한 번 더 누르면 열리는 것은 그대로
     var im = a.querySelector('.vol-cover > img');
     if (cov && im) { cov.style.visibility = ''; cov.setAttribute('src', im.getAttribute('src')); }
     if (fold && a.getAttribute('data-dir')) fold.setAttribute('href', a.getAttribute('data-dir'));
@@ -534,7 +585,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
     if (!a || !box.contains(a)) return;
     if (ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey || ev.button !== 0) return;
     if (a === cur) return; // 고른 권을 한 번 더 → 링크대로 열림
-    ev.preventDefault(); sel(a, true);
+    ev.preventDefault(); sel(a, false); // ★ (2026-11-18 18:03 fix215) 고를 때 위로 튀지 않음(예전: sel(a, true) — 위 상세가 화면 밖이면 그쪽으로 굴렀음)
   });
   window.mcSrPickSync = sync;
   try { var k = (sessionStorage.getItem(KEY) || '').split(':'); if (k.length === 2) { var a = box.querySelector('.vol[data-i="' + (parseInt(k[0], 10) || 0) + '"][data-j="' + (parseInt(k[1], 10) || 0) + '"]'); if (a) sel(a, false); } } catch (e) {}
@@ -548,6 +599,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
 <?php if (function_exists('mc_back_origin_list_js')) echo mc_back_origin_list_js(); /* ★ (2026-11-05) 뷰어 뒤로가기가 이 화면(주소·스크롤 위치)으로 돌아오게 — function.php */ ?>
 <?php /* ★ (2026-11-12 11:16, 펜닐 요청) 표지를 목록 화면과 같게 — 잘리지 않게 + 흐린 배경(js/mc-thumb-fit.js) */ ?>
 <script src="js/mc-thumb-fit.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-thumb-fit.js'); ?>"></script>
+<script src="js/mc-hdots.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-hdots.js'); /* ★ (2026-11-18 08:16 fix192) 같은 작가의 다른 작품 가로 줄(휴대폰) — 스크롤 바 대신 아래 점 */ ?>" data-sel=".sr-same-row"></script>
 <script src="js/mc-seen.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-seen.js'); /* ★ (2026-11-14 18:48 fix161) 서재·즐겨찾기·북마크처럼 권·다른 작품에도 hover·본 항목 회색·돌아온 항목 주황 테두리 */ ?>" data-hold="<?php echo function_exists('get_app_settings') ? (float)max(0, (float)get_app_settings('viewed_mark_seconds', 2)) : 2; ?>"></script>
 </body>
 </html>

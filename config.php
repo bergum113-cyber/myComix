@@ -38,7 +38,7 @@ if (PHP_SAPI !== 'cli' && session_status() === PHP_SESSION_NONE && !headers_sent
 // ============================================================
 // 앱 버전
 // ============================================================
-define('MYCOMIX_VERSION', 'v2.5.8'); // ★ (2026-11-16 15:59) 2.5.7 → 2.5.8(펜닐 요청) — ★ (2026-11-16 11:49) 2.5.6 → 2.5.7(펜닐 요청) — ★ (2026-11-15 19:36) 2.5.5 → 2.5.6(펜닐 요청) — ★ (2026-11-15 01:21) 2.5.4 → 2.5.5(펜닐 요청) — ★ (2026-11-12 14:58) 2.5.3 → 2.5.4(펜닐 요청) — ★ (2026-11-12 00:51) 2.5.2 → 2.5.3(펜닐 요청) — ★ (2026-11-11 09:28) 2.5.1 → 2.5.2(펜닐 요청) — ★ (2026-11-10 11:08) 2.5.0 → 2.5.1(펜닐 요청) — ★ (2026-11-04 15:23) 2.4.3 → 2.5.0(펜닐 요청)
+define('MYCOMIX_VERSION', 'v2.5.9'); // ★ (2026-11-18 16:25) 2.5.8 → 2.5.9(펜닐 요청) — ★ (2026-11-16 15:59) 2.5.7 → 2.5.8(펜닐 요청) — ★ (2026-11-16 11:49) 2.5.6 → 2.5.7(펜닐 요청) — ★ (2026-11-15 19:36) 2.5.5 → 2.5.6(펜닐 요청) — ★ (2026-11-15 01:21) 2.5.4 → 2.5.5(펜닐 요청) — ★ (2026-11-12 14:58) 2.5.3 → 2.5.4(펜닐 요청) — ★ (2026-11-12 00:51) 2.5.2 → 2.5.3(펜닐 요청) — ★ (2026-11-11 09:28) 2.5.1 → 2.5.2(펜닐 요청) — ★ (2026-11-10 11:08) 2.5.0 → 2.5.1(펜닐 요청) — ★ (2026-11-04 15:23) 2.4.3 → 2.5.0(펜닐 요청)
 
 // ============================================================
 // 설정 파일 경로
@@ -186,6 +186,41 @@ function get_app_settings($key = null, $default = null) {
     }
     
     return $value;
+}
+}
+
+if (!function_exists('mc_upload_default_exts')) {
+/** ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 업로드 허용 확장자 기본값 — 예전 일반 업로드(upload_file_single)가 쓰던 목록 */
+function mc_upload_default_exts() {
+    return ['zip', 'cbz', 'rar', 'cbr', '7z', 'cb7',
+        'jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'tiff', 'tif', 'avif',
+        'mp4', 'webm', 'mkv', 'avi', 'mov', 'm4v', 'm2t', 'ts', 'mts', 'm2ts', 'wmv', 'flv',
+        'pdf', 'epub', 'txt', 'hwp', 'hwpx',
+        'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx'];
+}
+/** ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 위험한 확장자(서버에서 실행·설정될 수 있는 것) — 허용 목록에 적어도 항상 막음(index.php 청크 업로드의 막는 목록과 같음) */
+function mc_upload_danger_ext($ext) {
+    return (bool)preg_match('/^(php\d*|phtml|pht|phar|phps|cgi|pl|py|asp|aspx|jsp|shtml|htaccess|htpasswd)$/i', (string)$ext);
+}
+/** ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 관리자 '업로드 허용 확장자'를 배열로(쉼표·빈칸 구분, 앞 점 무시, 영문·숫자 1~10자만, 위험한 것 제외) — 비었거나 없으면 기본값 */
+function mc_upload_parse_exts($text) {
+    $out = [];
+    foreach (preg_split('/[\s,;]+/', strtolower((string)$text)) as $e) {
+        $e = ltrim(trim($e), '.');
+        if ($e === '' || !preg_match('/^[a-z0-9]{1,10}$/', $e) || mc_upload_danger_ext($e)) continue;
+        $out[$e] = true;
+    }
+    return array_keys($out);
+}
+function mc_upload_allowed_exts() {
+    $v = function_exists('get_app_settings') ? get_app_settings('upload_allowed_ext', null) : null;
+    $l = is_string($v) ? mc_upload_parse_exts($v) : [];
+    return $l ?: mc_upload_default_exts();
+}
+/** ★ (2026-11-18 13:12, 펜닐 요청 — fix199) 같은 이름 파일이 있을 때: rename(이름 (1).zip — 기본) / skip(건너뜀) / overwrite(덮어씀 — 예전 동작) */
+function mc_upload_dup_mode() {
+    $v = function_exists('get_app_settings') ? (string)get_app_settings('upload_dup_mode', 'rename') : 'rename';
+    return in_array($v, ['rename', 'skip', 'overwrite'], true) ? $v : 'rename';
 }
 }
 

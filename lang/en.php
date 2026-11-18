@@ -760,11 +760,12 @@ Save now?',
     'js_upload_cancelled' => 'Cancelled',
     'js_upload_chunk_fail' => 'Chunk transfer failed',
     'js_upload_chunk_info' => 'Chunk',
+    'js_upload_close_refresh' => 'The list will refresh when you close this window.', // fix195
     'js_upload_complete_msg' => 'Complete!',
     'js_upload_count_status' => 'Uploading (%d/%d)',
     'js_upload_current_loc' => 'Current location',
     'js_upload_done' => 'Done',
-    'js_upload_drag' => 'Drag files here or click to select',
+    'js_upload_drag' => 'Drag files or folders here or click to select', // fix200 folders too
     'js_upload_eta_done' => 'Almost done',
     'js_upload_eta_hour' => 'h',
     'js_upload_eta_min' => 'm',
@@ -779,6 +780,14 @@ Save now?',
     'js_upload_parse_error' => 'Response parse error',
     'js_upload_progress' => 'Progress',
     'js_upload_remaining' => 'Remaining',
+    'js_upload_result' => 'Done %d · Failed %d', // fix195
+    'js_upload_result_skip' => 'Done %d · Failed %d · Skipped %d', // fix199
+    'js_upload_pick_files' => 'Choose files', // fix204
+    'js_upload_done_title' => 'Upload finished', // fix204
+    'js_upload_only_fail' => 'Show failed only', // fix204
+    'js_upload_show_all' => 'Show all', // fix204
+    'js_upload_pick_folder' => 'Choose folder', // fix200
+    'js_upload_skipped' => 'Skipped', // fix199
     'js_upload_size' => 'Size',
     'js_upload_start' => 'Start Upload',
     'js_upload_status' => 'Status',
@@ -1297,6 +1306,13 @@ Save now?',
     'adm_cfg_folder_list_mobile' => 'Folder List (Mobile)',
     'adm_cfg_viewed_mark' => 'Recently viewed highlight (sec)', // ★ (2026-11-02 09:11)
     'adm_cfg_viewed_mark_help' => 'When you open a comic or folder and come back to the list with Back, the item you just viewed is outlined (also in favorites, bookmarks and autosave lists). Sets how many seconds the outline stays. 0 = keep it (default: 2 sec)',
+    'adm_cfg_upload_ext' => 'Allowed upload extensions', // fix199
+    'adm_cfg_upload_ext_help' => 'Only these extensions can be uploaded (separate with commas or spaces). Save it empty to restore the default. Extensions that can run on the server, such as php, are always blocked.', // fix199
+    'adm_cfg_upload_dup' => 'When a file with the same name exists', // fix199
+    'adm_cfg_upload_dup_rename' => 'Save with a new name — name (1).zip (default)', // fix199
+    'adm_cfg_upload_dup_skip' => 'Skip — keep the existing file', // fix199
+    'adm_cfg_upload_dup_overwrite' => 'Overwrite — replace the existing file', // fix199
+    'adm_cfg_upload_dup_help' => 'What to do when the upload folder already has a file with the same name. The result is shown in the upload window.', // fix199
     'adm_cfg_max_autosave' => 'Max Continue Reading (autosave)',
     'adm_cfg_max_autosave_help' => 'Per account · how many recently read books to show in Bookmarks > Continue Reading — beyond this, the oldest drop off. Separate from the per-book reading positions below (default 10)', // ★ (2026-11-15 19:47 fix179)
     'adm_cfg_max_vpos' => 'Max per-book resume positions (viewer)', // ★ (2026-11-15 19:25 fix176)
@@ -3250,6 +3266,7 @@ Cache tab → Regen stats / Delete folder cache
     'lib_tag' => 'Tag',
     'lib_terms_help' => 'Separate multiple values with commas. Saving empty removes them.',
     'lib_unread_only' => 'Unread only',
+    'lib_ftog' => 'Filter', // ★ (2026-11-19 00:43 fix228) 폰: 거르기 칸 접기·펼치기 단추
     'lib_vol_count' => '%d vol.',
     'lib_vol_edit_help' => 'Edit number/label, or check and move to another series — or remove / return to automatic',
     'lib_vol_label_num' => 'Vol. %s',

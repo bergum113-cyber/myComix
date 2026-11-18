@@ -31,6 +31,24 @@ $BIN = implode(',', array_map('intval', $scope_bidxs ?: [0]));
 $_branding = load_branding();
 $is_admin = mc_lib_is_admin();
 $db = mc_lib_db();
+// ★ (2026-11-18 17:48, 펜닐 요청 — fix213) 즐겨찾기 표시: 즐겨찾기에 든 책(파일)이 하나라도 있는 작품 카드에 ⭐(보기만 · 누르는 기능 없음)
+$lib_fav_sids = [];
+try {
+    $__fv = (function_exists('get_favorites_file') && is_file(get_favorites_file())) ? (load_json_with_lock(get_favorites_file()) ?: []) : [];
+    $__fb = [];
+    foreach ((is_array($__fv) ? $__fv : []) as $__k => $__v) {
+        [$__b, $__p] = mc_rec_split($__k, $__v);
+        if (in_array((int)$__b, $scope_bidxs, true) && is_string($__p) && $__p !== '') $__fb[(int)$__b][] = '/' . ltrim(mc_lib_nfc(str_replace('\\', '/', $__p)), '/');
+    }
+    foreach ($__fb as $__b => $__ps) {
+        foreach (array_chunk(array_values(array_unique($__ps)), 400) as $__ch) {
+            $__st = $db->prepare('SELECT DISTINCT series_id FROM volumes WHERE bidx = ? AND missing = 0 AND series_id IS NOT NULL AND path IN (' . implode(',', array_fill(0, count($__ch), '?')) . ')');
+            $__st->execute(array_merge([$__b], $__ch));
+            foreach ($__st->fetchAll(PDO::FETCH_COLUMN) as $__sid) $lib_fav_sids[(int)$__sid] = true;
+        }
+    }
+} catch (Throwable $__e) { $lib_fav_sids = []; }
+unset($__fv, $__fb, $__k, $__v, $__b, $__p, $__ps, $__ch, $__st, $__sid, $__e);
 
 $f_author = (int)($_GET['author'] ?? 0);
 $f_group  = (int)($_GET['group'] ?? 0); // ★ (2026-11-02 01:53) 그룹(서클)
@@ -428,7 +446,10 @@ function lib_card($c, $compact = false) {
     }
     if ($out !== '') echo '<div class="sc-terms">' . $out . '</div>';
     echo '<div class="sc-sub2">' . __h('lib_vol_count', $c['count']) . ($c['fin'] > 0 ? ' · ' . __h('lib_read_count', $c['fin'], $c['count']) : '') . '</div>';
-    echo '</div></div>';
+    echo '</div>';
+    global $lib_fav_sids;
+    if (!empty($lib_fav_sids[(int)$c['id']])) echo '<span class="sc-favm" title="' . __h('fav_shelf_title') . '" aria-label="' . __h('fav_shelf_title') . '">⭐</span>'; // ★ (2026-11-18 17:48 fix213) 즐겨찾기 표시(그리드: 표지 왼쪽 위 · 목록: 오른쪽 위)
+    echo '</div>';
 }
 if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((microtime(true) - $_lib_t0) * 1000, 1)); // ★ (2026-10-29) 처리 시간(개발자 도구 → 네트워크 → 타이밍)
 ?>
@@ -544,6 +565,10 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
   .sc-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(130px, 1fr)); gap:16px 12px; }
   @media (max-width:576px) { .sc-grid { grid-template-columns:repeat(3, 1fr); gap:12px 8px; } }
   .sc-row { display:grid; grid-auto-flow:column; grid-auto-columns:130px; gap:12px; overflow-x:auto; padding-bottom:6px; }
+  /* ★ (2026-11-18 08:51, 펜닐 요청 — fix194) 칸 테두리: 주황 테두리(js/mc-seen.js — 바깥 5px·모서리 7px)와 같은 자리에 평소엔 얇은 연회색 1px. 고르면 주황 2px 이 위에 덮음. 목록 보기는 줄 구분선이 있어 그대로 */
+  .sc-grid .sc::before, .sc-row .sc::before { content:""; position:absolute; inset:-5px; border:1px solid rgba(128,128,128,.3); border-radius:7px; pointer-events:none; z-index:2; }
+  .sc-grid .sc, .sc-row .sc { position:relative; } /* ★ (2026-11-18 12:41 fix197) 선 기준 — 예전엔 js/mc-seen.js 가 끝에서 넣어 줘 그 전(느린 폰)·스크립트 실패 때 선이 칸이 아닌 곳 기준으로 그려졌음(스크립트 막고 재현: 72칸 모두) */
+  @media (max-width:576px) { .sc-grid { column-gap:12px; } } /* fix194: 폰 격자 칸 사이 8px 면 바깥 5px 테두리끼리 2px 겹침 → 12px(선 사이 2px) */
   @media (max-width:576px) { .sc-row { grid-auto-columns:30%; } }
   /* ★ (2026-10-29) 카드: 표지·제목 링크 + 작가·장르·태그 링크, 제목 전체 표시(자르지 않음), 권 수는 표지 오른쪽 위 */
   .sc { display:block; min-width:0; }
@@ -595,6 +620,13 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
   .sc-list .sc-text { min-width:0; flex:1 1 auto; padding-top:2px; }
   .sc-list .sc-name { font-size:1rem; margin-top:0; }
   .sc-list .sc-sub2 { font-size:.75rem; color:#999; margin-top:2px; }
+  /* ★ (2026-11-18 17:48, 펜닐 요청 — fix213) 즐겨찾기 ⭐(보기만) — 그리드·가로 줄: 표지 왼쪽 위(오른쪽 위는 권 수) · 다 읽음 ✓ 가 있으면 그 아래 · 목록: 파일 목록처럼 오른쪽 위 */
+  /* ★ (2026-11-18 23:31, 펜닐 요청 — fix222) 별 작게 — 예전 11~14px(PC 24×21) → 10px(약 16×15). 다 읽음 ✓(높이 17px) 아래 자리도 고정 값으로 */
+  .sc-favm { position:absolute; top:4px; left:4px; z-index:3; pointer-events:none; background:rgba(0,0,0,.62); border-radius:3px; padding:0 2px; font-size:10px; line-height:15px; }
+  .sc-grid .sc:has(.sc-fin) > .sc-favm, .sc-row .sc:has(.sc-fin) > .sc-favm { top:24px; }
+  .sc-list .sc { position:relative; }
+  .sc-list .sc-favm { top:8px; left:auto; right:5px; background:transparent; font-size:12px; padding:0; } /* fix222 15px → 12px */
+  .sc-list .sc:has(> .sc-favm) .sc-text { padding-right:24px; }
   .lib-pager { display:flex; gap:4px; justify-content:center; flex-wrap:wrap; margin:20px 0; }
   .lib-pager a, .lib-pager span { padding:4px 10px; border-radius:4px; border:1px solid #ccc; text-decoration:none !important; color:inherit; font-size:.85rem; }
   .lib-pager span.cur { background:#343a40; color:#fff; border-color:#343a40; }
@@ -609,10 +641,65 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
   .dark-mode .lib-filter, [data-theme="dark"] .lib-filter { background:#1e1e1e; box-shadow:none; }
   .dark-mode .lib-filter select, .dark-mode .lib-filter input, [data-theme="dark"] .lib-filter select, [data-theme="dark"] .lib-filter input { background:#2a2a2a; color:#eee; border-color:#444; }
   .dark-mode .sc-list .sc, [data-theme="dark"] .sc-list .sc { border-color:#333; }
+  /* ★ (2026-11-18 12:16, 펜닐 요청 — fix196) 목록 보기 칸 테두리 — 북마크 목록 보기(.bm-list .bm-item)와 같은 카드(흰 바탕·1px #e6e8eb·모서리 8px·칸 사이 8px). 줄 구분선 대신
+     주황 테두리(js/mc-seen.js)는 북마크 목록처럼 카드 바깥 2px 띄운 2px 선으로 맞춤 */
+  .sc-list { display:flex; flex-direction:column; gap:8px; }
+  .sc-list .sc { background:#fff; border:1px solid #e6e8eb; border-radius:8px; padding:8px; }
+  .dark-mode .sc-list .sc, [data-theme="dark"] .sc-list .sc { background:#1e1e1e; }
+  /* ★ (2026-11-18 23:00, 펜닐 요청 — fix217) 목록 보기 주황(본 항목·마우스)은 칸 바깥 2px 띄우지 않고 회색 테두리 바로 위에(예전 inset:-4px) */
+  .sc-list .sc.mc-viewed::after { inset:-1px; border-radius:8px; }
+  @media (hover:hover) and (pointer:fine) { .sc-list .sc:hover::after { inset:-1px; border-radius:8px; } }
   .dark-mode .sc-t-author, [data-theme="dark"] .sc-t-author { background:#1a2a45; border-color:#34507f; color:#9ec1ff !important; }
   .dark-mode .sc-t-group, [data-theme="dark"] .sc-t-group { background:#17331f; border-color:#2f6b40; color:#9be3b0 !important; }
   .dark-mode .sc-t-genre, [data-theme="dark"] .sc-t-genre { background:#3c1f1c; border-color:#6e3a33; color:#ffb4a8 !important; }
   .dark-mode .sc-t-tag, [data-theme="dark"] .sc-t-tag { background:#26292d; border-color:#454a50; color:#ddd !important; }
+  /* ★ (2026-11-19 00:43, 펜닐 요청 — fix228) 폰(세로 576px 이하 · 가로 높이 500px 이하) 위쪽 한 줄 접기 — 작품이 화면 아래쪽에서 시작하던 것(세로 ≈490px · 가로 ≈330px)
+     ① ← 돌아가기(화살표만)와 서재·즐겨찾기·북마크 탭을 한 줄 · 제목 '서재' 숨김(탭에 이미 있음)
+     ② 검색 · [거르기 N] · 보기 단추 한 줄 — 나머지 칸(범위·작가·그룹·장르·태그·상태·안 읽음·🔍)은 [거르기]를 누르면 펼침(N = 고른 거르기 수)
+     ③ 스캔 상자(관리자) 한 줄 — 글자 줄임 · 빠른 스캔(아이콘) · [⋯] 누르면 전체 다시 스캔·자동 스캔. PC 는 그대로 */
+  .lib-ftog, .lib-amore { display:none; }
+  @media (max-width:576px), (orientation:landscape) and (max-height:500px) and (pointer:coarse) { /* ★ (2026-11-19 00:50 점검 — fix229) 가로는 손가락 화면만 — PC 창 높이를 500px 이하로 줄여도 폰 배치가 되던 것 */
+    .lib-top { float:left; margin:0 6px 0 0; }
+    .lib-top h1 { display:none; }
+    .lib-top #libBack { width:34px; height:32px; padding:0; font-size:0; display:inline-flex; align-items:center; justify-content:center; border-radius:16px; }
+    .lib-top #libBack::before { content:""; width:18px; height:18px; background:currentColor; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
+    .lib-wrap .mc-shelf-nav { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; margin-bottom:8px; }
+    .lib-wrap .mc-shelf-nav::-webkit-scrollbar { display:none; }
+    .lib-wrap .mc-shelf-nav { gap:4px; } .lib-wrap .mc-shelf-nav a { padding:0 10px; font-size:.8rem; gap:4px; } /* ★ (01:11 fix231) 폰: 탭을 조금 좁게(세 화면 같게) — 좁은 폰에서도 북마크 머리가 한 줄에 들어가게 */
+    .lib-top { margin-right:4px; }
+    form.lib-filter { clear:both; padding:6px; gap:6px; }
+    form.lib-filter > * { order:10; }
+    form.lib-filter > input[type=search] { order:1; flex:1 1 0; max-width:none; min-width:0; height:34px; }
+    form.lib-filter > .lib-ftog { order:2; display:inline-flex; align-items:center; gap:4px; height:34px; padding:0 10px; border:1px solid #ccc; border-radius:6px; background:#fff; color:#333; font-size:.85rem; white-space:nowrap; }
+    form.lib-filter > .lib-ftog::before { content:""; width:15px; height:15px; background:currentColor; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M4 6h16M7 12h10M10 18h4'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'%3E%3Cpath d='M4 6h16M7 12h10M10 18h4'/%3E%3C/svg%3E") center/contain no-repeat; }
+    form.lib-filter > .lib-ftog b { background:#1a73e8; color:#fff; border-radius:9px; font-size:.7rem; line-height:16px; padding:0 6px; font-weight:600; }
+    form.lib-filter.lf-open > .lib-ftog { border-color:#1a73e8; color:#1a73e8; }
+    form.lib-filter > .lib-view-btn { order:3; }
+    form.lib-filter > .lib-filter-sp { display:none; }
+    form.lib-filter.lf-open > .lib-filter-sp { display:block !important; order:4; flex:1 0 100% !important; height:0; } /* 펼치면 칸들은 둘째 줄부터(가로 화면에서 검색칸이 눌리던 것) */
+    form.lib-filter:not(.lf-open) > :not(input[type=search]):not(.lib-ftog):not(.lib-view-btn) { display:none !important; }
+    .lib-admin#libAdmin { flex-wrap:nowrap; gap:6px; padding:4px 6px 4px 10px; margin-top:8px; }
+    .lib-admin#libAdmin > span:first-child { flex:1 1 auto; min-width:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; font-size:.78rem; }
+    .lib-admin#libAdmin #libScanBtn { font-size:0; padding:4px 8px; line-height:1; flex:0 0 auto; }
+    .lib-admin#libAdmin #libScanBtn svg, .lib-admin#libAdmin #libScanBtn img { width:16px !important; height:16px !important; }
+    .lib-admin#libAdmin:not(.la-open) #libScanFullBtn, .lib-admin#libAdmin:not(.la-open) .lib-auto { display:none; }
+    .lib-admin#libAdmin.la-open, .lib-admin#libAdmin:has(#libScanMsg:not(:empty)) { flex-wrap:wrap; }
+    .lib-admin#libAdmin.la-open > span:first-child { flex-basis:calc(100% - 80px); }
+    .lib-admin#libAdmin #libScanMsg:not(:empty) { flex:1 0 100%; }
+    .lib-admin#libAdmin > * { order:10; } .lib-admin#libAdmin > span:first-child { order:1; } .lib-admin#libAdmin #libScanBtn { order:2; } .lib-admin#libAdmin .lib-amore { order:3; } /* 펼쳐도 ⟳·⋯ 는 첫 줄 끝 */
+    .lib-admin#libAdmin .lib-amore { display:inline-flex; align-items:center; justify-content:center; width:30px; height:26px; padding:0; border:0; border-radius:6px; background:transparent; color:#6b5d2c; font-size:18px; line-height:1; flex:0 0 auto; }
+    .lib-admin#libAdmin.la-open .lib-amore { background:rgba(0,0,0,.06); }
+    .dark-mode form.lib-filter > .lib-ftog, [data-theme="dark"] form.lib-filter > .lib-ftog { background:#2a2a2a; color:#eee; border-color:#444; }
+    .dark-mode .lib-admin#libAdmin .lib-amore, [data-theme="dark"] .lib-admin#libAdmin .lib-amore { color:#ccc; }
+  }
+  /* ★ (2026-11-19 01:17, 펜닐 요청 — fix232) 폰 세로(576px 이하): 머리 단추를 30px 로 작게(←·탭·보기·검색·필터·정렬) — 여백 확보 · 정렬 칸은 글자 길이만큼(늘어나지 않게, 보기 단추 옆) */
+  @media (max-width:576px) {
+    .lib-top #libBack { width:30px; height:30px; }
+    .lib-wrap .mc-shelf-nav a { height:30px; padding:0 8px; font-size:.78rem; }
+    .lib-wrap .mc-shelf-nav a svg { width:14px; height:14px; }
+    form.lib-filter > .lib-view-btn { width:30px; height:30px; }
+    form.lib-filter > input[type=search], form.lib-filter > .lib-ftog { height:30px; }
+  }
   .dark-mode .lib-admin, [data-theme="dark"] .lib-admin { background:#2a2416; border-color:#4a3f20; color:#ccc; }
   .dark-mode .lib-view-btn, [data-theme="dark"] .lib-view-btn { background:#1e1e1e; border-color:#444; color:#bbb; }
   .dark-mode .lib-view-btn.active, [data-theme="dark"] .lib-view-btn.active { background:#3a3a3a; color:#eee; }
@@ -734,10 +821,23 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
     <input type="hidden" name="o" autocomplete="off" value="<?php echo $f_sort !== 'random' && $f_dir !== $f_dir_def ? h($f_dir) : ''; ?>"<?php echo $f_sort !== 'random' && $f_dir !== $f_dir_def ? '' : ' disabled'; ?>>
     <input type="hidden" name="seed" autocomplete="off" value="<?php echo $f_sort === 'random' ? (int)$f_seed : ''; ?>"<?php echo $f_sort === 'random' ? '' : ' disabled'; ?>>
     <button type="submit" class="btn btn-sm btn-success">🔍</button>
+    <?php $_fcnt = count($sel_terms) + ($f_status !== '' ? 1 : 0) + ($f_unread ? 1 : 0) + ($multi_base && $scope !== 'all' ? 1 : 0); /* ★ fix228 폰: 고른 거르기 수 */ ?>
+    <button type="button" class="lib-ftog" id="libFtog" aria-expanded="false" aria-controls="libFilter"><?php echo __h('lib_ftog'); ?><?php if ($_fcnt): ?> <b><?php echo (int)$_fcnt; ?></b><?php endif; ?></button>
     <span class="lib-filter-sp" style="flex:1 1 auto"></span>
     <button type="button" class="lib-view-btn" data-view="grid" title="<?php echo __h('fav_shelf_view_grid'); ?>" aria-label="<?php echo __h('fav_shelf_view_grid'); ?>"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zM2.5 2a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zm6.5.5A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zM1 10.5A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zm6.5.5A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3z"/></svg></button>
     <button type="button" class="lib-view-btn" data-view="list" title="<?php echo __h('fav_shelf_view_list'); ?>" aria-label="<?php echo __h('fav_shelf_view_list'); ?>"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5 11.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm-3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/></svg></button>
   </form>
+  <script>
+  // ★ (2026-11-19 00:43 fix228) 폰 위쪽 접기 — [거르기]·[⋯] 펼치기/접기(PC 에서는 단추가 숨어 있음)
+  (function () {
+    function tog(btn, box, cls) { if (!btn || !box) return; btn.addEventListener('click', function () { var on = box.classList.toggle(cls); btn.setAttribute('aria-expanded', on ? 'true' : 'false'); }); }
+    function go() { // 스캔 상자는 이 스크립트 아래에 있어 문서를 다 읽은 뒤 연결
+      tog(document.getElementById('libFtog'), document.getElementById('libFilter'), 'lf-open');
+      tog(document.getElementById('libAmore'), document.getElementById('libAdmin'), 'la-open');
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', go); else go();
+  })();
+  </script>
   <?php // ★ 정렬 칩 — 고른 칩을 다시 누르면 방향이 바뀜(↓ 큰 것·가나다 / ↑ 반대), 랜덤은 누를 때마다 새로 섞음
   $_chips = [['name', 'lib_chip_name'], ['recent', 'lib_chip_recent'], ['added', 'lib_chip_added'], ['count', 'lib_chip_count']];
   ob_start(); // ★ (2026-11-03 21:45) 아래 '전체 작품' 제목 줄에 넣음 ?>
@@ -778,6 +878,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
       <span id="libAutoMsg" style="font-size:.8rem;color:#28a745;"></span>
     </span>
     <span id="libScanMsg"></span>
+    <button type="button" class="lib-amore" id="libAmore" aria-expanded="false" aria-label="<?php echo __h('index_more_tools'); ?>" title="<?php echo __h('index_more_tools'); ?>">⋯</button><?php // ★ fix228 폰: 전체 다시 스캔·자동 스캔 펼치기 ?>
   </div>
   <?php endif; ?>
 
@@ -1093,6 +1194,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
 <?php if (function_exists('mc_back_origin_list_js')) echo mc_back_origin_list_js(); /* ★ (2026-11-05) 뷰어 뒤로가기가 이 화면(주소·스크롤 위치)으로 돌아오게 — function.php */ ?>
 <?php /* ★ (2026-11-12 11:16, 펜닐 요청) 표지를 목록 화면과 같게 — 잘리지 않게 + 흐린 배경(js/mc-thumb-fit.js) */ ?>
 <script src="js/mc-thumb-fit.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-thumb-fit.js'); ?>"></script>
+<script src="js/mc-hdots.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-hdots.js'); /* ★ (2026-11-18 08:16 fix192) 읽는 중·최근 추가 가로 줄 — 스크롤 바 대신 아래 점 */ ?>" data-sel=".sc-row"></script>
 <script src="js/mc-seen.js?v=<?php echo (int)@filemtime(__DIR__ . '/js/mc-seen.js'); /* ★ (2026-11-14 16:45 fix158) 폴더 목록처럼 hover 청록·본 항목 회색 */ ?>" data-hold="<?php echo function_exists('get_app_settings') ? (float)max(0, (float)get_app_settings('viewed_mark_seconds', 2)) : 2; /* ★ (2026-11-14 17:32 fix159) 돌아온 항목 주황 테두리 유지 시간(관리자 '복귀 표시 유지 시간') */ ?>"></script>
 </body>
 </html>

@@ -23,6 +23,7 @@ function bm_load_json_file($f) {
     return is_array($a) ? $a : [];
 }
 $autosave_arr = bm_load_json_file(get_autosave_file());
+$_bm_fav_arr = function_exists('get_favorites_file') ? bm_load_json_file(get_favorites_file()) : []; // ★ (2026-11-18 17:46, 펜닐 요청 — fix213) 즐겨찾기인 책에 ⭐ 표시(보기만 · 누르는 기능 없음)
 $bookmark_arr = bm_load_json_file(get_bookmark_file());
 /** ★ (2026-11-06 00:50) 지운 뒤 확인용 목록 — "콘텐츠 폴더 번호|경로"(같은 경로라도 콘텐츠 폴더가 다르면 다른 항목 · 아래 화면 스크립트가 같은 형식으로 비교) */
 function bm_keys_list(array $arr) {
@@ -202,6 +203,28 @@ $_jsf = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | J
   .bm-tools { display:flex; align-items:center; gap:6px; }
   @media (max-width:576px) { .bm-head h1 { font-size:1.15rem; flex:1 1 0; min-width:0; } }
   @media (max-width:360px) { .bm-head .bm-back-lbl { display:none; } }
+  /* ★ (2026-11-19 00:59, 펜닐 요청 — fix230) 폰(세로·가로) 머리를 서재(fix228)와 같게: 1줄 [←][서재][즐겨찾기][북마크] · 2줄 보기 단추 · 제목 숨김(탭에 있음)
+     탭 줄(mc_shelf_nav)을 머리 안으로 옮김 — PC 는 맨 아래 한 줄(order:99)이라 예전과 같은 자리·간격(줄 사이 8+4 = 12px) */
+  .bm-head > .mc-shelf-nav { order:99; flex:1 0 100%; margin:2px 0 0; } /* 북마크 머리는 아래 여백 10px — 예전 자리(머리 아래 10px)와 같게. 아래 간격은 다음 칸의 위 여백과 겹쳐(예전과 같이) 그대로 */
+  @media (max-width:576px), (orientation:landscape) and (max-height:500px) and (pointer:coarse) {
+    .bm-head { gap:6px; }
+    .bm-head > #bmBack { order:1; flex:0 0 auto; width:34px; height:32px; padding:0; font-size:0; display:inline-flex; align-items:center; justify-content:center; border-radius:16px; }
+    .bm-head > #bmBack::before { content:""; width:18px; height:18px; background:currentColor; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
+    /* ★ (2026-11-19 01:10, 펜닐 요청 — fix231) 자리가 남으면 한 줄: [←][탭] … [보기] — 좁으면 보기 단추만 둘째 줄 오른쪽 */
+    .bm-head > .mc-shelf-nav { order:2; flex:0 1 auto; min-width:0; margin:0; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
+    .bm-head > .mc-shelf-nav::-webkit-scrollbar { display:none; }
+    .bm-head .mc-shelf-nav { gap:4px; } .bm-head .mc-shelf-nav a { padding:0 10px; font-size:.8rem; gap:4px; } /* ★ (01:11 fix231) 폰: 탭을 조금 좁게(세 화면 같게) — 좁은 폰에서도 북마크 머리가 한 줄에 들어가게 */
+    .bm-head { gap:6px 4px; }
+    .bm-head > h1 { display:none; }
+    .bm-head > .bm-tools { order:4; margin-left:auto; }
+  }
+  /* ★ (2026-11-19 01:17, 펜닐 요청 — fix232) 폰 세로(576px 이하): 머리 단추를 30px 로 작게(←·탭·보기·검색·필터·정렬) — 여백 확보 · 정렬 칸은 글자 길이만큼(늘어나지 않게, 보기 단추 옆) */
+  @media (max-width:576px) {
+    .bm-head > #bmBack { width:30px; height:30px; }
+    .bm-head .mc-shelf-nav a { height:30px; padding:0 8px; font-size:.78rem; }
+    .bm-head .mc-shelf-nav a svg { width:14px; height:14px; }
+    .bm-head .bm-view-btn { width:30px; height:30px; }
+  }
   /* 보기 전환 버튼 — 즐겨찾기 화면과 같은 모양 */
   .bm-view-btn { display:inline-flex; align-items:center; justify-content:center; width:32px; height:32px; padding:0;
                  border:1px solid #dcdcdc; border-radius:7px; background:#fff; color:#555; cursor:pointer; line-height:1; box-shadow:none; outline:none; }
@@ -228,6 +251,8 @@ $_jsf = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | J
   .bm-grid { display:grid; grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:16px 12px; }
   @media (max-width:576px) { .bm-grid { grid-template-columns:repeat(3, minmax(0, 1fr)); gap:14px 8px; } }
   .bm-item { position:relative; min-width:0; }
+  /* ★ (2026-11-18 08:51, 펜닐 요청 — fix194) 칸 테두리: 주황 테두리(js/mc-seen.js — 바깥 2px 띄운 2px 선)와 같은 자리에 평소엔 얇은 연회색 1px. 고르면 주황이 위에 덮음. 목록 보기는 칸 테두리가 원래 있어 그대로 */
+  .bm-grid .bm-item::before { content:""; position:absolute; inset:-3px; border:1px solid rgba(128,128,128,.3); border-radius:6px; pointer-events:none; z-index:2; }
   .bm-link { display:block; color:inherit !important; text-decoration:none !important; }
   .bm-cover { position:relative; width:100%; aspect-ratio:3/4; background:#e4e6ea; border-radius:6px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,.18); }
   .bm-cover img { width:100%; height:100%; object-fit:cover; display:block; }
@@ -242,6 +267,9 @@ $_jsf = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | J
   /* 목록 */
   .bm-list { display:flex; flex-direction:column; gap:8px; }
   .bm-list .bm-item { display:flex; align-items:flex-start; gap:10px; background:#fff; border:1px solid #e6e8eb; border-radius:8px; padding:8px; }
+  /* ★ (2026-11-18 22:59, 펜닐 요청 — fix217) 목록 보기 주황(본 항목·마우스)은 칸 바깥 2px 띄우지 않고 회색 테두리 바로 위에(js/mc-seen.js 의 outline-offset:2px 덮음) */
+  .bm-list .bm-item.mc-viewed { outline-offset:-1px !important; border-radius:8px !important; }
+  @media (hover:hover) and (pointer:fine) { .bm-list .bm-item:hover { outline-offset:-1px; border-radius:8px; } }
   .bm-list .bm-link { display:flex; align-items:flex-start; gap:12px; flex:1 1 auto; min-width:0; }
   .bm-list .bm-cover { flex:0 0 60px; width:60px; height:80px; aspect-ratio:auto; border-radius:4px; }
   .bm-list .bm-page { position:static; display:inline-block; margin-top:4px; background:#eef1f4; color:#5f6368; }
@@ -253,6 +281,9 @@ $_jsf = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | J
   .bm-list .bm-sub { display:block; }
   .bm-list .bm-del { position:static; flex:0 0 auto; background:transparent; color:#c62828; font-size:15px; }
   .bm-list .bm-del:hover { background:#fdecea; }
+  /* ★ (2026-11-18 17:46, 펜닐 요청 — fix213) 즐겨찾기 ⭐ — 그리드: 표지 왼쪽 위(오른쪽 위는 ✕) · 목록: 파일 목록처럼 오른쪽 ✕ 앞 */
+  .bm-favm { position:absolute; top:4px; left:4px; z-index:2; width:24px; height:24px; line-height:24px; text-align:center; font-size:13px; border-radius:50%; background:rgba(0,0,0,.45); pointer-events:none; }
+  .bm-list .bm-favm { position:static; flex:0 0 auto; background:transparent; font-size:12px; margin-right:-6px; } /* ★ (2026-11-18 23:54, 펜닐 요청 — fix224) 15px → 12px(서재 목록 별과 같게) · ✕ 와 같은 24px 칸 가운데 · 사이 10px → 4px */
 
   .bm-item.is-missing .bm-cover img { filter:grayscale(1); opacity:.45; }
   .bm-item.is-missing .bm-link { cursor:default; }
@@ -304,8 +335,8 @@ if ($_mc_thumb_css !== ''): ?>
       <button type="button" class="bm-view-btn" data-view="grid" title="<?php echo __h('fav_shelf_view_grid'); ?>" aria-label="<?php echo __h('fav_shelf_view_grid'); ?>"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M1 2.5A1.5 1.5 0 0 1 2.5 1h3A1.5 1.5 0 0 1 7 2.5v3A1.5 1.5 0 0 1 5.5 7h-3A1.5 1.5 0 0 1 1 5.5v-3zM2.5 2a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zm6.5.5A1.5 1.5 0 0 1 10.5 1h3A1.5 1.5 0 0 1 15 2.5v3A1.5 1.5 0 0 1 13.5 7h-3A1.5 1.5 0 0 1 9 5.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zM1 10.5A1.5 1.5 0 0 1 2.5 9h3A1.5 1.5 0 0 1 7 10.5v3A1.5 1.5 0 0 1 5.5 15h-3A1.5 1.5 0 0 1 1 13.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3zm6.5.5A1.5 1.5 0 0 1 10.5 9h3a1.5 1.5 0 0 1 1.5 1.5v3a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 9 13.5v-3zm1.5-.5a.5.5 0 0 0-.5.5v3a.5.5 0 0 0 .5.5h3a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 0-.5-.5h-3z"/></svg></button>
       <button type="button" class="bm-view-btn" data-view="list" title="<?php echo __h('fav_shelf_view_list'); ?>" aria-label="<?php echo __h('fav_shelf_view_list'); ?>"><svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5 11.5a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm0-4a.5.5 0 0 1 .5-.5h9a.5.5 0 0 1 0 1h-9a.5.5 0 0 1-.5-.5zm-3 1a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2zm0 4a1 1 0 1 0 0-2 1 1 0 0 0 0 2z"/></svg></button>
     </div>
+<?php echo mc_shelf_nav('bm', $bidx_query); // ★ (2026-11-03 01:31) 서재·즐겨찾기·북마크 이동 — ★ (2026-11-19 fix230) 머리(.bm-head) 안으로(폰: ← 와 한 줄) ?>
   </div>
-<?php echo mc_shelf_nav('bm', $bidx_query); // ★ (2026-11-03 01:31) 서재·즐겨찾기·북마크 이동 ?>
 
 <?php if ($_total === 0): ?>
   <div class="bm-empty"><?php echo __h('bm_empty'); ?></div>
@@ -333,6 +364,7 @@ if ($_mc_thumb_css !== ''): ?>
             <?php if ($it['time'] > 0): ?><div class="bm-when"><?php echo h(bm_when($it['time'])); ?></div><?php endif; ?>
           </div>
         </a>
+        <?php if (!$it['missing'] && mc_rec_find($_bm_fav_arr, (int)$it['bidx'], $it['path']) !== null): /* ★ (2026-11-18 17:46 fix213) 즐겨찾기 표시 — 그리드: 표지 왼쪽 위 · 목록: ✕ 앞 */ ?><span class="bm-favm" title="<?php echo __h('fav_shelf_title'); ?>" aria-label="<?php echo __h('fav_shelf_title'); ?>">⭐</span><?php endif; ?>
         <button type="button" class="bm-del" title="<?php echo __h('bm_remove'); ?>" aria-label="<?php echo __h('bm_remove'); ?>"
                 data-type="<?php echo $sec['type']; ?>" data-file="<?php echo h($it['enc']); ?>" data-path="<?php echo h($it['path']); ?>" data-bidx="<?php echo (int)$it['bidx']; ?>">✕</button>
       </div>
@@ -367,6 +399,7 @@ if ($_mc_thumb_css !== ''): ?>
             <?php if ($it['time'] > 0): ?><div class="bm-when"><?php echo h(bm_when($it['time'])); ?></div><?php endif; ?>
           </div>
         </a>
+        <?php if (!$it['missing'] && mc_rec_find($_bm_fav_arr, (int)$it['bidx'], $it['path']) !== null): /* ★ (2026-11-18 17:46 fix213) 즐겨찾기 표시 — 그리드: 표지 왼쪽 위 · 목록: ✕ 앞 */ ?><span class="bm-favm" title="<?php echo __h('fav_shelf_title'); ?>" aria-label="<?php echo __h('fav_shelf_title'); ?>">⭐</span><?php endif; ?>
         <button type="button" class="bm-del" title="<?php echo __h('bm_remove'); ?>" aria-label="<?php echo __h('bm_remove'); ?>"
                 data-type="ebook" data-kind="<?php echo $it['kind']; ?>" data-note="<?php echo h($it['id']); ?>" data-file="<?php echo h($it['enc']); ?>" data-path="<?php echo h($it['path']); ?>" data-bidx="<?php echo (int)$it['bidx']; ?>">✕</button>
       </div>

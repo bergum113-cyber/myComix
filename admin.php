@@ -1184,6 +1184,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['mode'] ?? '') === 'config_
     $settings['lib_per_page'] = isset($_POST['lib_per_page']) ? (string)max(6, min(500, (int)$_POST['lib_per_page'])) : (string)($settings['lib_per_page'] ?? '48');
     $settings['lib_reading_count'] = isset($_POST['lib_reading_count']) ? (string)max(0, min(60, (int)$_POST['lib_reading_count'])) : (string)($settings['lib_reading_count'] ?? '12');
     $settings['lib_recent_count'] = isset($_POST['lib_recent_count']) ? (string)max(0, min(60, (int)$_POST['lib_recent_count'])) : (string)($settings['lib_recent_count'] ?? '12');
+    // ★ (2026-11-20 15:48, 펜닐 요청 — fix254) 서재 읽는 중·최근 추가 줄을 2쪽 이후에도(기본 0 = 1쪽에서만) — 속도 기록과 같은 방식(숨은 칸 0 + 체크 1), 입력칸이 없는 요청이면 기존 값 유지
+    $settings['lib_rows_all_pages'] = isset($_POST['lib_rows_all_pages']) ? (((string)(is_array($_POST['lib_rows_all_pages']) ? end($_POST['lib_rows_all_pages']) : $_POST['lib_rows_all_pages']) === '1') ? '1' : '0') : (string)($settings['lib_rows_all_pages'] ?? '0');
     $settings['fav_per_page'] = isset($_POST['fav_per_page']) ? (string)max(0, min(500, (int)$_POST['fav_per_page'])) : (string)($settings['fav_per_page'] ?? '30');
     $settings['new_badge_hours'] = (string)max(0, (int)($_POST['new_badge_hours'] ?? 24));
     // ★ (2026-11-04 11:18) 파일 카드 N 기준 — file: 파일 자체 날짜(받은 날짜, 기본 — 예전 그대로) / added: 서재에 들어온 시각(올린 시각, 미디어 서버 일반 기준)
@@ -3428,13 +3430,13 @@ if (file_exists($_settings_file)) {
     if (isset($_loaded_settings['max_ebook_bookmark'])) $max_ebook_bookmark = $_loaded_settings['max_ebook_bookmark'];
     if (isset($_loaded_settings['max_favorites'])) $max_favorites = $_loaded_settings['max_favorites'];
     if (isset($_loaded_settings['fav_per_page'])) $fav_per_page = $_loaded_settings['fav_per_page'];
-    foreach (['lib_per_page', 'lib_reading_count', 'lib_recent_count', 'bm_page_autosave', 'bm_page_bookmark', 'bm_page_ebook', 'bg_refresh_minutes', 'perf_log'] as $_lk) if (isset($_loaded_settings[$_lk])) $$_lk = $_loaded_settings[$_lk];
+    foreach (['lib_per_page', 'lib_reading_count', 'lib_recent_count', 'lib_rows_all_pages', 'bm_page_autosave', 'bm_page_bookmark', 'bm_page_ebook', 'bg_refresh_minutes', 'perf_log'] as $_lk) if (isset($_loaded_settings[$_lk])) $$_lk = $_loaded_settings[$_lk];
     if (isset($_loaded_settings['pages_per_group'])) $pages_per_group = $_loaded_settings['pages_per_group'];
     if (isset($_loaded_settings['pages_per_group_mobile'])) $pages_per_group_mobile = $_loaded_settings['pages_per_group_mobile'];
 }
 if(!isset($max_bookmark))$max_bookmark=10;if(!isset($max_autosave))$max_autosave=3;if(!isset($max_ebook_bookmark))$max_ebook_bookmark=30;
 if(!isset($max_vpos))$max_vpos=20000; // ★ fix176
-if(!isset($max_favorites))$max_favorites=50;if(!isset($fav_per_page))$fav_per_page=30;if(!isset($lib_per_page))$lib_per_page=48;if(!isset($lib_reading_count))$lib_reading_count=12;if(!isset($lib_recent_count))$lib_recent_count=12;foreach(['bm_page_autosave','bm_page_bookmark','bm_page_ebook'] as $_bk){if(!isset($$_bk))$$_bk=12;}if(!isset($bg_refresh_minutes))$bg_refresh_minutes=10;if(!isset($perf_log))$perf_log='1';if(!isset($new_badge_hours))$new_badge_hours=24;if(!isset($viewed_mark_seconds))$viewed_mark_seconds=2;
+if(!isset($max_favorites))$max_favorites=50;if(!isset($fav_per_page))$fav_per_page=30;if(!isset($lib_per_page))$lib_per_page=48;if(!isset($lib_reading_count))$lib_reading_count=12;if(!isset($lib_recent_count))$lib_recent_count=12;if(!isset($lib_rows_all_pages))$lib_rows_all_pages='0';foreach(['bm_page_autosave','bm_page_bookmark','bm_page_ebook'] as $_bk){if(!isset($$_bk))$$_bk=12;}if(!isset($bg_refresh_minutes))$bg_refresh_minutes=10;if(!isset($perf_log))$perf_log='1';if(!isset($new_badge_hours))$new_badge_hours=24;if(!isset($viewed_mark_seconds))$viewed_mark_seconds=2;
 if(!isset($maxview_folder))$maxview_folder=50;if(!isset($maxview_file))$maxview_file=100;if(!isset($maxview_folder_mobile))$maxview_folder_mobile=30;if(!isset($maxview_file_mobile))$maxview_file_mobile=30;
 if(!isset($pages_per_group))$pages_per_group=5;if(!isset($pages_per_group_mobile))$pages_per_group_mobile=3;
 if(!isset($use_cover))$use_cover='n';if(!isset($use_listcover))$use_listcover='n';
@@ -3521,8 +3523,9 @@ foreach ($dirs as $idx => $dir): ?>
 <tr class="border-bottom"><td class="text-right"><?php echo __("adm_cfg_max_favorites"); ?></td><td class=""><input type="number" name="max_favorites" class="form-control" value="<?php echo h($max_favorites); ?>" min="1" required><small class="text-muted"><?php echo __h('adm_cfg_max_favorites_help'); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_fav_per_page"); ?></td><td class=""><input type="number" name="fav_per_page" class="form-control" value="<?php echo (int)$fav_per_page; ?>" min="0" max="500" step="1" required><?php // ★ (2026-11-03 09:15) 빈칸 저장 → 0 막기(옆 칸들과 같게) ?><small class="text-muted"><?php echo __h("adm_cfg_fav_per_page_help"); ?></small></td></tr>
 <tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_per_page"); ?></td><td class=""><input type="number" name="lib_per_page" class="form-control" value="<?php echo (int)$lib_per_page; ?>" required min="6" max="500" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_per_page_help"); ?></small></td></tr><?php // ★ (2026-11-03 01:28) 서재 개수 설정 ?>
-<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_reading_count"); ?></td><td class=""><input type="number" name="lib_reading_count" class="form-control" value="<?php echo (int)$lib_reading_count; ?>" required min="0" max="60" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_row_help"); ?></small></td></tr>
-<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_recent_count"); ?></td><td class=""><input type="number" name="lib_recent_count" class="form-control" value="<?php echo (int)$lib_recent_count; ?>" required min="0" max="60" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_row_help"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_reading_count"); ?></td><td class=""><input type="number" name="lib_reading_count" class="form-control" value="<?php echo (int)$lib_reading_count; ?>" required min="0" max="60" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_reading_help"); /* ★ (2026-11-20 15:29 fix253) 줄마다 기준 설명 */ ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_recent_count"); ?></td><td class=""><input type="number" name="lib_recent_count" class="form-control" value="<?php echo (int)$lib_recent_count; ?>" required min="0" max="60" step="1"><small class="text-muted"><?php echo __h("adm_cfg_lib_recent_help"); ?></small></td></tr>
+<tr class="border-bottom"><td class="text-right"><?php echo __h("adm_cfg_lib_rows_all"); ?></td><td class=""><input type="hidden" name="lib_rows_all_pages" value="0"><div class="custom-control custom-switch"><input type="checkbox" class="custom-control-input" id="lib_rows_all_pages" name="lib_rows_all_pages" value="1"<?php echo ((string)$lib_rows_all_pages === '1') ? ' checked' : ''; ?>><label class="custom-control-label" for="lib_rows_all_pages"><?php echo __h("adm_cfg_lib_rows_all_on"); ?></label></div><small class="text-muted"><?php echo __h("adm_cfg_lib_rows_all_help"); ?></small></td></tr><?php // ★ (2026-11-20 15:48, 펜닐 요청 — fix254) ?>
 <?php // ★ (2026-11-03 10:51) 배경 갱신 간격 + 마지막 결과(src/bg_refresh.json)
 $_bgs = is_file(__DIR__ . '/src/bg_refresh.json') ? @json_decode((string)@file_get_contents(__DIR__ . '/src/bg_refresh.json'), true) : null;
 $_bg_last = '';
@@ -7508,7 +7511,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="ab-c">
       <div id="brandLogoBox" style="width:72px;height:72px;flex:0 0 72px;border:2px dashed #ced4da;border-radius:12px;background:#fff;display:flex;align-items:center;justify-content:center;overflow:hidden;color:#9aa0a6;">
         <img id="brandLogoImg" src="<?php echo $_bl_has ? h($branding['logo_image']) : ''; ?>" alt="" style="max-width:62px;max-height:62px;<?php echo $_bl_has ? '' : 'display:none;'; ?>">
-        <span id="brandLogoDef" style="<?php echo $_bl_has ? 'display:none;' : 'display:inline-flex;'; ?>"><svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#3c4043" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg></span>
+        <span id="brandLogoDef" style="<?php echo $_bl_has ? 'display:none;' : 'display:inline-flex;'; ?>"><?php echo mc_lib_tile_svg(36); /* ★ (2026-11-20 11:04 fix246) 기본 로고 미리보기 = 우드톤 책장 */ ?></span>
       </div>
       <button type="button" class="btn btn-outline-primary btn-sm" id="brandLogoPick"><?php echo __h('adm_branding_pick_img'); ?></button>
       <button type="button" class="btn btn-outline-danger btn-sm" id="brandLogoDel" style="<?php echo $_bl_has ? '' : 'display:none;'; ?>"><?php echo __h('adm_branding_delete_img'); ?></button>

@@ -111,7 +111,7 @@ $_lib_cfg = [
     l.href = 'browse.php?bidx=' + CFG.bidx; l.title = CFG.t.browse; l.setAttribute('aria-label', CFG.t.browse);
     l.style.lineHeight = '0';
     // ★ (2026-10-31) '서재' — 꽂힌 책 아이콘(예전 문서+돋보기는 파일 검색처럼 보였음), 색은 옆 북마크와 같은 회색(index.php CSS)
-    l.innerHTML = '<svg class="mc-ico" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg>';
+    l.innerHTML = <?php echo json_encode(mc_lib_glyph_svg(25, ' class="mc-ico"'), JSON_UNESCAPED_SLASHES | JSON_HEX_TAG); ?>; // ★ (2026-11-20 11:04 fix246) 서재 아이콘 = 우드톤 책장 / ★ (11:22 fix247) 바탕 없이 책 그림만
     shelf.parentNode.insertBefore(l, shelf);
   }
 

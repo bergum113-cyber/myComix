@@ -1338,6 +1338,11 @@ return [
     'adm_cfg_lib_reading_count' => '서재 읽는 중 개수',
     'adm_cfg_lib_recent_count' => '서재 최근 추가 개수',
     'adm_cfg_lib_row_help' => '서재 첫 화면 위 줄에 보일 작품 수, 0 = 안 보임 (기본 12)',
+    'adm_cfg_lib_reading_help' => '서재 위 가로 줄(기본 1쪽만) — 마지막에 읽은 순(다 읽은 작품은 빠짐), 0 = 안 보임 (기본 12)', // ★ (2026-11-20 15:29 fix253)
+    'adm_cfg_lib_rows_all' => '서재 위 줄 보이는 쪽', // ★ (2026-11-20 15:48 fix254)
+    'adm_cfg_lib_rows_all_on' => '2쪽 이후에도 읽는 중·최근 추가 줄 보이기',
+    'adm_cfg_lib_rows_all_help' => '끄면 1쪽에서만 보임(기본). 거르기·검색 중에는 늘 숨김',
+    'adm_cfg_lib_recent_help' => '서재 위 가로 줄(기본 1쪽만) — 서재에 추가된 순(작품의 가장 최근 권 기준), 0 = 안 보임 (기본 12)',
     'fav_shelf_pages' => '페이지',
     'fav_shelf_prev' => '이전 페이지',
     'fav_shelf_next' => '다음 페이지',
@@ -3130,7 +3135,7 @@ return [
     'adm_thumb_grid_file_hint' => '그리드=카드 폭',
     'adm_thumb_grid_shelf_hint' => '그리드=표지 폭',
     'adm_thumb_row_lib' => '서재',
-    'adm_thumb_grid_lib_hint' => '그리드=표지 폭 · 서재·작품 상세(비우면 상세는 즐겨찾기 값)',
+    'adm_thumb_grid_lib_hint' => '그리드=표지 폭 · 서재·작품 상세(비우면 상세는 즐겨찾기 값)', // ★ (2026-11-20 21:13 fix258) fix257 에서 늘린 설명을 되돌림 — 폰 관리자 설정 탭의 이 칸은 줄을 안 바꿔(nowrap) 화면 폭이 390 → 842px 로 넓어졌음. 작품 상세 크기 규칙은 README fix257 참고
     'adm_thumb_row_bm' => '북마크',   // ★ (2026-10-31) 북마크 화면(bookmarks.php)
     'adm_thumb_grid_bm_hint' => '그리드=표지 폭 · 이어 읽기·북마크',
     'adm_thumb_sizes_help' => '빈칸(또는 0) = 기본값 그대로(흐린 숫자가 현재 기본 크기). 목록은 썸네일 폭이며 높이는 폭의 4/3로 자동. 그리드 폴더 40~600·파일/즐겨찾기/서재/북마크 60~600, 목록 30~300 px(화면보다 크면 화면 폭까지만 표시). 오래된 브라우저(iOS 15.3 이하 등)에서는 파일 그리드 폭이 적용되지 않고 기본 크기로 보입니다.',

@@ -85,6 +85,7 @@ $page     = max(1, (int)($_GET['page'] ?? 1));
 $per_page = max(6, min(500, (int)get_app_settings('lib_per_page', 48))); // ★ (2026-11-03 01:28) 관리자 설정(기본 48)
 $lib_reading_n = max(0, min(60, (int)get_app_settings('lib_reading_count', 12))); // 읽는 중 줄(0 = 안 보임)
 $lib_recent_n = max(0, min(60, (int)get_app_settings('lib_recent_count', 12)));   // 최근 추가 줄(0 = 안 보임)
+$lib_rows_all = ((string)get_app_settings('lib_rows_all_pages', '0') === '1');   // ★ (2026-11-20 15:48, 펜닐 요청 — fix254) 관리자 설정 — 켜면 읽는 중·최근 추가 줄을 2쪽 이후에도(기본 끔 = 1쪽에서만)
 $filtered = ($f_author || $f_group || $f_genre || $f_tag || $f_status !== '' || $f_unread || $f_q !== '');
 
 // ★ (2026-11-02 07:52) 서재 첫 화면 계산 결과 저장 — 키 = 사용자·볼 수 없는 폴더 목록·범위·거르기 조건·서재 DB 파일 상태·내 이어 보기 기록 파일 상태·인식 규칙 버전
@@ -367,6 +368,9 @@ if (isset($_GET['lib_terms'])) { header('Content-Type: application/json; charset
 $total_cards = count($cards);
 $pages = max(1, (int)ceil($total_cards / $per_page));
 if ($page > $pages) $page = $pages;
+// ★ (2026-11-20 15:48, fix254) 읽는 중·최근 추가 줄을 보일지 — 거르기·검색 중엔 숨김, 1쪽(관리자 설정을 켜면 모든 쪽). 안 보이면 두 목록을 비워 아래 표지·작가 읽기(DB)에서 빼기(예전엔 2쪽 이후에도 안 보일 작품의 표지를 읽었음)
+$lib_rows_show = !$filtered && ($page === 1 || $lib_rows_all);
+if (!$lib_rows_show) { $reading = []; $recent = []; }
 $page_cards = array_slice($cards, ($page - 1) * $per_page, $per_page, true);
 if ($_rand_order !== null) { $page_cards = []; foreach (array_slice($_rand_order, ($page - 1) * $per_page, $per_page) as $_k) $page_cards[$_k] = $cards[$_k]; } // ★ 랜덤: 섞은 번호에서 이 쪽 것만
 // ★ (2026-10-29) 화면에 보이는 카드만 표지(첫 권 대표 사본)·작가 이름 읽기(이전: 모든 작품을 읽음)
@@ -467,6 +471,7 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
 <?php endif; ?>
 <style>
   body { background:#f5f3ef; }
+  html { touch-action:manipulation; } /* ★ (2026-11-19 11:11, 펜닐 제보 — fix242) 폰에서 빠르게 두 번 누르면 '두 번 탭 확대'로 받아 확대·늦게 열림 — 두 번 탭 확대만 끔(두 손가락 확대·스크롤은 그대로) */
   .lib-wrap { max-width:1200px; margin:0 auto; padding:10px 12px 60px; }
   .lib-top { display:flex; align-items:center; gap:8px; margin-bottom:10px; flex-wrap:wrap; }
   .lib-top h1 { font-size:1.3rem; margin:0; flex:1 1 auto; }
@@ -570,13 +575,17 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
   .sc-grid .sc, .sc-row .sc { position:relative; } /* ★ (2026-11-18 12:41 fix197) 선 기준 — 예전엔 js/mc-seen.js 가 끝에서 넣어 줘 그 전(느린 폰)·스크립트 실패 때 선이 칸이 아닌 곳 기준으로 그려졌음(스크립트 막고 재현: 72칸 모두) */
   @media (max-width:576px) { .sc-grid { column-gap:12px; } } /* fix194: 폰 격자 칸 사이 8px 면 바깥 5px 테두리끼리 2px 겹침 → 12px(선 사이 2px) */
   @media (max-width:576px) { .sc-row { grid-auto-columns:30%; } }
+  /* ★ (2026-11-20 15:48, 펜닐 요청 — fix254) 칸 회색 테두리(::before inset -5px)가 칸 밖 5px 에 그려져 위 거르기 상자 선보다 왼쪽·오른쪽으로 5px 튀어나왔음(폰·태블릿·PC 모두) → 격자 양옆 5px 들임(★ fix256: 폰만 — 아래), 가로 줄은 js/mc-seen.js 가 붙이는 양옆 바깥 여백 -5px 를 0 으로(안쪽 5px 여유는 그대로라 테두리 안 잘림). 목록 보기는 원래 맞음 */
+  @media (max-width:576px) { .sc-grid { padding:0 5px; } } /* ★ (2026-11-20 16:49, fix256) 폰(한 줄 3칸 고정)만 — 태블릿·PC 는 칸 수가 폭으로 정해져 들이면 창 폭이 경계 근처일 때 한 칸 줄었음(PC 577~1300px 중 17개 폭, 예: 724px 5 → 4칸). 칸 수를 지키려 그대로(선이 칸 밖 5px). 가로 줄은 칸 수와 상관없어 아래 규칙 그대로 */
+  .lib-wrap .sc-row { margin-left:0; margin-right:0; }
   /* ★ (2026-10-29) 카드: 표지·제목 링크 + 작가·장르·태그 링크, 제목 전체 표시(자르지 않음), 권 수는 표지 오른쪽 위 */
   .sc { display:block; min-width:0; }
   .sc a { text-decoration:none !important; }
   .sc-cover { position:relative; display:block; width:100%; aspect-ratio:3/4; border-radius:4px; overflow:hidden; background:#ddd; box-shadow:0 5px 10px -4px rgba(0,0,0,.45); }
   .sc-cover img { width:100%; height:100%; object-fit:cover; display:block; }
   /* ★ (2026-11-13 15:17 fix145) 표지는 처음부터 잘리지 않게(contain) + 옅은 회색 바탕 — 전엔 그림이 받아진 뒤 js/mc-thumb-fit.js 가 바꿔서, 뒤로가기로 다시 열릴 때 잘린 표지가 먼저 보였다가 바뀌었음(두 번 뜨는 느낌). 색은 mc-thumb-fit.js 와 같음 */
-  .sc-cover > img { object-fit:contain; }
+  .sc-cover > img { object-fit:cover; } /* ★ (2026-11-20 14:56, 펜닐 요청 — fix251 시안 C) 표지가 칸을 꽉 채움(cover) + 둥글기 6px 통일 — contain 이면 비율이 3:4 가 아닌 표지는 회색 띠가 생기고 그림 모서리가 각져 둥글지 않아 보였음(가장자리가 조금 잘림) */
+  .sc-cover { border-radius:6px; }
   .sc-cover { background:#eceef1; }
   html.dark-mode .sc-cover, [data-theme="dark"] .sc-cover { background:#2b2e33; }
   .sc-count { position:absolute; right:4px; top:4px; background:rgba(0,0,0,.62); color:#fff; font-size:.72rem; line-height:1.5; border-radius:3px; padding:0 5px; }
@@ -662,6 +671,7 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
     .lib-top { float:left; margin:0 6px 0 0; }
     .lib-top h1 { display:none; }
     .lib-top #libBack { width:34px; height:32px; padding:0; font-size:0; display:inline-flex; align-items:center; justify-content:center; border-radius:16px; }
+    .lib-top #libBack > svg { display:none; } /* ★ (2026-11-20 14:38, 펜닐 제보 — fix249) 폰 동그라미 뒤로가기: 안의 ← 그림(mc-icons.js 가 바꾼 svg)은 글자 크기 0 이라 크기만 0 이고 overflow:visible — 아이폰에서는 크기 0 svg 의 그림이 원래 크기로 그려져 동그라미 오른쪽 아래에 ← 가 보였음(크롬 계열은 안 그림). 숨김 */
     .lib-top #libBack::before { content:""; width:18px; height:18px; background:currentColor; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
     .lib-wrap .mc-shelf-nav { flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; margin-bottom:8px; }
     .lib-wrap .mc-shelf-nav::-webkit-scrollbar { display:none; }
@@ -705,6 +715,8 @@ if (!headers_sent()) header('Server-Timing: app;desc="browse";dur=' . round((mic
   .dark-mode .lib-view-btn.active, [data-theme="dark"] .lib-view-btn.active { background:#3a3a3a; color:#eee; }
   #scrollTopBtn { position:fixed; bottom:90px; right:20px; z-index:9999; font-size:18px; background-color:rgba(0,0,0,.3); color:#fff; border:none; border-radius:50%; width:40px; height:40px; padding:0; cursor:pointer; outline:none; display:flex; align-items:center; justify-content:center; }
   #scrollTopBtn:hover { background-color:rgba(0,0,0,.5); }
+  /* ★ (2026-11-20 16:25, 펜닐 요청 — fix255) 썸네일과 테두리 사이 여백을 폴더 목록 파일 카드(그리드: 테두리 1px 안쪽 4px)와 같게 — 그리드·목록 모두 4px — 서재 목록 보기 칸 안 여백 8 → 4px(그리드·가로 줄은 원래 4px) */
+  .sc-list .sc { padding:4px; }
 </style>
 <?php // ★ (2026-10-31) 관리자 '라이브러리' 썸네일 크기 — 값이 있을 때만 출력(없으면 기존 화면 그대로). 정수 px만 들어감
 $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('lib') : ''; if ($_mc_thumb_css !== ''): ?>
@@ -716,7 +728,7 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
 <div class="lib-wrap">
   <div class="lib-top">
     <a id="libBack" class="btn btn-sm btn-outline-secondary" href="index.php<?php echo $bidx_query; ?>">← <?php echo __h('fav_shelf_back'); ?></a>
-    <h1 class="lib-h1"><?php // ★ (2026-10-31) '서재' — 꽂힌 책 아이콘(예전 🔎) ?><svg class="mc-ico" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg> <?php echo __h('lib_browse'); ?></h1>
+    <h1 class="lib-h1"><?php // ★ (2026-10-31) '서재' — 꽂힌 책 아이콘(예전 🔎) ?><?php echo mc_lib_glyph_svg(23, ' class="mc-ico"'); /* ★ (2026-11-20 11:04 fix246) 서재 아이콘 = 우드톤 책장 / ★ (11:22 fix247) 바탕 없이 책 그림만 */ ?> <?php echo __h('lib_browse'); ?></h1>
     <?php // ★ (2026-11-03 01:31) 즐겨찾기 버튼은 아래 서재·즐겨찾기·북마크 이동 줄로 옮김 ?>
   </div>
 <?php echo mc_shelf_nav('lib', $bidx_query); // ★ (2026-11-03 01:31) 서재·즐겨찾기·북마크 이동 ?>
@@ -882,10 +894,10 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('l
   </div>
   <?php endif; ?>
 
-  <?php if (!$filtered && $reading): ?>
+  <?php if ($lib_rows_show && $reading): /* ★ (2026-11-20 15:29, 펜닐 요청 — fix253) '최근 추가' 와 같이 1쪽에서만 — 예전엔 읽는 중만 모든 쪽에 보였음(원본부터, 관리자 설명은 '첫 화면 위 줄') / ★ (2026-11-20 15:48 fix254) 조건은 위 $lib_rows_show(관리자 설정으로 모든 쪽) */ ?>
   <div class="lib-sec"><h2>📖 <?php echo __h('lib_reading'); ?></h2><div class="sc-row"><?php foreach ($reading as $c) lib_card($c, true); ?></div></div>
   <?php endif; ?>
-  <?php if (!$filtered && $recent && $page === 1): ?>
+  <?php if ($lib_rows_show && $recent): /* fix254 */ ?>
   <div class="lib-sec"><h2>🆕 <?php echo __h('lib_recent_added'); ?></h2><div class="sc-row"><?php foreach ($recent as $c) lib_card($c, true); ?></div></div>
   <?php endif; ?>
 

@@ -184,6 +184,7 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
 <?php endif; ?>
 <style>
   body { background:#f5f3ef; }
+  html { touch-action:manipulation; } /* ★ (2026-11-19 11:11, 펜닐 제보 — fix242) 폰에서 권을 빠르게 두 번 누르면(고르기→열기) 브라우저가 '두 번 탭 확대'로 받아 화면이 확대되거나 늦게 열렸음 — 두 번 탭 확대만 끔(두 손가락 확대·스크롤은 그대로) */
   .lib-wrap { max-width:1200px; margin:0 auto; padding:10px 12px 60px; }
   .lib-top { display:flex; align-items:center; gap:8px; margin-bottom:12px; flex-wrap:wrap; }
   .lib-top .spacer { flex:1 1 auto; }
@@ -276,10 +277,15 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   .sr-same { margin-top:26px; }
   .sr-same h2 { font-size:1.1rem; margin:0 0 10px; }
   .sr-same-row { display:grid; grid-template-columns:repeat(auto-fill, minmax(110px, 1fr)); gap:14px 12px; }
+  .sr-same-row { grid-template-columns:repeat(auto-fill, minmax(120px, 1fr)); gap:16px 12px; } /* ★ (2026-11-20 20:55, 펜닐 요청 — fix257) 표지 크기 설정이 없을 때도 권 그리드(.vols-grid 기본 120px~·간격 16·12)와 같은 칸 */
+  /* ★ (2026-11-20 15:48, 펜닐 요청 — fix254) 그리드 권·같은 작가 칸 회색 테두리(inset -3px)가 상세 칸 선보다 3px 튀어나오던 것 — 폰·태블릿(fix250)에 이어 PC 도. ★ (2026-11-20 16:49 fix256 주석) PC 들임은 fix255·fix256 에서 되돌림(아래) — PC 칸 수가 줄었음. 폰·태블릿의 같은 작가 가로 줄은 아래 규칙(안쪽 3px 여유)이 덮어씀 */
+  #vols.vols-grid { padding:0 3px; }
+  .sr-same-row { padding-left:3px; padding-right:3px; }
   .sr-same-it { color:inherit; text-decoration:none !important; display:block; min-width:0; }
   .sr-same-it .vol-cover { width:100%; aspect-ratio:3/4; border-radius:3px; overflow:hidden; background:#ddd; box-shadow:0 4px 8px -3px rgba(0,0,0,.4); }
   /* ★ (2026-11-13 15:17 fix145) 표지는 처음부터 잘리지 않게(contain) + 옅은 회색 바탕 — 전엔 그림이 받아진 뒤 js/mc-thumb-fit.js 가 바꿔서 잘린 표지가 먼저 보였다가 바뀌었음. 색은 mc-thumb-fit.js 와 같음 */
-  .sr-cover > img, .vol-cover > img { object-fit:contain; }
+  .sr-cover > img, .vol-cover > img { object-fit:cover; } /* ★ (2026-11-20 14:56, 펜닐 요청 — fix251 시안 C) 표지가 칸을 꽉 채움(cover) + 둥글기 6px 통일 — contain 이면 비율이 3:4 가 아닌 표지는 회색 띠가 생기고 그림 모서리가 각져 둥글지 않아 보였음(가장자리가 조금 잘림) */
+  .sr-cover, .vols-grid .vol-cover, .vols-list .vol-cover, .sr-same-it .vol-cover { border-radius:6px; }
   .sr-cover, .vols-grid .vol-cover, .vols-list .vol-cover, .sr-same-it .vol-cover { background:#eceef1; }
   html.dark-mode .sr-cover, html.dark-mode .vols-grid .vol-cover, html.dark-mode .vols-list .vol-cover, html.dark-mode .sr-same-it .vol-cover,
   [data-theme="dark"] .sr-cover, [data-theme="dark"] .vols-grid .vol-cover, [data-theme="dark"] .vols-list .vol-cover, [data-theme="dark"] .sr-same-it .vol-cover { background:#2b2e33; }
@@ -310,6 +316,67 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   /* 다크모드 */
   .dark-mode body, [data-theme="dark"] body, body.dark-mode { background:#121212 !important; }
   .dark-mode .sr-head, [data-theme="dark"] .sr-head { background:#1e1e1e; box-shadow:none; }
+  /* ★ (2026-11-19 10:51, 펜닐 요청 — fix241 시안 2) 상세 칸 줄이기 — 상세가 화면의 약 40% 안에 들도록 화면 높이에 맞춰 표지 폭을 정함(예전 크기보다 커지지는 않음: 보통 170px·넓은 화면 240px·폰 세로 150px 이 상한)
+     폰 세로: 표지를 왼쪽, 제목·정보를 오른쪽(예전엔 위아래로 쌓여 화면의 약 68%) / 폰 가로: 표지 80px + 정보 줄을 옆으로 이어 붙임(예전 약 95%)
+     svh 를 모르는 옛 브라우저는 vh 줄을 씀 */
+  .sr-cover { flex:0 0 auto; width:clamp(90px, calc((40vh - 70px) * .75), 170px); width:clamp(90px, calc((40svh - 70px) * .75), 170px); }
+  @media (min-width:992px) { .sr-cover { width:clamp(90px, calc((40vh - 70px) * .75), 240px); width:clamp(90px, calc((40svh - 70px) * .75), 240px); } }
+  @media (max-width:576px) {
+    .sr-head { flex-direction:row; align-items:flex-start; gap:14px; padding:12px; }
+    :root { --sr-hw:clamp(90px, min(calc((40vh - 70px) * .75), 30vw), 150px); } /* ★ (2026-11-20 06:51, 펜닐 요청 — fix245) 상세 표지 폭을 변수로 — 아래 도서 목록·같은 작가 크기가 이 값을 따름 */
+    @supports (height:1svh) { :root { --sr-hw:clamp(90px, min(calc((40svh - 70px) * .75), 30vw), 150px); } }
+    .sr-cover { width:var(--sr-hw); }
+    .sr-info h1 { font-size:1.1rem; text-align:left; margin:0 0 4px; line-height:1.3; }
+    .sr-meta, .sr-pick { text-align:left; font-size:.82rem; margin-bottom:4px; }
+    .sr-actions { gap:4px; }
+    .sr-actions .btn { padding:.22rem .5rem; font-size:.82rem; }
+  }
+  @media (orientation:landscape) and (max-height:500px) and (pointer:coarse) {
+    .sr-head { gap:14px; padding:10px 12px; }
+    :root { --sr-hw:112px; } /* ★ (2026-11-20 06:51, 펜닐 요청 — fix245) 80 → 112px — 80px 이면 도서 목록(표지 크기 설정 ~150px)·같은 작가(~115px)보다 작아 상세가 제일 작게 보였음 */
+    .sr-cover { width:var(--sr-hw); }
+    .sr-info { display:flex; flex-wrap:wrap; align-items:center; column-gap:10px; row-gap:5px; }
+    .sr-info h1 { flex:1 0 100%; font-size:1.15rem; margin:0; }
+    .sr-meta, .sr-pick { margin:0; font-size:.85rem; }
+    .sr-tbl { margin:0; }
+    .sr-tbl:has(dt:nth-of-type(2)) { flex:1 0 100%; } /* 작가·장르·태그 등 두 줄 이상이면 옆에 붙이지 않고 한 줄 통째로(옆에 붙으면 '1권 · 읽음' 이 표 가운데 떠 보였음) */
+    .sr-desc { flex:1 0 100%; margin:0; max-height:3.2em; }
+    .sr-actions { flex:1 0 100%; margin:2px 0 0; }
+  }
+  /* ★ (2026-11-20 06:51~06:57, 펜닐 요청 — fix245) 폰(세로·가로) 작품 상세: 상세 표지가 제일 크고, 도서 목록(그리드·목록)과 같은 작가 표지는 같은 크기
+     예전엔 도서 목록이 관리자 '표지 크기' 설정(서재와 같은 값)을 그대로 써서 상세보다 크거나(그리드 150px), 목록은 60px 로 작고, 같은 작가는 따로(96~122px)라 셋 비율이 제각각이었음
+     서재 목록·태블릿·PC 는 그대로(설정값). 설정 CSS(body .vols-grid … !important)보다 앞서도록 html body 로 */
+  @media (max-width:576px), (orientation:landscape) and (max-height:500px) and (pointer:coarse) {
+    /* 한 줄 칸 수(--sr-n)를 정하고 도서 목록 그리드·목록 표지·같은 작가가 모두 같은 폭 = (줄 폭 - 간격) ÷ 칸 수 → 줄을 꽉 채우면서 셋이 같은 크기, 상세 표지(약 1.2~1.4배)가 제일 큼
+       세로 4칸(390폭 약 84px · 상세 117) / 가로 8칸(844폭 약 94px · 상세 112), 가로 880px 넘으면 9칸 */
+    :root { --sr-n:4; }
+    #vols, .sr-same-row { container-type:inline-size; }
+    html body .vols-grid { grid-template-columns:repeat(var(--sr-n), minmax(0, 1fr)) !important; gap:12px 8px; }
+    /* ★ (2026-11-20 14:43, 펜닐 제보 — fix250) 그리드 권 회색 테두리(::before inset -3px)가 칸 밖 3px 에 그려져 상세 칸·목록 보기 선보다 왼쪽·오른쪽으로 3px 튀어나왔음 → 줄 양옆 3px 들여 선 맞춤 — ★ (fix254) 이 규칙은 위 모든 화면 규칙으로 옮김 */
+    html body .vols-list .vol-cover { flex:0 0 calc((100cqw - 6px - (var(--sr-n) - 1) * 8px) / var(--sr-n)) !important; width:calc((100cqw - 6px - (var(--sr-n) - 1) * 8px) / var(--sr-n)) !important; height:calc((100cqw - 6px - (var(--sr-n) - 1) * 8px) / var(--sr-n) * 4 / 3) !important; } /* fix250: 그리드·같은 작가와 같은 폭(줄 폭 - 6px) 기준 */
+    .sr-same-row { display:flex; overflow-x:auto; gap:8px; padding:3px 3px 9px; margin:-3px 0 0; -webkit-overflow-scrolling:touch; } /* ★ (2026-11-20 14:45, fix250) 양옆 바깥 여백 -3px → 0: 테두리가 상세 칸·도서 목록 선보다 3px 튀어나왔음. 도서 목록 그리드와 같은 폭(줄 폭 - 6px)이 되어 권과 같은 작가 표지 크기도 계속 같음 */
+    .sr-same-it { flex:0 0 calc((100cqw - (var(--sr-n) - 1) * 8px) / var(--sr-n)); }
+  }
+  @media (orientation:landscape) and (max-height:500px) and (pointer:coarse) { :root { --sr-n:8; } }
+  @media (orientation:landscape) and (max-height:500px) and (pointer:coarse) and (min-width:880px) { :root { --sr-n:9; } }
+  /* ★ (2026-11-20 13:37, 펜닐 요청 — fix248 시안2 '상세 더 크게') 폰 규칙(상세 표지가 제일 크고 도서 목록 그리드·목록 표지와 같은 작가 표지는 같은 크기)을 태블릿(터치 화면, 폭 577px 이상·높이 501px 이상)에도 — 예전엔 태블릿은 설정값이라 권 150px·같은 작가 115~123px 로 서로 달랐음. PC(마우스)는 그대로 */
+  @media (min-width:577px) and (min-height:501px) and (pointer:coarse) {
+    :root { --sr-n:6; }
+    #vols, .sr-same-row { container-type:inline-size; }
+    html body .vols-grid { grid-template-columns:repeat(var(--sr-n), minmax(0, 1fr)) !important; gap:14px 10px; }
+    html body .vols-list .vol-cover { flex:0 0 calc((100cqw - 6px - (var(--sr-n) - 1) * 10px) / var(--sr-n)) !important; width:calc((100cqw - 6px - (var(--sr-n) - 1) * 10px) / var(--sr-n)) !important; height:calc((100cqw - 6px - (var(--sr-n) - 1) * 10px) / var(--sr-n) * 4 / 3) !important; } /* fix250: 그리드·같은 작가와 같은 폭(줄 폭 - 6px) 기준 */
+    .sr-same-row { display:flex; overflow-x:auto; gap:10px; padding:3px 3px 9px; margin:-3px 0 0; -webkit-overflow-scrolling:touch; } /* fix250 같은 이유(태블릿) */
+    .sr-same-it { flex:0 0 calc((100cqw - (var(--sr-n) - 1) * 10px) / var(--sr-n)); }
+  }
+  @media (min-width:577px) and (min-height:501px) and (pointer:coarse) and (orientation:landscape) { :root { --sr-n:8; } }
+  /* ★ (2026-11-20 13:37 fix248 시안2) 폰 상세 표지 키움 — 세로 110px~170px(화면 높이 45%·폭 36vw 안), 가로 130px */
+  @media (max-width:576px) { :root { --sr-hw:clamp(110px, min(calc((45vh - 70px) * .75), 36vw), 170px); } @supports (height:1svh) { :root { --sr-hw:clamp(110px, min(calc((45svh - 70px) * .75), 36vw), 170px); } } }
+  @media (orientation:landscape) and (max-height:500px) and (pointer:coarse) { :root { --sr-hw:130px; } }
+  /* ★ (2026-11-19 08:08, 펜닐 요청 — fix235) 위 단추 줄 + 상세 정보 고정, 아래(도서 목록·같은 작가)만 스크롤. 폰처럼 화면이 작으면(상세가 화면을 거의 다 차지) 예전대로 같이 스크롤 */
+  /* ★ (2026-11-19 08:13, 펜닐 요청 — fix236) 폰 세로도 고정. 높이 500px 이하(폰 가로·아주 낮은 창)만 예전대로 같이 스크롤 — 예전 조건 (min-width:577px) and (min-height:600px) */
+  /* ★ (2026-11-19 08:14, 펜닐 요청 — fix237) 화면 높이 조건(예전 @media (min-height:501px)) 대신, 고정할 부분이 화면에 다 들어가고 아래 목록 자리(150px → fix238: 도서 목록 1.5권)가 남을 때만 고정 — 아래 스크립트가 .is-on 을 붙였다 뗌(돌릴 때·창 크기·고른 권이 바뀔 때 다시 잼) */
+  .sr-fix.is-on { position:sticky; top:0; z-index:20; background:#f5f3ef; margin:-10px -12px -12px; padding:10px 12px 12px; } /* 아래 12px 바탕 띠: 고정됐을 때 목록이 상세 바로 밑에 붙어 보이지 않게(바깥 여백 -12px 로 배치는 예전 그대로) */
+  .dark-mode .sr-fix.is-on, [data-theme="dark"] .sr-fix.is-on { background:#121212; }
   .dark-mode .sr-desc, [data-theme="dark"] .sr-desc { color:#ccc; }
   .dark-mode .sr-tbl dt, [data-theme="dark"] .sr-tbl dt { color:#aaa; }
   .dark-mode .chip-author, [data-theme="dark"] .chip-author { background:#1a2a45; border-color:#34507f; color:#9ec1ff !important; }
@@ -329,6 +396,32 @@ if (!headers_sent()) header('Server-Timing: app;desc="series";dur=' . round((mic
   .dark-mode .lib-view-btn.active, [data-theme="dark"] .lib-view-btn.active { background:#3a3a3a; color:#eee; }
   #scrollTopBtn { position:fixed; bottom:90px; right:20px; z-index:9999; font-size:18px; background-color:rgba(0,0,0,.3); color:#fff; border:none; border-radius:50%; width:40px; height:40px; padding:0; cursor:pointer; outline:none; display:flex; align-items:center; justify-content:center; }
   #scrollTopBtn:hover { background-color:rgba(0,0,0,.5); }
+  /* ★ (2026-11-20 16:25, 펜닐 요청 — fix255) 썸네일과 테두리 사이 여백을 폴더 목록 파일 카드(그리드: 테두리 1px 안쪽 4px)와 같게 — 그리드·목록 모두 4px
+     작품 상세: 그리드 권·같은 작가는 회색 선이 표지 밖 3px(여백 2px) → 5px(여백 4px, 서재와 같음 · 모서리 7px). 본 항목·고른 권 주황 선도 같은 자리
+     선이 5px 나가므로 칸 사이 가로 간격 8·10px → 12px(서재 fix194 와 같음 — 이웃 선끼리 겹치지 않게), 줄 양옆 들임 3 → 5px(선 맞춤 — fix255·256 은 폰·태블릿만, ★ fix257 부터 PC 도)
+     폰·태블릿: 권(그리드·목록 표지)·같은 작가 표지가 계속 같은 크기가 되도록 폭 계산도 같은 값으로 / 목록 보기 칸 안 여백 8 → 4px */
+  .vols-grid .vol::before, .sr-same-it::before { inset:-5px; border-radius:7px; }
+  .vols-grid .vol.is-pick::before { inset:-5px; border-radius:7px; }
+  .vols-grid .vol.mc-viewed::after, .sr-same .sr-same-row .sr-same-it.mc-viewed::after { inset:-5px; border-radius:7px; }
+  @media (hover:hover) and (pointer:fine) { .vols-grid .vol:hover::after, .sr-same .sr-same-row .sr-same-it:hover::after { inset:-5px; border-radius:7px; } }
+  #vols.vols-grid { padding:0 5px; } /* ★ (2026-11-20 20:55, 펜닐 요청 — fix257) PC 도 다시 양옆 5px 들여 상세 칸 선과 맞춤(관리자 표지 크기 135px 고정 칸이면 1176px 줄에 8칸 그대로). 아래 fix255 설명은 기록 — 표지 크기 설정이 없으면(최소 120px 늘어나는 칸) 1200px 이상에서 9 → 8칸 / fix255: PC 는 양옆 들임 없음 — fix254 의 PC 3px 들임 때문에 기본 표지 설정(최소 120px)에서 한 줄 9칸이 8칸이 됐음(줄 폭 1176px = 9칸이 딱 맞는 폭). 칸 수를 지키려 PC 는 예전처럼(선이 칸 밖에 나옴), 칸 수가 정해진 폰·태블릿만 아래에서 5px 들임 */
+  /* [기록 — ★ fix257 에서 PC 도 다시 들임(아래 5px)] .sr-same-row 양옆 들임은 폰·태블릿(아래, 한 줄 칸 수 고정)만 — ★ (2026-11-20 16:49, fix256) PC 같은 작가 격자도 들이면 창 폭이 경계 근처일 때 한 칸 줄었음(예: 622px 5 → 4칸). PC 는 예전처럼 들임 없음 */
+  .sr-same-row { padding-left:5px; padding-right:5px; } /* ★ (2026-11-20 20:55 fix257) PC 도 양옆 5px(권 그리드와 같은 줄 폭 → 같은 칸 수·같은 크기) */
+  .vols-list .vol { padding:4px; }
+  @media (max-width:576px), (orientation:landscape) and (max-height:500px) and (pointer:coarse) {
+    #vols.vols-grid { padding:0 5px; }
+    html body .vols-grid { gap:12px 12px; }
+    html body .vols-list .vol-cover { flex:0 0 calc((100cqw - 10px - (var(--sr-n) - 1) * 12px) / var(--sr-n)) !important; width:calc((100cqw - 10px - (var(--sr-n) - 1) * 12px) / var(--sr-n)) !important; height:calc((100cqw - 10px - (var(--sr-n) - 1) * 12px) / var(--sr-n) * 4 / 3) !important; }
+    .sr-same-row { gap:12px; padding:5px 5px 9px; margin:-5px 0 0; }
+    .sr-same-it { flex:0 0 calc((100cqw - (var(--sr-n) - 1) * 12px) / var(--sr-n)); }
+  }
+  @media (min-width:577px) and (min-height:501px) and (pointer:coarse) {
+    #vols.vols-grid { padding:0 5px; }
+    html body .vols-grid { gap:14px 12px; }
+    html body .vols-list .vol-cover { flex:0 0 calc((100cqw - 10px - (var(--sr-n) - 1) * 12px) / var(--sr-n)) !important; width:calc((100cqw - 10px - (var(--sr-n) - 1) * 12px) / var(--sr-n)) !important; height:calc((100cqw - 10px - (var(--sr-n) - 1) * 12px) / var(--sr-n) * 4 / 3) !important; }
+    .sr-same-row { gap:12px; padding:5px 5px 9px; margin:-5px 0 0; }
+    .sr-same-it { flex:0 0 calc((100cqw - (var(--sr-n) - 1) * 12px) / var(--sr-n)); }
+  }
 </style>
 <?php // ★ (2026-10-31) 관리자 '라이브러리' 썸네일 크기(없으면 예전처럼 '즐겨찾기 책장' 값) — 정수 px만 들어감
 $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('series') : ''; if ($_mc_thumb_css !== ''): ?>
@@ -338,9 +431,10 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
 </head>
 <body>
 <div class="lib-wrap">
+<?php if ($db && $series): ?><div class="sr-fix"><?php endif; // ★ (2026-11-19 08:08, 펜닐 요청 — fix235) 위 단추 줄 + 상세 정보를 위에 고정(아래 목록만 스크롤) ?>
   <div class="lib-top">
     <a id="libBack" class="btn btn-sm btn-outline-secondary" href="browse.php<?php echo $bidx_query; /* ★ (2026-11-12 23:11 fix132) 기본 = 서재(들어온 목록을 알면 mc_up_back_js 가 그 목록으로 바꿈) */ ?>">← <?php echo __h('fav_shelf_back'); ?></a>
-    <a class="btn btn-sm btn-outline-secondary" href="browse.php<?php echo $bidx_query; ?>"><svg class="mc-ico" width="15" height="15" style="vertical-align:-2px" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg> <?php echo __h('lib_browse'); ?></a><?php // ★ (2026-11-04 00:29) 서재 아이콘(다른 화면과 같게, 예전 🔎) / ★ (2026-11-04 09:40) 📚 이모지는 다른 그림(세로줄 넷)으로 바뀌어 browse 서재 제목과 같은 '꽂힌 책' 선 그림으로 ?>
+    <a class="btn btn-sm btn-outline-secondary" href="browse.php<?php echo $bidx_query; ?>"><?php echo mc_lib_glyph_svg(16, ' style="vertical-align:-3px"'); /* ★ (2026-11-20 11:04 fix246) 서재 아이콘 = 우드톤 책장 / ★ (11:22 fix247) 바탕 없이 책 그림만 */ ?> <?php echo __h('lib_browse'); ?></a><?php // ★ (2026-11-04 00:29) 서재 아이콘(다른 화면과 같게, 예전 🔎) / ★ (2026-11-04 09:40) 📚 이모지는 다른 그림(세로줄 넷)으로 바뀌어 browse 서재 제목과 같은 '꽂힌 책' 선 그림으로 ?>
     <span class="spacer"></span>
   </div>
 
@@ -384,6 +478,44 @@ $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('s
       </div>
     </div>
   </div>
+</div><?php /* fix235 .sr-fix 끝 */ ?>
+<script>
+// ★ (2026-11-19 08:14, 펜닐 요청 — fix237) 고정할 부분(위 단추 줄+상세)이 화면에 다 들어가고 목록 자리 150px 이 남으면 고정, 아니면 예전대로 같이 스크롤
+(function () {
+  var fx = document.querySelector('.sr-fix'); if (!fx) return;
+  var top = fx.querySelector('.lib-top'), hd = fx.querySelector('.sr-head'); if (!top || !hd) return;
+  // ★ (2026-11-19 08:17, 펜닐 요청 — fix238) 남는 자리 150px 고정값 → 도서 목록이 1.5권(그리드는 1.5줄) 보일 만큼 남을 때만 고정. 권 한 칸 높이는 지금 보기(그리드·목록)에서 첫 권을 재서 씀
+  // ★ (2026-11-19 08:30, 펜닐 요청 — fix239) 기기·화면 방향·보기에 맞춰 알아서:
+  //   목록 보기(한 줄에 1권) → 1.5권 자리 / 그리드(한 줄에 2권 이상) → 한 줄(표지 다 보이는 2권 이상) 자리. 예전(fix238)은 그리드도 1.5줄이라 한 줄에 3권이 다 보이는 폰 세로 그리드가 고정 안 됐음
+  function room() {
+    var box = document.getElementById('vols'), vs = box ? box.querySelectorAll('a.vol') : [];
+    if (!vs.length) return 150;
+    var r0 = vs[0].getBoundingClientRect(), cols = 1;
+    for (var i = 1; i < vs.length && i < 50; i++) { var r = vs[i].getBoundingClientRect(); if (!r.height) continue; if (Math.abs(r.top - r0.top) > 2) break; cols++; } // 첫 줄에 놓인 권 수
+    var g = parseFloat(getComputedStyle(box).rowGap) || 0;
+    return cols >= 2 ? r0.height + g : (r0.height + g) * 1.5;
+  }
+  //   화면 높이는 주소창이 보일 때 기준(100svh)으로 잼 — 폰에서 스크롤하며 주소창이 숨었다 나타날 때마다 고정이 켜졌다 꺼지며 상세가 튀지 않게(지원 안 하는 브라우저는 innerHeight)
+  var probe = document.createElement('div');
+  probe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:100svh;visibility:hidden;pointer-events:none';
+  document.body.appendChild(probe);
+  function vh() { var p = probe.getBoundingClientRect().height; return p > 0 ? Math.min(p, window.innerHeight) : window.innerHeight; }
+  function chk() {
+    var h = hd.getBoundingClientRect().bottom - top.getBoundingClientRect().top + 22; // 위 10 + 아래 12 바탕 띠
+    var on = h + room() <= vh();
+    fx.classList.toggle('is-on', on);
+    // ★ (2026-11-19 08:38, 점검 3 — fix240) 고정 중엔 화면 맨 위 '가려진 띠'(고정 부분 높이)를 브라우저에 알려 줌 — 키보드 Shift+Tab 으로 위 권으로 갈 때 그 권이 상세 밑에 숨지 않게(fix235 부터 생긴 문제, 원본은 숨지 않음)
+    document.documentElement.style.scrollPaddingTop = on ? Math.ceil(h) + 'px' : '';
+  }
+  function start() {
+    chk();
+    window.addEventListener('resize', chk);
+    window.addEventListener('orientationchange', function () { setTimeout(chk, 200); });
+    if (window.ResizeObserver) { var ro = new ResizeObserver(chk); ro.observe(hd); var box = document.getElementById('vols'); if (box) ro.observe(box); } // 상세 높이·보기 바꾸기(그리드↔목록)·중복 보기 때 다시 잼
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start(); // 도서 목록(#vols)이 이 스크립트 뒤에 있어서
+})();
+</script>
 
   <div class="vol-bar">
     <h2><?php echo __h('lib_volumes'); ?></h2>

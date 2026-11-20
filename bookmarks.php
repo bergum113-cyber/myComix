@@ -210,6 +210,7 @@ $_jsf = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | J
     .bm-head { gap:6px; }
     .bm-head > #bmBack { order:1; flex:0 0 auto; width:34px; height:32px; padding:0; font-size:0; display:inline-flex; align-items:center; justify-content:center; border-radius:16px; }
     .bm-head > #bmBack::before { content:""; width:18px; height:18px; background:currentColor; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
+    .bm-head > #bmBack > svg { display:none; } /* ★ (2026-11-20 14:38, 펜닐 제보 — fix249) 폰 동그라미 뒤로가기: 안의 ← 그림(mc-icons.js 가 바꾼 svg)은 글자 크기 0 이라 크기만 0 이고 overflow:visible — 아이폰에서는 크기 0 svg 의 그림이 원래 크기로 그려져 동그라미 오른쪽 아래에 ← 가 보였음(크롬 계열은 안 그림). 숨김 */
     /* ★ (2026-11-19 01:10, 펜닐 요청 — fix231) 자리가 남으면 한 줄: [←][탭] … [보기] — 좁으면 보기 단추만 둘째 줄 오른쪽 */
     .bm-head > .mc-shelf-nav { order:2; flex:0 1 auto; min-width:0; margin:0; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
     .bm-head > .mc-shelf-nav::-webkit-scrollbar { display:none; }
@@ -271,7 +272,7 @@ $_jsf = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | J
   .bm-list .bm-item.mc-viewed { outline-offset:-1px !important; border-radius:8px !important; }
   @media (hover:hover) and (pointer:fine) { .bm-list .bm-item:hover { outline-offset:-1px; border-radius:8px; } }
   .bm-list .bm-link { display:flex; align-items:flex-start; gap:12px; flex:1 1 auto; min-width:0; }
-  .bm-list .bm-cover { flex:0 0 60px; width:60px; height:80px; aspect-ratio:auto; border-radius:4px; }
+  .bm-list .bm-cover { flex:0 0 60px; width:60px; height:80px; aspect-ratio:auto; border-radius:6px; } /* ★ (2026-11-20 14:56 fix251 시안 C) 4 → 6px — 그리드(6px)와 통일 */
   .bm-list .bm-page { position:static; display:inline-block; margin-top:4px; background:#eef1f4; color:#5f6368; }
   .bm-list .bm-cover .bm-page { display:none; }
   .bm-list .bm-text .bm-page { display:inline-block; }
@@ -316,6 +317,15 @@ $_jsf = JSON_UNESCAPED_UNICODE | JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | J
   .dark-mode .bm-pg, [data-theme="dark"] .bm-pg { background:#1e1e1e; border-color:#444; color:#ccc; }
   .dark-mode .bm-pg.on, [data-theme="dark"] .bm-pg.on { background:#1a73e8; border-color:#1a73e8; color:#fff; }
   .dark-mode .bm-ch, [data-theme="dark"] .bm-ch, .dark-mode .bm-q, [data-theme="dark"] .bm-q { color:#bdc1c6; }
+  /* ★ (2026-11-20 16:25, 펜닐 요청 — fix255) 썸네일과 테두리 사이 여백을 폴더 목록 파일 카드(그리드: 테두리 1px 안쪽 4px)와 같게 — 그리드·목록 모두 4px
+     북마크 그리드: 회색 선 표지 밖 3px(여백 2px) → 5px(여백 4px · 모서리 7px, 서재와 같음), 폰 칸 사이 가로 8 → 12px(이웃 선 안 겹치게). 본 항목 주황 선(js/mc-seen.js outline)도 같은 자리(바깥 3px 띄운 2px = 회색 선 바깥 끝과 같음)
+     목록 보기 칸 안 여백 8 → 4px */
+  .bm-grid .bm-item::before { inset:-5px; border-radius:7px; }
+  .bm-grid .bm-item.mc-viewed { outline-offset:3px !important; border-radius:4px !important; }
+  @media (hover:hover) and (pointer:fine) { .bm-grid .bm-item:hover { outline-offset:3px; } }
+  @media (max-width:576px) { .bm-grid { column-gap:12px; } }
+  @media (max-width:576px) { .bm-grid { padding:0 5px; } } /* fix255: 폰(한 줄 3칸 고정)만 회색 선(바깥 5px)이 위 머리 선보다 튀어나오지 않게. 태블릿·PC 는 칸 수가 폭에 따라 정해져 들이면 한 칸 줄 수 있어(PC 1176px 에서 9 → 8칸 재현) 그대로 */
+  .bm-list .bm-item { padding:4px; }
 </style>
 <?php // ★ (2026-10-31) 관리자 설정 '썸네일 크기' → 북마크 줄 — 값이 있을 때만 출력(없으면 기본 화면 그대로). 정수 px만 들어감
 $_mc_thumb_css = function_exists('mc_thumb_layout_css') ? mc_thumb_layout_css('bm') : '';

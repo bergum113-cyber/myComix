@@ -1586,7 +1586,9 @@ if (get_param('mc_bg', 'string') === '1' && isset($_SESSION['user_id'])) {
 	</script>
 	<script>
 	// ★ (2026-10-29) 목록 보기(☰) 상태를 그리기 전에 적용(깜빡임 방지). 저장소 실패 시 기본(썸네일 그리드)
-	try { if (localStorage.getItem('mcListView') === '1') document.documentElement.classList.add('mc-list-view'); } catch (e) {}
+	// ★ (2026-11-20 22:21, 펜닐 요청 — fix263) fix260(폴더마다 따로 기억)을 되돌림 — 펜닐 의도는 '폴더 화면'과 '파일 화면'(압축·이미지 폴더가 있는 화면)을 따로. 여기서는 폴더 화면 값(mcListView, 예전과 같은 값)을 먼저 적용하고,
+	//   파일이 있는 화면이면 아래 칸 묶음 바로 앞(window.__mcLvKind)에서 파일 화면 값(mcListViewFile — 없으면 mcListView)으로 다시 맞춤(칸을 그리기 전이라 깜빡임 없음). fix260 이 남긴 폴더별 기록(mcListViewDir)은 지움
+	try { if (localStorage.getItem('mcListView') === '1') document.documentElement.classList.add('mc-list-view'); localStorage.removeItem('mcListViewDir'); if (localStorage.getItem('mcListViewFile') === null) localStorage.setItem('mcListViewFile', localStorage.getItem('mcListView') === '1' ? '1' : '0'); /* 처음 한 번 — 파일 화면 값을 지금 값으로 나눠 둠(그 뒤로는 따로) */ } catch (e) {}
 	</script>
 	<script>
 	// ✅ 탭 열기 시 캐시 플래그 초기화 (새 탭/브라우저 재시작 시 실행)
@@ -2781,6 +2783,22 @@ a.badge-danger {
 }
 /* 검색용 css */
 
+/* ★ (2026-11-20 16:25, 펜닐 요청 — fix255) 썸네일과 테두리 사이 여백을 파일 카드 그리드(테두리 1px 안쪽 4px)와 같게
+   - 폴더 카드 그리드: 표지가 안쪽 칸(card-body m-1 p-1) 안이라 여백 8px → 안쪽 칸 바깥 여백(m-1)만 없앰 = 4px(이름 글자도 파일 카드처럼 테두리 안 4px)
+   - 목록 보기(파일·폴더 카드): 왼쪽 6px → 4px(위·아래는 원래 4px) */
+html:not(.mc-list-view) .grid .card.mc-folder-card > .card-body { margin: 0 !important; }
+html.mc-list-view .grid .row > a > .col.mb-3 > .card:has(> .card-img-overlay),
+html.mc-list-view .grid .row > .col.mb-3 > .card:has(> .card-img-overlay) { padding-left: 4px !important; }
+html.mc-list-view .grid .row > a > .col.mb-3 > .card,
+html.mc-list-view .grid .row > .col.mb-3 > .card { padding-left: 4px !important; } /* 폴더 카드 등 — 위 '목록 보기 카드' 규칙(4px 6px)과 같은 선택자 */
+/* ★ (2026-11-20 16:49, 펜닐 요청 — fix256) 폴더 카드 그리드 표지도 파일 카드처럼: 표지 칸을 카드 폭만큼(테두리 안 4px) 채우고, 그림이 모자라는 양옆은 같은 그림을 흐리게 깔아 채움(높이 120px·자르지 않음은 그대로)
+   예전(2026-11-05)엔 그림 모서리를 둥글게 보이려고 그림 칸 폭을 그림 폭에 맞춰 세로 표지면 양옆 여백이 38px(폰)로 파일 카드(4px)와 달랐음
+   아래 스크립트가 그림이 다 받아진 표지에만 .mc-ffit·.mc-fbg 를 붙임 — 스크립트가 없거나 표지가 없는 폴더(빈 그림)는 예전 그대로. 목록 보기는 예전 규칙 그대로(흐린 칸 숨김) */
+html:not(.mc-list-view) .grid .card.mc-folder-card > .card-body.mc-fhost { position: relative; isolation: isolate; }
+html:not(.mc-list-view) .grid .card.mc-folder-card > .card-body > img.mc-ffit { width: 100% !important; min-width: 100% !important; max-width: 100% !important; object-fit: contain !important; background: transparent !important; position: relative; }
+.grid .card.mc-folder-card > .card-body > .mc-fbg { position: absolute; z-index: -1; overflow: hidden; pointer-events: none; }
+.grid .card.mc-folder-card > .card-body > .mc-fbg > img { position: absolute; left: -15%; top: -15%; width: 130%; height: 130%; max-width: none; object-fit: cover; filter: blur(14px) brightness(.85); }
+html.mc-list-view .grid .card.mc-folder-card > .card-body > .mc-fbg { display: none; }
 	</style>
 	<script type="text/javascript">
 function bookmark_toggle() {
@@ -6724,7 +6742,7 @@ if(is_file($_favorites_file) === true){
 <?php // ★ (2026-11-05 23:15) '서재'(작품 탐색) 아이콘을 처음부터 서버가 그림 — 전에는 페이지 끝 스크립트(library_index_inject.php)가 나중에 끼워 넣어 늦게 나타나고 옆 ★·북마크가 밀렸음(펜닐 제보)
       //   같은 조건(그 파일이 있고 SQLite 사용 가능)·같은 모양·주소 — 끼워 넣는 스크립트는 이미 있으면 건너뜀(.mc-lib-browse-link)
 if (is_file(__DIR__ . '/library_index_inject.php') && class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)): ?>
-		<a class="btn btn-sm m-0 p-0 mr-2 align-middle mc-lib-browse-link" href="browse.php?bidx=<?php echo (int)($current_bidx ?? 0); ?>" title="<?php echo __h('lib_browse'); ?>" aria-label="<?php echo __h('lib_browse'); ?>" style="line-height:0;"><svg class="mc-ico" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/></svg></a>
+		<a class="btn btn-sm m-0 p-0 mr-2 align-middle mc-lib-browse-link" href="browse.php?bidx=<?php echo (int)($current_bidx ?? 0); ?>" title="<?php echo __h('lib_browse'); ?>" aria-label="<?php echo __h('lib_browse'); ?>" style="line-height:0;"><?php echo mc_lib_glyph_svg(25, ' class="mc-ico"'); /* ★ (2026-11-20 11:04 fix246) 서재 아이콘 = 우드톤 책장 / ★ (11:22 fix247) 바탕 없이 책 그림만 */ ?></a>
 <?php endif; ?>
 		<a class="btn btn-sm m-0 p-0 mr-2 align-middle mc-fav-shelf-link" href="favorites.php<?php echo $bidx_query; ?>" title="<?php echo __h('fav_shelf_title'); ?>" aria-label="<?php echo __h('fav_shelf_title'); ?>" style="line-height:0;">
 		<?php echo mc_ui_icon('star', 24, 2); // ★ (2026-10-31) '즐겨찾기' — 별(서재 화면 버튼·즐겨찾기 화면 제목과 같은 별), 예전 책장 아이콘은 '서재'와 헷갈렸음 ?>
@@ -7058,6 +7076,13 @@ if ($__rc !== ''):
 <?php endif; ?>
 	</div>
 <?php $_t_cards = microtime(true); // ★ (2026-11-03 10:51) 카드 그리기 시간 재기(아래 '페이지 생성 시간' 주석) ?>
+<script>/* ★ (2026-11-20 22:21, 펜닐 요청 — fix263) 화면 종류 — 이 쪽에 파일 카드(압축·이미지 폴더)가 있으면 '파일 화면', 없으면 '폴더 화면'. 파일 화면은 파일 화면 값(mcListViewFile, 처음엔 예전 값 mcListView)으로. 폴더·파일이 섞인 화면은 파일 화면 값을 모든 카드에 */
+window.__mcLvKind = '<?php echo (isset($file_list) && is_array($file_list) && count($file_list) > 0 && $endview > $startview) ? 'file' : 'folder'; ?>';
+// ★ (2026-11-20 22:34, 펜닐 요청 — fix264) 확인 기록(src/perf 속도 기록을 켰을 때만 — js/mc-ev.js): 열 때 한 번 lv_load, 단추 누를 때 lv_set — 화면 종류·보기·두 저장값·이 쪽 폴더 카드/파일 카드 수
+window.mcLvLog = function (ev) { try { if (!window.mcEvLog) return; var fo = 0, fi = 0, cs = document.querySelectorAll('.grid .card'); for (var i = 0; i < cs.length; i++) { var c = cs[i]; if (c.classList.contains('mc-folder-card') && !c.querySelector(':scope > img.card-img-top')) fo++; else if (c.closest('.col')) fi++; } var g = function (k) { var x = null; try { x = localStorage.getItem(k); } catch (e) {} return x === '1' ? 'l' : (x === '0' ? 'g' : '-'); }; var dir = ''; try { dir = new URLSearchParams(location.search).get('dir') || ''; } catch (e) {} window.mcEvLog(ev, { kind: window.__mcLvKind || '', v: document.documentElement.classList.contains('mc-list-view') ? 'l' : 'g', sf: g('mcListView'), sl: g('mcListViewFile'), fo: fo, fi: fi, dp: dir.split('/').filter(Boolean).length }); } catch (e) {} };
+document.addEventListener('DOMContentLoaded', function () { setTimeout(function () { window.mcLvLog('lv_load'); }, 0); });
+if (window.__mcLvKind === 'file') { try { var __lvf = localStorage.getItem('mcListViewFile'); if (__lvf === null) __lvf = localStorage.getItem('mcListView'); document.documentElement.classList.toggle('mc-list-view', __lvf === '1'); } catch (e) {} }
+</script>
 <div class="grid">
 
 <!-- 루트 폴더용 wrapper (모바일에서 순서 변경) -->
@@ -7271,7 +7296,8 @@ function mcSyncViewToggle() {
 }
 function mcSetListView(on, btn) {
     document.documentElement.classList.toggle('mc-list-view', !!on);
-    try { localStorage.setItem('mcListView', on ? '1' : '0'); } catch (e) {}
+    try { localStorage.setItem(window.__mcLvKind === 'file' ? 'mcListViewFile' : 'mcListView', on ? '1' : '0'); } catch (e) {} // ★ (2026-11-20 22:21 fix263) 지금 화면 종류(폴더 화면·파일 화면)의 값만 — 다른 종류 화면은 그대로
+    try { if (window.mcLvLog) window.mcLvLog('lv_set'); } catch (e) {} // ★ (2026-11-20 22:34 fix264) 기록
     mcSyncViewToggle();
     // 클릭 후 포커스 그림자가 남지 않도록 포커스 해제(키보드 사용 시에는 :focus-visible 테두리만 표시)
     try { if (btn && btn.blur) btn.blur(); } catch (e) {}
@@ -9901,6 +9927,40 @@ document.addEventListener('DOMContentLoaded', function() {
 })();
 </script>
 <script>
+// ★ (2026-11-20 16:49, 펜닐 요청 — fix256) 폴더 카드 그리드 표지: 위 mcThumbFit(파일 카드)과 같은 방식 — 표지 칸을 카드 폭만큼, 남는 양옆은 같은 그림을 흐리게
+//   그림이 다 받아진 뒤에만(늦게 받아지는 표지·나중에 표지가 생겨 주소가 바뀐 폴더도 load 로 같이). 빈 그림(표지 없음)·아주 작은 그림은 건드리지 않음
+//   흐린 칸은 그림 칸 크기·위치를 따라감(ResizeObserver — 목록/그리드 전환·창 크기). 목록 보기에서는 CSS 가 흐린 칸을 숨기고 예전 규칙 그대로
+(function () {
+    var ro = ('ResizeObserver' in window) ? new ResizeObserver(function (es) { es.forEach(function (e) { place(e.target); }); }) : null;
+    function place(im) {
+        var bg = im.__mcFBg; if (!bg) return;
+        bg.style.left = im.offsetLeft + 'px'; bg.style.top = im.offsetTop + 'px';
+        bg.style.width = im.offsetWidth + 'px'; bg.style.height = im.offsetHeight + 'px';
+        try { bg.style.borderRadius = getComputedStyle(im).borderRadius; } catch (e) {}
+    }
+    function fit(im) {
+        if (!im || im.tagName !== 'IMG') return;
+        var body = im.parentElement; if (!body || !body.classList.contains('card-body')) return;
+        var card = body.parentElement; if (!card || !card.classList.contains('mc-folder-card') || !card.closest('.grid')) return;
+        var src = im.currentSrc || im.src || '';
+        if (!src || src.indexOf('data:') === 0 || !(im.naturalWidth >= 64 && im.naturalHeight >= 64)) return;
+        var bg = im.__mcFBg;
+        if (!bg) {
+            bg = document.createElement('div'); bg.className = 'mc-fbg'; bg.setAttribute('aria-hidden', 'true');
+            var b = document.createElement('img'); b.alt = ''; b.decoding = 'async'; bg.appendChild(b);
+            body.insertBefore(bg, im); body.classList.add('mc-fhost'); im.classList.add('mc-ffit');
+            im.__mcFBg = bg; if (ro) ro.observe(im);
+        }
+        var bi = bg.firstChild; if (bi.getAttribute('src') !== src) bi.setAttribute('src', src);
+        place(im);
+    }
+    document.addEventListener('load', function (e) { fit(e.target); }, true);
+    function scan() { document.querySelectorAll('.grid .card.mc-folder-card > .card-body > img').forEach(function (im) { if (im.complete) fit(im); }); }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', scan); else scan();
+    window.addEventListener('load', scan);
+})();
+</script>
+<script>
 // ★ (2026-11-10 13:53, 펜닐 요청 — fix98) 뷰어에서 표지를 바꾸면 목록으로 돌아왔을 때 새로고침 없이 바로 바뀜(즐겨찾기 표시처럼)
 //   뷰어가 localStorage 'mc_cover_bump' = {t: 시각, f: 파일 경로, d: 폴더 경로, k: file|folder|auto} 를 남김 → 이 화면이 그 뒤에 바뀐 것만 그림 주소에 cv=시각을 붙여 다시 받음
 //   새로 연 화면은 서버가 이미 새 주소(v=·cv=)를 주므로 건드리지 않음(이 화면을 그린 뒤에 바뀐 것만)
@@ -11146,7 +11206,10 @@ function openUploadModal() {
     if (!modal) {
         var html = '<div id="uploadModal" class="modal fade" tabindex="-1">';
         // ★ (2026-11-18 15:16, 펜닐 요청 — fix204) 창이 화면보다 크면 창 안에서만 스크롤(아래 단추는 늘 보임) · 파일을 담으면 끌어다 놓는 칸을 한 줄로 · 끝나면 결과 화면
-        html += '<style>#dropZone.dz-small{padding:10px!important;margin-bottom:10px!important}#dropZone.dz-small .dz-big,#uploadModal.up-done #dropZone{display:none!important}'
+        // ★ (2026-11-20 21:52, 펜닐 요청 — fix261) 파일을 담아도 끌어다 놓는 칸을 그대로(폴더 그림·안내 글 — 예전 fix204 는 한 줄로 줄였음) · PC 는 조금 작게(위아래 40 → 28px·그림 48 → 44px), 폰(세로 576px 이하·가로 높이 500px 이하)은 화면 크기에 비례(위아래 화면 높이의 3.2%·그림 짧은 변의 10%, 최소·최대 있음)
+        html += '<style>#dropZone{padding:28px 20px!important}#dropZone .dz-ico{font-size:44px!important;margin-bottom:8px!important}'
+            + '@media (max-width:576px),(max-height:500px){#dropZone{padding:clamp(10px,3.2vh,30px) 14px!important}#dropZone .dz-ico{font-size:clamp(30px,10vmin,44px)!important;margin-bottom:clamp(4px,1vh,8px)!important}}'
+            + '#uploadModal.up-done #dropZone,#uploadModal.up-busy #dropZone{display:none!important}' // ★ (2026-11-20 22:01, 펜닐 요청 — fix262) 올리는 동안(up-busy)에도 놓는 칸 숨김 — 폰 세로에서 창이 너무 길었음(PC·폰 모두). 담기만 했을 때는 보임(fix261), 취소로 대기가 남으면 다시 보임
             + '#fileListTable.up-onlyfail tbody tr[class^="up-st-"]:not(.up-st-error){display:none}</style>';
         html += '<div class="modal-dialog modal-dialog-centered modal-dialog-scrollable modal-lg">';
         html += '<div class="modal-content">';
@@ -11158,7 +11221,7 @@ function openUploadModal() {
         
         // 드래그앤드롭 영역
         html += '<div id="dropZone" style="border:2px dashed #ccc; border-radius:10px; padding:40px; text-align:center; background:#fafafa; color:#212529; cursor:pointer; margin-bottom:15px; transition:all 0.3s;">'; // ★ (2026-11-02 22:17) 글자색 — 다크에서 큰 📁 아이콘이 밝은 바탕 위 밝은 색이라 안 보였음
-        html += '<div class="dz-big" style="font-size:48px; margin-bottom:10px;">📁</div>'; // fix204 dz-big: 파일을 담으면 숨김
+        html += '<div class="dz-big dz-ico" style="font-size:48px; margin-bottom:10px;">📁</div>'; // fix204 dz-big: 파일을 담으면 숨김 → ★ fix261 숨기지 않음(dz-ico: 크기 규칙)
         html += '<div style="font-size:16px; color:#666;">' + i18n.upload_drag + '</div>';
         // ★ (2026-11-18 15:30, 펜닐 요청 — fix205) 따로 있던 [파일 선택]·[폴더 선택] 단추 줄 대신 칸 안 글자 링크 — 칸 아무 데나 누르면 파일 고르기(여러 개), 폴더는 '폴더 선택'(브라우저 고르기 창은 파일·폴더 중 하나만이라)
         //   파일을 담아 칸이 한 줄로 줄어도 남아 계속 더 담을 수 있음 · 폴더 링크는 지원하는 브라우저만(아이폰 숨김)
@@ -11255,12 +11318,15 @@ function openUploadModal() {
         // ★ (2026-11-18 11:27, 펜닐 요청 — fix195) 끝나자마자 닫고 새로고침하면 결과 표가 사라져 실패를 확인할 수 없었음 → 결과는 창에 남기고, 닫을 때 새로고침
         $('#uploadModal').on('hidden.bs.modal', function() { if (uploadNeedReload && !isUploading) { uploadNeedReload = false; location.reload(); } });
     }
+    // ★ (2026-11-20 23:09, 펜닐 요청 — fix265) 올리는 중에 창을 닫았다가 업로드 단추로 다시 열면 아래 초기화가 '올리는 중'을 끄고 목록을 비워 업로드가 조용히 멈췄음(재현: 3개 중 0개 올라감) → 올리는 중이면 진행 화면을 그대로 다시 보여 주기만
+    if (isUploading) { $('#uploadModal').modal({backdrop: 'static', keyboard: true}); return; }
     
     // 초기화
     uploadQueue = [];
     isUploading = false;
     uploadNeedReload = false; // fix195
     mcUpDoneView(false); // fix204
+    try { document.getElementById('uploadModal').classList.remove('up-busy'); } catch (e) {} // fix262 창을 다시 열 때 초기화
     document.getElementById('uploadFiles').value = '';
     document.getElementById('fileListContainer').style.display = 'none';
     document.getElementById('totalProgressArea').style.display = 'none';
@@ -11428,6 +11494,7 @@ async function startUpload() {
     if (uploadQueue.length === 0 || isUploading) return;
     
     isUploading = true;
+    try { document.getElementById('uploadModal').classList.add('up-busy'); } catch (e) {} // fix262 올리는 동안 놓는 칸 숨김
     document.getElementById('uploadBtn').disabled = true;
     document.getElementById('uploadStatusText').style.color = ''; document.getElementById('uploadStatusText').style.fontWeight = ''; // fix195 결과 줄 색 되돌림
     document.getElementById('cancelUploadBtn').style.display = 'inline-block';
@@ -11478,6 +11545,7 @@ async function startUpload() {
     }
     
     isUploading = false;
+    try { document.getElementById('uploadModal').classList.remove('up-busy'); } catch (e) {} // fix262
     renderFileList(); // fix202 끝날 때 한 번 전체 — 취소 뒤 남은 대기 줄의 × 단추가 다시 보이게(예전엔 마지막 파일 뒤 전체를 그리며 보였음)
     
     // 페이지 이탈 방지 해제

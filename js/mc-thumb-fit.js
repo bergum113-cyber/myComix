@@ -31,7 +31,7 @@
         if (!src || !(im.naturalWidth >= 64 && im.naturalHeight >= 64)) return;
         var box = im.parentElement; if (!box) return;
         var plain = false; try { plain = im.matches(PLAIN); } catch (e) {}
-        if (plain) { box.classList.add('mc-tf-plain'); im.classList.add('mc-tf'); return; }   // ★ fix144 서재 — 회색 바탕만
+        if (plain) { box.classList.add('mc-tf-plain'); return; }   // ★ fix144 서재 — 회색 바탕만 / ★ (2026-11-20 14:56, 펜닐 요청 — fix251 시안 C) mc-tf(잘리지 않게 contain) 안 붙임 — 서재 표지는 칸을 꽉 채움(cover, CSS)
         var bg = box.querySelector(':scope > .mc-tf-bg');
         if (!bg) {
             if (getComputedStyle(box).position === 'static') box.style.position = 'relative';

@@ -130,6 +130,7 @@ $_kind_label = ['archive' => '📦', 'epub' => '📖', 'txt' => '📝', 'folder'
     .fav-head { gap:6px; }
     .fav-head > #favBack { order:1; flex:0 0 auto; width:34px; height:32px; padding:0; font-size:0; display:inline-flex; align-items:center; justify-content:center; border-radius:16px; }
     .fav-head > #favBack::before { content:""; width:18px; height:18px; background:currentColor; -webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M15 18l-6-6 6-6'/%3E%3C/svg%3E") center/contain no-repeat; }
+    .fav-head > #favBack > svg { display:none; } /* ★ (2026-11-20 14:38, 펜닐 제보 — fix249) 폰 동그라미 뒤로가기: 안의 ← 그림(mc-icons.js 가 바꾼 svg)은 글자 크기 0 이라 크기만 0 이고 overflow:visible — 아이폰에서는 크기 0 svg 의 그림이 원래 크기로 그려져 동그라미 오른쪽 아래에 ← 가 보였음(크롬 계열은 안 그림). 숨김 */
     /* ★ (2026-11-19 01:10, 펜닐 요청 — fix231) 자리가 남으면 한 줄: [←][탭][⭐ 개수 · 정렬 · 보기] — 좁으면(세로 폰) 개수·정렬·보기 묶음이 통째로 둘째 줄 */
     .fav-head > .mc-shelf-nav { order:2; flex:0 1 auto; min-width:0; margin:0; flex-wrap:nowrap; overflow-x:auto; scrollbar-width:none; }
     .fav-head > .mc-shelf-nav::-webkit-scrollbar { display:none; }
@@ -232,6 +233,7 @@ $_kind_label = ['archive' => '📦', 'epub' => '📖', 'txt' => '📝', 'folder'
   .fav-list .fav-link { display:flex; align-items:flex-start; gap:12px; flex:1 1 auto; min-width:0; color:inherit; text-decoration:none; } /* ★ 제목은 썸네일 맨 위 기준 */
   .fav-list .fav-cover { position:relative; z-index:1; flex:0 0 72px; width:72px; height:96px; background:#3b2412; border-radius:2px 3px 3px 2px; overflow:hidden;
                          box-shadow:4px 0 6px -2px rgba(0,0,0,.55), 0 2px 3px rgba(0,0,0,.4); }
+  .fav-grid .fav-cover, .fav-list .fav-cover { border-radius:2px 6px 6px 2px; } /* ★ (2026-11-20 14:56 fix251 시안 C) 둥글기 키움(예전 2~3px — 거의 각져 보였음) · ★ (14:59, 펜닐 요청 — fix252) 왼쪽은 책등(말린 방식)이라 예전 2px 그대로, 오른쪽만 6px · ★ (2026-11-20 15:48 fix254) 덮여서 안 쓰이던 6px 줄 하나로 합침. 즐겨찾기는 흐린 같은 그림으로 칸을 채우는 방식 그대로 */
   .fav-list .fav-cover::after { content:''; position:absolute; inset:0; pointer-events:none;
                                 background:linear-gradient(90deg, rgba(0,0,0,.35) 0, rgba(255,255,255,.18) 4%, rgba(255,255,255,0) 9%); }
   @media (max-width:576px) { .fav-list .fav-cover { flex-basis:60px; width:60px; height:80px; } }

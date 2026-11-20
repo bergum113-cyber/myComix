@@ -206,17 +206,26 @@
       var sp = old.querySelector('span'); if (sp) sp.textContent = on ? '⭐' : '☆';
     }
   }
+  // ★ (2026-11-19 11:11, 펜닐 제보 — fix242) 폰 망이 느릴 때(책 그림 받는 중) 응답이 늦어 표시가 안 바뀌니 또 누르게 되고, 두 번째 누름이 추가를 다시 취소했음(접속 로그: 1~5초 사이 3번)
+  //   → 누르자마자 표시를 바꾸고, 응답을 기다리는 동안 다시 누르면 요청을 또 보내지 않음. 실패하면 표시를 되돌림
+  var favBusy = false;
   function toggleFav() {
+    if (favBusy) return;
+    favBusy = true;
+    var it0 = $id('mcvFav'), was = !!(it0 && it0.classList.contains('mcv-on'));
+    setFav(!was);
     var xhr = new XMLHttpRequest();
     xhr.open('POST', 'bookmark.php?mode=toggle_favorite', true);
     xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+    xhr.timeout = 20000;
     xhr.onreadystatechange = function () {
       if (xhr.readyState !== 4) return;
+      favBusy = false;
       try {
         var r = JSON.parse(xhr.responseText);
         if (r && r.success) { setFav(!!r.is_favorite); toast(r.message || (r.is_favorite ? T.fav_remove : T.fav_add)); }
-        else if (r && r.error) toast(r.error);
-      } catch (e) {}
+        else { setFav(was); if (r && r.error) toast(r.error); }
+      } catch (e) { setFav(was); }
     };
     xhr.send('file=' + encodeURIComponent(C.favPath) + '&bidx=' + encodeURIComponent(C.bidx));
   }

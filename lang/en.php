@@ -1338,6 +1338,11 @@ Save now?',
     'adm_cfg_lib_reading_count' => 'Library: Reading row',
     'adm_cfg_lib_recent_count' => 'Library: Recently added row',
     'adm_cfg_lib_row_help' => 'How many titles in this row at the top of the Library, 0 = hide (default 12)',
+    'adm_cfg_lib_reading_help' => 'Row at the top of the Library (page 1 by default) — most recently read first (finished titles excluded), 0 = hide (default 12)', // ★ (2026-11-20 15:29 fix253)
+    'adm_cfg_lib_rows_all' => 'Library top rows on', // ★ (2026-11-20 15:48 fix254)
+    'adm_cfg_lib_rows_all_on' => 'Also show Reading / Recently added rows on page 2 and later',
+    'adm_cfg_lib_rows_all_help' => 'Off = page 1 only (default). Always hidden while filtering or searching',
+    'adm_cfg_lib_recent_help' => 'Row at the top of the Library (page 1 by default) — most recently added first (by the newest volume), 0 = hide (default 12)',
     'fav_shelf_pages' => 'Pages',
     'fav_shelf_prev' => 'Previous page',
     'fav_shelf_next' => 'Next page',
@@ -3130,7 +3135,7 @@ Cache tab → Regen stats / Delete folder cache
     'adm_thumb_grid_file_hint' => 'grid = card width',
     'adm_thumb_grid_shelf_hint' => 'grid = cover width',
     'adm_thumb_row_lib' => 'Library',
-    'adm_thumb_grid_lib_hint' => 'grid = cover width · Library & series pages (blank: series uses Favorites values)',
+    'adm_thumb_grid_lib_hint' => 'grid = cover width · Library & series pages (blank: series uses Favorites values)', // ★ (2026-11-20 21:13 fix258) fix257 long hint reverted — widened the phone admin page (nowrap cell)
     'adm_thumb_row_bm' => 'Bookmarks',
     'adm_thumb_grid_bm_hint' => 'grid = cover width · Continue & Bookmarks',
     'adm_thumb_sizes_help' => 'Blank (or 0) keeps the default (the faded number is the current default). List values are thumbnail widths; height is 4/3 of the width. Grid: folders 40-600, files/favorites/library/bookmarks 60-600; list 30-300 px (capped at the screen width). On old browsers (e.g. iOS 15.3 or earlier) the file grid width is not applied and the default is used.',

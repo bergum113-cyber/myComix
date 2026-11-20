@@ -30,6 +30,8 @@ body.mc-adm{background:var(--mc-page);color:var(--mc-tx);padding:var(--mc-top) 0
 .mc-adm-brand{font-family:'Gugi',sans-serif;font-size:1.4rem;line-height:1;min-width:0;overflow:hidden;display:flex}
 .mc-adm-brand .mc-brand{color:var(--mc-top-tx) !important;overflow:hidden;text-overflow:ellipsis}
 .mc-adm-brand .mc-brand > svg,.mc-adm-brand .mc-brand > img{box-sizing:content-box;padding:5px;border-radius:var(--mc-rs);background:var(--mc-acc);color:#fff;width:.7em;height:.7em;margin-right:.2em}
+/* ★ (2026-11-20 11:07, fix246) 기본 로고(우드톤 책장)는 바탕이 있는 아이콘 — 파란 상자를 씌우지 않고 같은 크기로만 */
+.mc-adm-brand .mc-brand > svg.mc-brand-def{padding:0;background:none;border-radius:0;width:1.18em;height:1.18em} /* ★ (2026-11-20 11:22 fix247) 로고 키움 — 첫 화면과 같은 1.18em */
 .mc-adm-brand .mc-brand-txt{overflow:hidden;text-overflow:ellipsis}
 .mc-adm-role{font-size:12.5px;color:var(--mc-top-mut);white-space:nowrap}
 .mc-adm-role small{font-size:11px;color:var(--mc-top-mut);opacity:.8;margin-left:2px}

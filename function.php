@@ -765,13 +765,37 @@ if (!function_exists('load_branding')) {
  * ★ (2026-11-03 22:32) 머리 로고 — FileStation 처럼 [로고 아이콘][로고 문구] (펜닐 요청). 올린 로고 이미지가 있으면 그것, 없으면 기본 로고(서재 아이콘 — ★ 2026-11-03 22:46 색 없이 글자색, 선 굵게)
  *   크기는 감싸는 글자 크기(em)를 따라감(화면별 기존 글자 크기·좁은 화면 줄이기 규칙 그대로). 버전은 부르는 쪽이 옆에 붙임
  */
+if (!function_exists('mc_lib_tile_svg')) {
+    /* ★ (2026-11-20 11:04, 펜닐 요청 — fix246) 서재·로고·파비콘 아이콘 — 우드톤 둥근 사각 바탕 + 넘기는 책장(Material Symbols "auto_stories", Apache-2.0, google/material-design-icons)
+     *   예전: 꽂힌 책 선 아이콘(Lucide library/library-big). $size = 폭·높이(px 숫자 또는 '0.92em' 같은 글자), $attr = 덧붙일 속성(class·style 등) */
+    function mc_lib_tile_svg($size = 24, $attr = '') {
+        $z = is_numeric($size) ? (string)(int)$size : h((string)$size);
+        return '<svg width="' . $z . '" height="' . $z . '" viewBox="0 0 24 24" aria-hidden="true" focusable="false"' . $attr . '>'
+             . '<rect x="1" y="1" width="22" height="22" rx="6" fill="#f6e3c8" style="fill:#f6e3c8;stroke:none"/>' // 색은 style 로도 — 다크 모드 CSS(.dark-mode … svg { fill }) 가 덮지 않게
+             . '<svg x="4.4" y="4.4" width="15.2" height="15.2" viewBox="0 -960 960 960" fill="#8a5a2b"><path style="fill:#8a5a2b;stroke:none" d="M480-160q-48-38-104-59t-116-21q-42 0-82.5 11T100-198q-21 11-40.5-1T40-234v-482q0-11 5.5-21T62-752q46-24 96-36t102-12q58 0 113.5 15T480-740v506q51-33 107-49.5T700-300q36 0 78.5 7t81.5 29v-505q9.89 3.75 19.44 7.87Q889-757 898-752q10 6 16 15.68 6 9.67 6 20.32v482q0 23-19.5 35t-40.5 1q-37-20-77.5-31T700-240q-60 0-116 21t-104 59Zm60-167v-353l260-260v387L540-327Zm-120 63v-439q-34-19-79-28t-81-9q-47 0-87.5 10T100-704.47V-264q35-17 75.5-26.5t85-9.5q44.5 0 84.5 9.5t75 26.5Zm0 0v-439 439Z"/></svg></svg>';
+    }
+}
+if (!function_exists('mc_lib_glyph_svg')) {
+    /* ★ (2026-11-20 11:22, 펜닐 요청 — fix247 1안) 작은 곳(위 막대·탭·단추·서재 제목)용 — 바탕 없이 책 그림만, 옆 ☆·🔖 아이콘과 같은 크기로
+     *   색: 밝은 화면 갈색 #8a5a2b · 다크 #e0b07a · 고른 탭(파란 바탕) 안은 글자색. 색은 path style 의 var 로 — 다크 모드의 svg fill 규칙이 덮지 않게 */
+    function mc_lib_glyph_svg($size = 24, $attr = '') {
+        static $css = false;
+        $z = is_numeric($size) ? (string)(int)$size : h((string)$size);
+        $st = '';
+        if (!$css) { $css = true; $st = '<style>.mc-lib-glyph{--mc-libg:#8a5a2b}.dark-mode .mc-lib-glyph,[data-theme="dark"] .mc-lib-glyph{--mc-libg:#e0b07a}.on > .mc-lib-glyph,.btn-primary .mc-lib-glyph{--mc-libg:currentColor}</style>'; }
+        $cls = 'mc-lib-glyph';
+        if (preg_match('/\sclass="([^"]*)"/', $attr, $m)) { $cls = trim($m[1] . ' ' . $cls); $attr = str_replace($m[0], '', $attr); } // 부르는 쪽 class 와 합침(class 속성이 두 번 생기지 않게)
+        return $st . '<svg class="' . h($cls) . '" width="' . $z . '" height="' . $z . '" viewBox="0 -960 960 960" aria-hidden="true" focusable="false"' . $attr . '>'
+             . '<path style="fill:var(--mc-libg,#8a5a2b);stroke:none" d="M480-160q-48-38-104-59t-116-21q-42 0-82.5 11T100-198q-21 11-40.5-1T40-234v-482q0-11 5.5-21T62-752q46-24 96-36t102-12q58 0 113.5 15T480-740v506q51-33 107-49.5T700-300q36 0 78.5 7t81.5 29v-505q9.89 3.75 19.44 7.87Q889-757 898-752q10 6 16 15.68 6 9.67 6 20.32v482q0 23-19.5 35t-40.5 1q-37-20-77.5-31T700-240q-60 0-116 21t-104 59Zm60-167v-353l260-260v387L540-327Zm-120 63v-439q-34-19-79-28t-81-9q-47 0-87.5 10T100-704.47V-264q35-17 75.5-26.5t85-9.5q44.5 0 84.5 9.5t75 26.5Zm0 0v-439 439Z"/></svg>';
+    }
+}
 if (!function_exists('mc_brand_logo')) {
     function mc_brand_logo($branding, $href, $extra_style = '') {
         $img = (string)($branding['logo_image'] ?? '');
         $txt = (string)($branding['logo_text'] ?? 'myComix');
         $ico = ($img !== '' && file_exists($img))
             ? '<img src="' . h($img) . '" alt="" style="height:.92em;width:auto;max-width:2.4em;object-fit:contain;flex:0 0 auto;">'
-            : '<svg class="mc-brand-def" width="0.92em" height="0.92em" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="flex:0 0 auto;"><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>';
+            : mc_lib_tile_svg('1.18em', ' class="mc-brand-def" style="flex:0 0 auto;"'); // ★ (2026-11-20 11:04 fix246) 기본 로고 아이콘 = 우드톤 책장(예전 꽂힌 책 선) / ★ (2026-11-20 11:22 fix247) 0.92em → 1.18em(바탕 여백 때문에 글자보다 작아 보였음)
         return '<a href="' . h($href) . '" class="logo-link mc-brand" style="display:inline-flex;align-items:center;gap:.2em;text-decoration:none;white-space:nowrap;' . $extra_style . '">' . $ico . '<span class="mc-brand-txt">' . h($txt) . '</span></a>';
     }
 }
@@ -790,10 +814,7 @@ if (!function_exists('mc_favicon_tags')) {
             return '<link rel="icon" href="' . $u . '"><link rel="apple-touch-icon" href="' . $u . '">';
         }
         return '<link rel="icon" type="image/png" sizes="32x32" href="img/logo-default-32.png">'
-             . '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' . rawurlencode(<<<'SVG'
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-1 -1 26 26" fill="none" stroke="#202124" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><style>@media (prefers-color-scheme:dark){*{stroke:#e8eaed}}</style><path d="m16 6 4 14"/><path d="M12 6v14"/><path d="M8 8v12"/><path d="M4 4v16"/></svg>
-SVG
-) . '">'
+             . '<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,' . rawurlencode(str_replace('<svg width="24" height="24" viewBox', '<svg xmlns="http://www.w3.org/2000/svg" viewBox', mc_lib_tile_svg(24))) . '">' // ★ (2026-11-20 11:04 fix246) 파비콘 = 우드톤 책장(바탕이 있어 다크 모드 색 바꿈 필요 없음)
              . '<link rel="apple-touch-icon" href="img/logo-default-180.png">';
     }
 }
@@ -1577,8 +1598,11 @@ if (!function_exists('mc_thumb_layout_css')) {
                 }
             } elseif ($scope === 'series') {
                 // ★ (2026-10-31) 작품 상세(series.php) 권 목록 — 라이브러리 값이 있으면 그 값, 없으면 예전처럼 책장 값(설정해 둔 화면이 바뀌지 않게)
+                // ★ (2026-11-20 20:55, 펜닐 요청 — fix257) 같은 작가의 다른 작품도 도서 목록 그리드와 같은 칸(예전: 설정 없이 110px~ 늘어나는 칸이라 115~120px)
+                // ★ (2026-11-20 21:25, 펜닐 제보 — fix259) 목록 보기 표지는 다시 '목록' 값 — fix257 에서 그리드 값을 따르게 했더니 '서재 목록' 값을 바꿔도 작품 상세 목록이 반응 없었음(서재 전체 작품 목록은 반응). 원래처럼 그리드=그리드 값·목록=목록 값
+                //   폰·태블릿 작품 상세는 series.php 가 화면 비율로 덮어씀(설정 값 안 씀)
                 if ($w = ($t['lib_grid_' . $env] ?: $t['shelf_grid_' . $env])) {
-                    $r .= 'body .vols-grid{grid-template-columns:repeat(auto-fill, min(' . $w . 'px, 100%)) !important;}';
+                    $r .= 'body .vols-grid, body .sr-same-row{grid-template-columns:repeat(auto-fill, min(' . $w . 'px, 100%)) !important;}';
                 }
                 if ($w = ($t['lib_list_' . $env] ?: $t['shelf_list_' . $env])) {
                     $r .= 'body .vols-list .vol-cover{flex:0 0 ' . $w . 'px !important;width:' . $w . 'px !important;height:' . $h43($w) . 'px !important;}';
@@ -1987,7 +2011,7 @@ function mc_shelf_nav($cur, $bidx_query = '') {
     $star = '<path d="M11.525 2.295a.53.53 0 0 1 .95 0l2.31 4.679a2.123 2.123 0 0 0 1.595 1.16l5.166.756a.53.53 0 0 1 .294.904l-3.736 3.638a2.123 2.123 0 0 0-.611 1.878l.882 5.14a.53.53 0 0 1-.771.56l-4.618-2.428a2.122 2.122 0 0 0-1.973 0L6.396 21.01a.53.53 0 0 1-.77-.56l.881-5.139a2.122 2.122 0 0 0-.611-1.879L2.16 9.795a.53.53 0 0 1 .294-.906l5.165-.755a2.122 2.122 0 0 0 1.597-1.16z"/>';
     $tabs = [];
     if (class_exists('PDO') && in_array('sqlite', PDO::getAvailableDrivers(), true)) {
-        $tabs[] = ['lib', 'browse.php', __('lib_browse'), '<rect width="8" height="18" x="3" y="3" rx="1"/><path d="M7 3v18"/><path d="M20.4 18.9c.2.5-.1 1.1-.6 1.3l-1.9.7c-.5.2-1.1-.1-1.3-.6L11.1 5.1c-.2-.5.1-1.1.6-1.3l1.9-.7c.5-.2 1.1.1 1.3.6Z"/>'];
+        $tabs[] = ['lib', 'browse.php', __('lib_browse'), 'TILE']; // ★ (2026-11-20 11:04 fix246) 서재 탭 아이콘 = 우드톤 책장(아래에서 mc_lib_tile_svg 로)
     }
     $tabs[] = ['fav', 'favorites.php', __('fav_shelf_title'), $star];
     $tabs[] = ['bm', 'bookmarks.php', __('index_bookmarks'), '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>'];
@@ -2003,7 +2027,7 @@ function mc_shelf_nav($cur, $bidx_query = '') {
     foreach ($tabs as $t) {
         $on = ($t[0] === $cur);
         $out .= '<a class="t-' . $t[0] . ($on ? ' on' : '') . '" href="' . $t[1] . $q . '"' . ($on ? ' aria-current="page"' : '') . '>'
-              . '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' . $t[3] . '</svg>'
+              . ($t[3] === 'TILE' ? mc_lib_glyph_svg(16) /* fix247: 바탕 없이 책 그림만 */ : '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' . $t[3] . '</svg>')
               . h($t[2]) . '</a>';
     }
     return $out . '</nav>';
@@ -2072,7 +2096,8 @@ function mc_perf_script($page, array $extra = []) {
         $base['ua'] = substr($ua, 0, 200);
         mc_perf_write($base);
     });
-    return '<script>(function(){var R=' . json_encode($rid) . ',P=' . json_encode((string)$page) . ',H0=String(location.hash||"").slice(0,40);function send(){try{var n=(performance.getEntriesByType&&performance.getEntriesByType("navigation")[0])||null;if(!n)return;var c=navigator.connection||navigator.mozConnection||navigator.webkitConnection||{};var d={rid:R,page:P,nav:n.type||"",ttfb:Math.round(n.responseStart),dl:Math.round(n.responseEnd-n.responseStart),dom:Math.round(n.domInteractive),dcl:Math.round(n.domContentLoadedEventEnd),load:Math.round(n.loadEventEnd),kb:Math.round((n.transferSize||0)/1024),body_kb:Math.round((n.encodedBodySize||0)/1024),net:c.type||"",eff:c.effectiveType||"",down:c.downlink||0,rtt:c.rtt||0,sw:screen.width||0,img:document.images?document.images.length:0,h0:H0,h1:String(location.hash||"").slice(0,40),hl:history.length||0};var b=JSON.stringify(d);if(!(navigator.sendBeacon&&navigator.sendBeacon("perf_log.php",new Blob([b],{type:"text/plain"})))){var x=new XMLHttpRequest();x.open("POST","perf_log.php",true);x.send(b);}}catch(e){}}if(document.readyState==="complete")setTimeout(send,300);else window.addEventListener("load",function(){setTimeout(send,300);});window.addEventListener("pageshow",function(e){if(!e.persisted)return;try{var b=JSON.stringify({rid:R,page:P,nav:"bfcache",h1:String(location.hash||"").slice(0,40),hl:history.length||0});if(navigator.sendBeacon)navigator.sendBeacon("perf_log.php",new Blob([b],{type:"text/plain"}));}catch(x){}});})();</script>'; // ★ (2026-11-17 13:08 fix187) 주소 뒤 위치(#imageN — 열 때 h0·보낼 때 h1)·방문 기록 개수(hl) · 브라우저가 보관한 화면을 되살린 때(뒤로·앞으로 — nav:"bfcache")도 한 줄
+    return '<script>(function(){var R=' . json_encode($rid) . ',P=' . json_encode((string)$page) . ',H0=String(location.hash||"").slice(0,40);function send(){try{var n=(performance.getEntriesByType&&performance.getEntriesByType("navigation")[0])||null;if(!n)return;var c=navigator.connection||navigator.mozConnection||navigator.webkitConnection||{};var d={rid:R,page:P,nav:n.type||"",ttfb:Math.round(n.responseStart),dl:Math.round(n.responseEnd-n.responseStart),dom:Math.round(n.domInteractive),dcl:Math.round(n.domContentLoadedEventEnd),load:Math.round(n.loadEventEnd),kb:Math.round((n.transferSize||0)/1024),body_kb:Math.round((n.encodedBodySize||0)/1024),net:c.type||"",eff:c.effectiveType||"",down:c.downlink||0,rtt:c.rtt||0,sw:screen.width||0,img:document.images?document.images.length:0,h0:H0,h1:String(location.hash||"").slice(0,40),hl:history.length||0};var b=JSON.stringify(d);if(!(navigator.sendBeacon&&navigator.sendBeacon("perf_log.php",new Blob([b],{type:"text/plain"})))){var x=new XMLHttpRequest();x.open("POST","perf_log.php",true);x.send(b);}}catch(e){}}if(document.readyState==="complete")setTimeout(send,300);else window.addEventListener("load",function(){setTimeout(send,300);});window.addEventListener("pageshow",function(e){if(!e.persisted)return;try{var b=JSON.stringify({rid:R,page:P,nav:"bfcache",h1:String(location.hash||"").slice(0,40),hl:history.length||0});if(navigator.sendBeacon)navigator.sendBeacon("perf_log.php",new Blob([b],{type:"text/plain"}));}catch(x){}});})();</script>'
+        . '<script src="js/mc-ev.js?v=' . (int)@filemtime(__DIR__ . '/js/mc-ev.js') . '" data-page="' . h((string)$page) . '" defer></script>'; // ★ (2026-11-19 11:17, 펜닐 요청 — fix243) 증상 기록(js/mc-ev.js → perf_log.php k:"u") — 같은 조건일 때만 / ★ (2026-11-17 13:08 fix187) 주소 뒤 위치(#imageN — 열 때 h0·보낼 때 h1)·방문 기록 개수(hl) · 브라우저가 보관한 화면을 되살린 때(뒤로·앞으로 — nav:"bfcache")도 한 줄
 }
 
 

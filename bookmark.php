@@ -523,6 +523,7 @@ if ($mode === "delete_bookmark") {
         // 이미 있으면 삭제
         unset($favorites_arr[$__fk]);
         save_json_with_lock($favorites_file, $favorites_arr);
+        if (function_exists('mc_ev_log')) mc_ev_log('fav', ['act' => 'deleted', 'file' => (string)$getfile, 'bidx' => (int)$bidx]); // ★ (2026-11-19 11:17, 펜닐 요청 — fix243) 기록만(여러 번 눌림 찾기)
         json_response(['success' => true, 'action' => 'deleted', 'is_favorite' => false, 'message' => __('bookmark_deleted'), 'filename' => $filename, 'viewer' => $viewer]);
     } else {
         // 없으면 추가
@@ -534,6 +535,7 @@ if ($mode === "delete_bookmark") {
             'bidx' => $bidx
         ];
         save_json_with_lock($favorites_file, $favorites_arr);
+        if (function_exists('mc_ev_log')) mc_ev_log('fav', ['act' => 'added', 'file' => (string)$getfile, 'bidx' => (int)$bidx]); // ★ (2026-11-19 11:17, 펜닐 요청 — fix243) 기록만
         json_response(['success' => true, 'action' => 'added', 'is_favorite' => true, 'message' => __('bookmark_added'), 'filename' => $filename, 'viewer' => $viewer]);
     }
 

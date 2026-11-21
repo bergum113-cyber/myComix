@@ -2170,6 +2170,7 @@ flush(); ob_flush();
 		img{max-width:100%;height:auto}
 	</style>
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<?php if ($type != "pdf" && $type != "video" && $type != "video_archive"): /* ★ (2026-11-21 14:46, 펜닐 제보 — fix266) 폰(아이폰)에서 서재 상세 권을 두 번 눌러 열고 이어서 누르다 보면 뷰어 그림이 '두 번 탭 확대'로 커졌음(아이폰은 위 user-scalable=no 를 무시). 서재 화면(series.php·browse.php fix242)과 같게 두 번 탭 확대만 끔 — 두 손가락 확대·스크롤·누름(쪽 넘기기)은 그대로. PDF 는 그대로 · ★ (2026-11-21 15:25 fix267) 영상 화면(video·video_archive)도 빼서 그림 뷰어에만 */ ?><style>html{touch-action:manipulation}</style><?php endif; ?>
 	<meta name="format-detection" content="telephone=no">
 	<link rel="stylesheet" href="./css/bootstrap.min.css">
 	<link rel="stylesheet" href="./css/css2.css?family=Gugi&family=Nanum+Gothic:wght@400;700&display=swap">
